@@ -205,7 +205,8 @@ enum Tex {
     }
 
     /// 투명한 곳을 오려 내는 재질 (나무·담장·지평선 띠): 반투명 겹침 순서 문제 없이 윤곽만 남김
-    static func cutout(_ name: String, tint: SIMD3<Float>, sampler: MaterialParameters.Texture.Sampler = band) -> UnlitMaterial {
+    static func cutout(_ name: String, tint: SIMD3<Float>, sampler: MaterialParameters.Texture.Sampler? = nil) -> UnlitMaterial {
+        let sampler = sampler ?? band
         var m = unlit(name, tint: tint, folder: "tex", sampler: sampler)
         if let mask = get(name + "_a", folder: "tex", raw: true) {
             var p = MaterialParameters.Texture(mask)

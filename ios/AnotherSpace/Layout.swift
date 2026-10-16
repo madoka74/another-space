@@ -81,11 +81,22 @@ struct Layout: Sendable {
         }
         for i in 0..<(w * h) where wk[i] == 2 && ow[i] == 0 { wk[i] = 0 }      // 어느 방과도 안 닿은 통로는 버림
         walk = wk; owner = ow
-
-        // 걸을 수 없는 칸까지 거리 (4방향 퍼짐)
+        for i in 0..<(w * h) where wk[i] == 0 { dm[i] = false }
+        door = dm
+        /// 두 칸 사이에 방과 방 사이 벽이 서는지 (둘 다 걸을 수 있고, 방이 다르고, 문이 덮지 않음)
+        func split(_ i: Int, _ j: Int) -> Bool {
+            wk[i] != 0 && wk[j] != 0 && ow[i] != ow[j] && !dm[i] && !dm[j]
+        }
+        // 벽까지 거리 (4방향 퍼짐): 걸을 수 없는 칸 + 방과 방 사이 벽 바로 옆 칸에서 시작
         var ds = [Int16](repeating: Int16.max, count: w * h)
         var fq: [Int] = []
-        for i in 0..<(w * h) where wk[i] == 0 { ds[i] = 0; fq.append(i) }
+        for i in 0..<(w * h) {
+            if wk[i] == 0 { ds[i] = 0; fq.append(i); continue }
+            let u = i % w, v = i / w
+            if (u + 1 < w && split(i, i + 1)) || (u > 0 && split(i, i - 1)) || (v + 1 < h && split(i, i + w)) || (v > 0 && split(i, i - w)) {
+                ds[i] = 0; fq.append(i)
+            }
+        }
         var fi = 0
         while fi < fq.count {
             let i = fq[fi]; fi += 1
