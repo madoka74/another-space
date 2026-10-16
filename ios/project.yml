@@ -1,0 +1,38 @@
+name: AnotherSpace
+options:
+  bundleIdPrefix: com.blankishworks
+  deploymentTarget:
+    visionOS: "2.0"
+targets:
+  # 비전프로 전용 앱
+  AnotherSpace:
+    type: application
+    platform: visionOS
+    sources:
+      - path: AnotherSpace
+        excludes: ["Resources/**"]
+      - path: AnotherSpace/Resources       # 바닥·벽 무늬, 하늘 그림 (폴더 그대로 앱에 담음: Resources/tex, Resources/sky)
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.blankishworks.another-space
+        PRODUCT_NAME: AnotherSpace
+        CODE_SIGN_STYLE: Automatic
+        TARGETED_DEVICE_FAMILY: "7"
+        SWIFT_VERSION: "5.0"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+    info:
+      path: AnotherSpace/Info.plist
+      properties:
+        CFBundleDisplayName: 어나더 스페이스
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        NSWorldSensingUsageDescription: 집 안의 바닥·벽·가구 모양을 알아보고, 그 위에 다른 세계(숲·바다·도시 등)를 정확히 입히는 데 사용합니다. 공간 정보는 기기 안에만 저장됩니다.
+        UIApplicationSceneManifest:
+          UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations: {}
