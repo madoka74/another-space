@@ -61,8 +61,13 @@ jobs:
       - name: 실패하면 오류 줄만 모아 보기
         if: failure()
         run: |
+          L="$RUNNER_TEMP/build.log"
           echo "===== 오류 (error:) ====="
-          grep -n -E "error:|ARCHIVE FAILED|Code Signing|requires a provisioning profile" "$RUNNER_TEMP/build.log" | grep -v "warning:" | head -60 || true
+          grep -n -E "error:|ARCHIVE FAILED|Code Signing|requires a provisioning profile|No profiles|fatal|Stack dump|crashed|unable to type-check" "$L" | grep -v "warning:" | head -60 || true
+          echo "===== 실패한 단계 ====="
+          grep -n -A 12 "The following build commands failed" "$L" | head -40 || true
+          echo "===== 실패 줄 앞뒤 ====="
+          grep -n -B 25 -E "\*\* ARCHIVE FAILED" "$L" | grep -v -E "^[0-9]+-\s*$" | head -40 || true
       - name: TestFlight로 올리기
         env:
           TEAM: ${{ secrets.APPLE_TEAM_ID }}
