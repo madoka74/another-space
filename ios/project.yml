@@ -11,7 +11,12 @@ targets:
     sources:
       - path: AnotherSpace
         excludes: ["Resources/**"]
-      - path: AnotherSpace/Resources       # 바닥·벽 무늬, 하늘 그림 (폴더 그대로 앱에 담음: Resources/tex, Resources/sky)
+      # 바닥·벽 무늬, 하늘 그림 (폴더 그대로 앱에 담음: 앱 안 tex/, sky/)
+      # 앱 맨 위에 'Resources'라는 폴더를 두면 서명이 실패함(맥 앱 구조로 오해) → 두 폴더를 따로 담음
+      - path: AnotherSpace/Resources/tex
+        type: folder
+        buildPhase: resources
+      - path: AnotherSpace/Resources/sky
         type: folder
         buildPhase: resources
     settings:

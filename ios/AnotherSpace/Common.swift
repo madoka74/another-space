@@ -123,7 +123,7 @@ enum Tex {
     static func get(_ name: String, folder: String = "tex") -> TextureResource? {
         let key = folder + "/" + name
         if let t = cache[key] { return t }
-        guard let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "Resources/\(folder)"),
+        guard let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: folder),
               let img = UIImage(contentsOfFile: url.path), let cg = img.cgImage,
               let t = try? TextureResource.generate(from: cg, options: .init(semantic: .color)) else { return nil }
         cache[key] = t
