@@ -247,7 +247,8 @@ final class ExploreSession {
     @ObservationIgnored private var ready = false             // 모든 방 세계를 다 만들었는지
     @ObservationIgnored private var doorOpen: Set<Int> = []   // 손잡이를 눌러 연 문 (다른 세계 사이)
     @ObservationIgnored private var doorState: [Int: Float] = [:]   // 1 닫힘(벽) → 0 열림
-    @ObservationIgnored private var doorShow: [Int: Float] = [:]    // 문틀·손잡이 보이는 정도
+    @ObservationIgnored private var doorShow: [Int: Float] = [:]    // 문틀·열쇠 보이는 정도
+    @ObservationIgnored private var doorSide: [Int: Float] = [:]    // 문을 열 때 서 있던 쪽 (지나가면 닫음)
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -660,8 +661,11 @@ final class ExploreSession {
     }
 
     // MARK: 문 (다른 세계 사이)
-    /// 같은 세계끼리는 늘 열림. 다른 세계 사이는 평소 지금 방의 벽처럼 닫혀 있고, 50cm 안으로 다가가면 문틀·손잡이가 보임.
-    /// 손잡이를 누르면 문짝이 가로로 오므라들며 열리고, 건너가거나 2m 넘게 멀어지면 다시 닫힘
+    /// 기준은 모두 1m: 같은 세계끼리는 늘 열림. 다른 세계 사이는 평소 지금 방의 벽처럼 닫혀 있고,
+    /// 1m 안으로 다가가면 문틀·열쇠 구멍·떠 있는 황금 열쇠가 보이며 그 열쇠를 누르면 열림.
+    /// 열린 문을 지나가면 바로 닫히고(반대편에서도 1m 안이라 닫힌 문이 보임), 지나가지 않고 1m 밖으로 멀어져도 닫힘
+    static let doorReach: Float = 1.0
+
     private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ L: Layout) {
         guard let d = data else { return }
         let p = L.plane(hs.x, hs.z)
@@ -670,13 +674,17 @@ final class ExploreSession {
             if let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
                 same = ra.place == rb.place && ra.weather == rb.weather && ra.time == rb.time
             }
-            let mine = current == ds.roomA || current == ds.roomB
             let dist = Self.segDist(p, ds.a, ds.b)
-            if doorOpen.contains(i) && (dist > 2.0 || !mine) { doorOpen.remove(i) }
+            let side = simd_dot(p - ds.a, ds.n)                     // + 면 roomA 쪽
+            let here = side >= 0 ? ds.roomA : ds.roomB             // 지금 서 있는 쪽 방
+            if doorOpen.contains(i) {
+                let crossed = (doorSide[i] ?? side) * side < 0 && abs(side) > 0.1
+                if crossed || dist > Self.doorReach { doorOpen.remove(i) }
+            }
             let target: Float = (same || doorOpen.contains(i)) ? 0 : 1
             var st = doorState[i] ?? target
             if st != target {
-                st += (target - st) * min(1, dt * 5)
+                st += (target - st) * min(1, dt * 6)
                 if abs(st - target) < 0.01 { st = target }
             }
             doorState[i] = st
@@ -686,18 +694,21 @@ final class ExploreSession {
                     e.scale = SIMD3<Float>(max(0.001, st), 1, 1)
                 }
             }
-            let want: Float = (!same && mine && dist < 0.55 && !doorOpen.contains(i)) ? 1 : 0
+            let want: Float = (!same && dist < Self.doorReach && !doorOpen.contains(i)) ? 1 : 0
             var sh = doorShow[i] ?? 0
             sh += (want - sh) * min(1, dt * 4)
             if abs(sh - want) < 0.01 { sh = want }
             doorShow[i] = sh
             for rid in [ds.roomA, ds.roomB] {
                 guard let ui = worlds[rid]?.doorUI[i] else { continue }
-                let v: Float = rid == current ? sh : 0
+                let v: Float = rid == here ? sh : 0
                 ui.root.isEnabled = v > 0.02
                 if ui.root.isEnabled {
                     ui.root.components.set(OpacityComponent(opacity: v))
-                    ui.glow.components.set(OpacityComponent(opacity: 0.25 + 0.4 * (0.5 + 0.5 * sin(t * 2.6))))    // 숨 쉬듯
+                    let breath = 0.5 + 0.5 * sin(t * 2.4)                                     // 숨 쉬듯
+                    ui.glow.components.set(OpacityComponent(opacity: 0.25 + 0.6 * breath))
+                    ui.key.position = [0, 0.012 * sin(t * 1.3), 0]                           // 둥실둥실
+                    ui.key.orientation = simd_quatf(angle: 0.35 * sin(t * 0.7), axis: [0, 1, 0])
                 }
             }
         }
@@ -709,12 +720,20 @@ final class ExploreSession {
         return simd_distance(p, a + ab * k)
     }
 
-    /// 손잡이를 누름 (바라보고 집기 · 직접 누르기)
+    /// 떠 있는 열쇠를 누름 (바라보고 손가락 집기 · 직접 누르기)
     func tapped(_ e: Entity) {
         var cur: Entity? = e
         while let c = cur {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
-                if (doorShow[i] ?? 0) > 0.3 { doorOpen.insert(i) }
+                if (doorShow[i] ?? 0) > 0.3, let L = layout, let f = fit, i < L.doors.count {
+                    let hs = f.toSaved(head)
+                    let p = L.plane(hs.x, hs.z)
+                    let ds = L.doors[i]
+                    if Self.segDist(p, ds.a, ds.b) < Self.doorReach {
+                        doorSide[i] = simd_dot(p - ds.a, ds.n)
+                        doorOpen.insert(i)
+                    }
+                }
                 return
             }
             cur = c.parent
