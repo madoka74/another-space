@@ -11,6 +11,19 @@ struct WallSeg: Sendable {
     var inner = false          // 방과 방 사이 벽 (양쪽 방이 각자 1cm씩 안쪽에 하나씩 세움)
 }
 
+/// 서로 다른 방 사이의 문·통로 자리 (평면 좌표 m). n: roomA 쪽으로 향함 (roomB 쪽은 -n)
+struct DoorSeg: Sendable {
+    var a: SIMD2<Float>
+    var b: SIMD2<Float>
+    var n: SIMD2<Float>
+    var roomA: Int
+    var roomB: Int
+    var len: Float { simd_distance(a, b) }
+    func other(_ r: Int) -> Int { r == roomA ? roomB : roomA }
+    /// 방 r 쪽을 향한 방향
+    func normal(for r: Int) -> SIMD2<Float> { r == roomA ? n : -n }
+}
+
 /// 사각형들을 5cm 칸으로 그려 둔 탐험용 배치.
 /// - 걸을 수 있는 곳 = 방 사각형 + 문·통로 사각형
 /// - 벽 = 걸을 수 있는 칸과 아닌 칸 사이 + 서로 다른 방이 맞닿은 곳. 문·통로 사각형이 덮은 곳은 벽 없이 뚫림
@@ -29,6 +42,7 @@ struct Layout: Sendable {
     let floorY: Float
     let ceil: [Float]           // 방 id → 천장 높이(바닥에서)
     let walls: [WallSeg]
+    let doors: [DoorSeg]        // 서로 다른 방 사이에서 문·통로로 뚫린 곳
 
     init(_ d: SpaceData) {
         let shapes = d.shapes
@@ -119,6 +133,15 @@ struct Layout: Sendable {
             return false
         }
         var segs: [WallSeg] = []
+        var dsegs: [DoorSeg] = []
+        func mergeDoor(_ cur: inout DoorSeg?, _ seg: DoorSeg?) {
+            if let s = seg, var c = cur, c.roomA == s.roomA, c.roomB == s.roomB, c.n == s.n, simd_distance(c.b, s.a) < 1e-4 {
+                c.b = s.b; cur = c
+            } else {
+                if let c = cur, c.len >= 0.3 { dsegs.append(c) }       // 30cm 안 되는 조각은 버림
+                cur = seg
+            }
+        }
         /// 같은 줄에서 이어지는 조각을 합침 (lane: 0 = 위·왼쪽 칸을 향한 벽, 1 = 아래·오른쪽 칸을 향한 벽)
         func merge(_ cur: inout [WallSeg?], _ lane: Int, _ seg: WallSeg?) {
             if let s = seg, var c = cur[lane], c.room == s.room, c.n == s.n, c.window == s.window, c.inner == s.inner,
@@ -132,8 +155,10 @@ struct Layout: Sendable {
         // 가로 경계 (v 줄 사이): 위 칸(v-1)과 아래 칸(v)
         for v in 0...h {
             var cur: [WallSeg?] = [nil, nil]
+            var curDoor: DoorSeg?
             for u in 0...w {
                 var lanes: [WallSeg?] = [nil, nil]
+                var dseg: DoorSeg?
                 if u < w {
                     let iu = v > 0 ? (v - 1) * w + u : -1, id = v < h ? v * w + u : -1
                     let up = iu >= 0 ? wk[iu] : 0, dn = id >= 0 ? wk[id] : 0
@@ -146,17 +171,23 @@ struct Layout: Sendable {
                     } else if iu >= 0 && id >= 0 && split(iu, id) {
                         lanes[0] = WallSeg(a: a, b: b, n: SIMD2<Float>(0, -1), room: Int(ow[iu]), window: false, inner: true)
                         lanes[1] = WallSeg(a: a, b: b, n: SIMD2<Float>(0, 1), room: Int(ow[id]), window: false, inner: true)
+                    } else if iu >= 0 && id >= 0 && wk[iu] != 0 && wk[id] != 0 && ow[iu] != ow[id] {
+                        dseg = DoorSeg(a: a, b: b, n: SIMD2<Float>(0, -1), roomA: Int(ow[iu]), roomB: Int(ow[id]))
                     }
                 }
                 merge(&cur, 0, lanes[0]); merge(&cur, 1, lanes[1])
+                mergeDoor(&curDoor, dseg)
             }
             for c in cur { if let c { segs.append(c) } }
+            mergeDoor(&curDoor, nil)
         }
         // 세로 경계 (u 줄 사이): 왼 칸(u-1)과 오른 칸(u)
         for u in 0...w {
             var cur: [WallSeg?] = [nil, nil]
+            var curDoor: DoorSeg?
             for v in 0...h {
                 var lanes: [WallSeg?] = [nil, nil]
+                var dseg: DoorSeg?
                 if v < h {
                     let il = u > 0 ? v * w + u - 1 : -1, ir = u < w ? v * w + u : -1
                     let lf = il >= 0 ? wk[il] : 0, rt = ir >= 0 ? wk[ir] : 0
@@ -169,11 +200,15 @@ struct Layout: Sendable {
                     } else if il >= 0 && ir >= 0 && split(il, ir) {
                         lanes[0] = WallSeg(a: a, b: b, n: SIMD2<Float>(-1, 0), room: Int(ow[il]), window: false, inner: true)
                         lanes[1] = WallSeg(a: a, b: b, n: SIMD2<Float>(1, 0), room: Int(ow[ir]), window: false, inner: true)
+                    } else if il >= 0 && ir >= 0 && wk[il] != 0 && wk[ir] != 0 && ow[il] != ow[ir] {
+                        dseg = DoorSeg(a: a, b: b, n: SIMD2<Float>(-1, 0), roomA: Int(ow[il]), roomB: Int(ow[ir]))
                     }
                 }
                 merge(&cur, 0, lanes[0]); merge(&cur, 1, lanes[1])
+                mergeDoor(&curDoor, dseg)
             }
             for c in cur { if let c { segs.append(c) } }
+            mergeDoor(&curDoor, nil)
         }
         // 방과 방 사이 벽은 각자 방 쪽으로 1cm 들여 세움 (두 벽이 겹쳐 깜빡이지 않게)
         segs = segs.map { s in
@@ -182,6 +217,7 @@ struct Layout: Sendable {
             t.a += s.n * 0.01; t.b += s.n * 0.01
             return t
         }
+        doors = dsegs
         // 창은 50cm 안 되면 벽으로 (조각난 창 방지)
         walls = segs.map { s in
             var t = s

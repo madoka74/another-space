@@ -113,6 +113,10 @@ final class RoomWorld {
     private(set) var halfSize = SIMD2<Float>(1, 1)           // 방 반 크기 (격자 방향, m)
     let angle: Float
     private let sortGroup = ModelSortGroup(depthPass: nil)
+    /// 문 번호 → 이 방 쪽 문짝 (닫히면 이 방 벽처럼 보임). 열 때 가로로 오므라듦
+    private(set) var doorPanels: [Int: [Entity]] = [:]
+    /// 문 번호 → 가까이 가면 보이는 문틀·손잡이 (root, 숨쉬는 빛)
+    private(set) var doorUI: [Int: (root: Entity, glow: Entity)] = [:]
 
     var outdoor: Bool { style.open }
     var dark: Bool { room.time == "night" || room.time == "dawn" }
@@ -183,6 +187,7 @@ final class RoomWorld {
             solidWalls(segs, L, floorY: floorY, ceilY: ceilY)
             addSkylightFrame(rects, L, y: ceilY - 0.06)
         }
+        addDoors(L, floorY: floorY, ceilY: ceilY)
 
         let dc = Decor.of(room.place)
         addSky()
@@ -268,6 +273,99 @@ final class RoomWorld {
             if let f = frame.entity("frame", UnlitMaterial(color: Tex.color(SIMD3<Float>(0.24, 0.2, 0.17) * Worlds.safe(tint)))) {
                 local.addChild(f)
             }
+        }
+    }
+
+    // MARK: 문
+    /// 다른 방과 이어진 문·통로마다: 이 방 쪽에 문짝(이 방의 벽과 같은 모양)과, 가까이 가면 보일 문틀·손잡이를 만들어 둠.
+    /// 열고 닫는 것은 탐험 세션이 정함 (같은 세계끼리는 늘 열림)
+    private func addDoors(_ L: Layout, floorY: Float, ceilY: Float) {
+        let top = ceilY - floorY
+        let sun = Worlds.sunDir(room.time)
+        for (i, ds) in L.doors.enumerated() where ds.roomA == room.id || ds.roomB == room.id {
+            let a2 = L.flat(ds.a), b2 = L.flat(ds.b)
+            let len = simd_distance(a2, b2)
+            guard len > 0.2 else { continue }
+            let dir = (b2 - a2) / len
+            let nw = L.flat(ds.normal(for: room.id)) - L.flat(SIMD2<Float>(0, 0))      // 이 방 쪽
+            let yaw = atan2(-dir.y, dir.x)
+            let q = simd_quatf(angle: yaw, axis: [0, 1, 0])
+            let mid = (a2 + b2) / 2
+            func place(_ e: Entity, _ off: Float, y: Float = floorY) {
+                let p = mid + nw * off
+                e.position = SIMD3<Float>(p.x, y, p.y)
+                e.orientation = q
+            }
+            let hl = len / 2
+            var panel = Geo()
+            var list: [Entity] = []
+            if style.open {
+                panel.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: 0, y1: top, u0: 0, u1: 1)
+                if let m = panel.mesh("door\(i)") {
+                    let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
+                    e.components.set(PortalComponent(target: world))
+                    place(e, 0.012)
+                    local.addChild(e)
+                    list.append(e)
+                }
+                // 문짝 너머 울타리 (벽과 같은 모양이 이어지게)
+                var fence = Geo()
+                let tileW = style.barrierH * 2
+                let along0 = abs(ds.a.x - ds.b.x) > abs(ds.a.y - ds.b.y) ? min(ds.a.x, ds.b.x) : min(ds.a.y, ds.b.y)
+                fence.wall(SIMD3<Float>(-hl - 0.25, 0, 0), SIMD3<Float>(hl + 0.25, 0, 0), y0: -0.05, y1: style.barrierH,
+                           u0: (along0 - 0.25) / tileW, u1: (along0 + len + 0.25) / tileW, v0: 0.02, v1: 1)
+                if let e = fence.entity("doorFence\(i)", Tex.cutout(style.barrier, tint: Worlds.safe(tint, min: 0.45))) {
+                    layer(e, 6)
+                    place(e, -0.22)
+                    world.addChild(e)
+                    list.append(e)
+                }
+            } else {
+                let l = simd_dot(SIMD3<Float>(nw.x, 0, nw.y), sun)
+                let k = l > 0.25 ? 0 : (l > -0.25 ? 1 : 2)
+                let tile = style.wallTile
+                let along0 = abs(ds.a.x - ds.b.x) > abs(ds.a.y - ds.b.y) ? min(ds.a.x, ds.b.x) : min(ds.a.y, ds.b.y)
+                panel.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: 0, y1: top,
+                           u0: along0 / tile, u1: (along0 + len) / tile, v0: 0, v1: top / tile)
+                if let e = panel.entity("door\(i)", Tex.unlit(style.wall, tint: Worlds.safe(tint * shades[k], min: 0.36))) {
+                    place(e, 0.012)
+                    local.addChild(e)
+                    list.append(e)
+                }
+            }
+            doorPanels[i] = list
+
+            // 문틀 + 손잡이 (처음엔 숨김)
+            let ui = Entity()
+            place(ui, 0.025)
+            let dh = min(2.05, top - 0.05)
+            var frame = Geo()
+            let fw: Float = 0.06
+            frame.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(-hl + fw, 0, 0), y0: 0, y1: dh, u0: 0, u1: 1)
+            frame.wall(SIMD3<Float>(hl - fw, 0, 0), SIMD3<Float>(hl, 0, 0), y0: 0, y1: dh, u0: 0, u1: 1)
+            frame.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: dh - fw, y1: dh, u0: 0, u1: 1)
+            let lit = Worlds.safe(tint, min: 0.55)
+            if let f = frame.entity("frame", UnlitMaterial(color: Tex.color(SIMD3<Float>(0.42, 0.3, 0.2) * lit))) { ui.addChild(f) }
+            // 손잡이: 문 가장자리에서 15cm, 높이 1m. 바라보면 빛나고 누르면 열림
+            let hx = hl - min(0.15, hl * 0.4)
+            let handle = ModelEntity(mesh: .generateBox(width: 0.035, height: 0.16, depth: 0.04, cornerRadius: 0.012),
+                                     materials: [UnlitMaterial(color: Tex.color(SIMD3<Float>(0.86, 0.68, 0.36) * Worlds.safe(tint, min: 0.7)))])
+            handle.position = [hx, 1.0, 0.03]
+            handle.name = "door-\(i)"
+            handle.components.set(InputTargetComponent())
+            handle.components.set(CollisionComponent(shapes: [.generateBox(size: [0.16, 0.3, 0.14])]))
+            handle.components.set(HoverEffectComponent(.highlight(.init(color: UIColor(red: 1, green: 0.8, blue: 0.45, alpha: 1), strength: 2))))
+            ui.addChild(handle)
+            var gm = UnlitMaterial(color: UIColor(red: 1, green: 0.82, blue: 0.5, alpha: 1))
+            gm.blending = .transparent(opacity: .init(floatLiteral: 0.5))
+            let glow = ModelEntity(mesh: .generateSphere(radius: 0.07), materials: [gm])
+            glow.position = [hx, 1.0, 0.03]
+            glow.components.set(OpacityComponent(opacity: 0))
+            ui.addChild(glow)
+            ui.components.set(OpacityComponent(opacity: 0))
+            ui.isEnabled = false
+            local.addChild(ui)
+            doorUI[i] = (ui, glow)
         }
     }
 

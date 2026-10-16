@@ -23,6 +23,7 @@ struct ExploreView: View {
         } attachments: {
             Attachment(id: "hud") { ExploreHud(s: s) }
         }
+        .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { v in s.tapped(v.entity) })
         .task { await s.start() }
         .onDisappear { s.stop() }
     }
@@ -244,6 +245,9 @@ final class ExploreSession {
     @ObservationIgnored private var cellCount: [Int64: Int] = [:]
     @ObservationIgnored private var savedTask: Task<Void, Never>?
     @ObservationIgnored private var ready = false             // 모든 방 세계를 다 만들었는지
+    @ObservationIgnored private var doorOpen: Set<Int> = []   // 손잡이를 눌러 연 문 (다른 세계 사이)
+    @ObservationIgnored private var doorState: [Int: Float] = [:]   // 1 닫힘(벽) → 0 열림
+    @ObservationIgnored private var doorShow: [Int: Float] = [:]    // 문틀·손잡이 보이는 정도
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -586,6 +590,7 @@ final class ExploreSession {
             if r != candidate { candidate = r; candidateT = 0 } else { candidateT += dt }
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
             outsideT = r == 0 ? outsideT + dt : 0
+            updateDoors(dt, hs, L)
             buildTimer += dt
             if buildTimer > 0.1 { buildTimer = 0; buildSome(fit, I) }
         }
@@ -617,6 +622,7 @@ final class ExploreSession {
 
     private func enterRoom(_ r: Int) {
         current = r
+        doorOpen.removeAll()                                // 넘어오면 뒤의 문은 다시 닫힘 (이 방 벽처럼)
         guard let d = data, let L = layout, let rm = d.rec.room(r) else { return }
         if worlds[r] == nil {                               // 아직 못 만든 방이면 바로 만듦
             addWorld(d, rm, L)
@@ -650,6 +656,68 @@ final class ExploreSession {
                 guard let self else { return }
                 self.player.thunder(in: self.spaceRoot, at: p)
             }
+        }
+    }
+
+    // MARK: 문 (다른 세계 사이)
+    /// 같은 세계끼리는 늘 열림. 다른 세계 사이는 평소 지금 방의 벽처럼 닫혀 있고, 50cm 안으로 다가가면 문틀·손잡이가 보임.
+    /// 손잡이를 누르면 문짝이 가로로 오므라들며 열리고, 건너가거나 2m 넘게 멀어지면 다시 닫힘
+    private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ L: Layout) {
+        guard let d = data else { return }
+        let p = L.plane(hs.x, hs.z)
+        for (i, ds) in L.doors.enumerated() {
+            var same = false
+            if let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
+                same = ra.place == rb.place && ra.weather == rb.weather && ra.time == rb.time
+            }
+            let mine = current == ds.roomA || current == ds.roomB
+            let dist = Self.segDist(p, ds.a, ds.b)
+            if doorOpen.contains(i) && (dist > 2.0 || !mine) { doorOpen.remove(i) }
+            let target: Float = (same || doorOpen.contains(i)) ? 0 : 1
+            var st = doorState[i] ?? target
+            if st != target {
+                st += (target - st) * min(1, dt * 5)
+                if abs(st - target) < 0.01 { st = target }
+            }
+            doorState[i] = st
+            for rid in [ds.roomA, ds.roomB] {
+                for e in worlds[rid]?.doorPanels[i] ?? [] {
+                    e.isEnabled = st > 0.01
+                    e.scale = SIMD3<Float>(max(0.001, st), 1, 1)
+                }
+            }
+            let want: Float = (!same && mine && dist < 0.55 && !doorOpen.contains(i)) ? 1 : 0
+            var sh = doorShow[i] ?? 0
+            sh += (want - sh) * min(1, dt * 4)
+            if abs(sh - want) < 0.01 { sh = want }
+            doorShow[i] = sh
+            for rid in [ds.roomA, ds.roomB] {
+                guard let ui = worlds[rid]?.doorUI[i] else { continue }
+                let v: Float = rid == current ? sh : 0
+                ui.root.isEnabled = v > 0.02
+                if ui.root.isEnabled {
+                    ui.root.components.set(OpacityComponent(opacity: v))
+                    ui.glow.components.set(OpacityComponent(opacity: 0.25 + 0.4 * (0.5 + 0.5 * sin(t * 2.6))))    // 숨 쉬듯
+                }
+            }
+        }
+    }
+
+    static func segDist(_ p: SIMD2<Float>, _ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
+        let ab = b - a
+        let k = simd_clamp(simd_dot(p - a, ab) / max(simd_dot(ab, ab), 1e-6), 0, 1)
+        return simd_distance(p, a + ab * k)
+    }
+
+    /// 손잡이를 누름 (바라보고 집기 · 직접 누르기)
+    func tapped(_ e: Entity) {
+        var cur: Entity? = e
+        while let c = cur {
+            if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
+                if (doorShow[i] ?? 0) > 0.3 { doorOpen.insert(i) }
+                return
+            }
+            cur = c.parent
         }
     }
 
