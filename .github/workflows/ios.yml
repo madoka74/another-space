@@ -40,17 +40,7 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npm install -g wrangler@4 > /dev/null 2>&1
-          python3 -c "
-          import json
-          m = json.load(open('ios/AnotherSpace/Sounds/manifest.json'))
-          fs = sorted({e['file'] for sec in ('beds', 'weather', 'events') for l in m.get(sec, {}).values() for e in l})
-          open('sound-files.txt', 'w').write('\n'.join(fs) + '\n')
-          "
-          cat sound-files.txt | xargs -P 8 -I{} sh -c 'mkdir -p "ios/AnotherSpace/Sounds/$(dirname "{}")" && wrangler r2 object get "ambient-audio/{}" --file "ios/AnotherSpace/Sounds/{}" --remote > /dev/null 2>&1 || echo "받지 못함: {}"'
-          n=$(find ios/AnotherSpace/Sounds -name '*.mp3' -size +1k | wc -l | tr -d ' ')
-          echo "소리 $n개 담음 (목록 $(wc -l < sound-files.txt | tr -d ' ')개)"
-          du -sh ios/AnotherSpace/Sounds
-          if [ "$n" -eq 0 ]; then echo "::error::소리를 하나도 받지 못했어요 (CLOUDFLARE_API_TOKEN·CLOUDFLARE_ACCOUNT_ID 확인)"; exit 1; fi
+          python3 tools/fetch_sounds.py
       - name: XcodeGen으로 프로젝트 만들기
         run: |
           brew install xcodegen
