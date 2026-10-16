@@ -1,0 +1,1786 @@
+{
+ "version": 1,
+ "updated": "2026-10-15T06:07:44.479Z",
+ "audioBase": "/audio/",
+ "beds": {
+  "home.night": [
+   {
+    "file": "beds/home.night.v2.mp3",
+    "variant": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "time": "night"
+   },
+   {
+    "file": "beds/home.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "time": "night"
+   }
+  ],
+  "cafe.afternoon": [
+   {
+    "file": "beds/cafe.afternoon.v2.mp3",
+    "variant": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "time": "afternoon"
+   },
+   {
+    "file": "beds/cafe.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "time": "afternoon"
+   }
+  ],
+  "forest.morning": [
+   {
+    "file": "beds/forest.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "time": "morning"
+   }
+  ],
+  "sea.afternoon": [
+   {
+    "file": "beds/sea.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea",
+    "time": "afternoon"
+   }
+  ],
+  "home.morning": [
+   {
+    "file": "beds/home.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "time": "morning"
+   }
+  ],
+  "home.afternoon": [
+   {
+    "file": "beds/home.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "time": "afternoon"
+   }
+  ],
+  "home.dusk": [
+   {
+    "file": "beds/home.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "time": "dusk"
+   }
+  ],
+  "cafe.morning": [
+   {
+    "file": "beds/cafe.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "time": "morning"
+   }
+  ],
+  "cafe.dusk": [
+   {
+    "file": "beds/cafe.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "time": "dusk"
+   }
+  ],
+  "cafe.night": [
+   {
+    "file": "beds/cafe.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "time": "night"
+   }
+  ],
+  "forest.afternoon": [
+   {
+    "file": "beds/forest.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "time": "afternoon"
+   }
+  ],
+  "forest.dusk": [
+   {
+    "file": "beds/forest.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "time": "dusk"
+   }
+  ],
+  "forest.night": [
+   {
+    "file": "beds/forest.night.v2.mp3",
+    "variant": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "time": "night"
+   },
+   {
+    "file": "beds/forest.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "time": "night"
+   }
+  ],
+  "sea.night": [
+   {
+    "file": "beds/sea.night.v2.mp3",
+    "variant": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea",
+    "time": "night"
+   },
+   {
+    "file": "beds/sea.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea",
+    "time": "night"
+   }
+  ],
+  "city.morning": [
+   {
+    "file": "beds/city.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "time": "morning"
+   }
+  ],
+  "city.afternoon": [
+   {
+    "file": "beds/city.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "time": "afternoon"
+   }
+  ],
+  "city.dusk": [
+   {
+    "file": "beds/city.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "time": "dusk"
+   }
+  ],
+  "city.night": [
+   {
+    "file": "beds/city.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "time": "night"
+   }
+  ],
+  "valley.morning": [
+   {
+    "file": "beds/valley.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "time": "morning"
+   }
+  ],
+  "valley.afternoon": [
+   {
+    "file": "beds/valley.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "time": "afternoon"
+   }
+  ],
+  "valley.dusk": [
+   {
+    "file": "beds/valley.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "time": "dusk"
+   }
+  ],
+  "valley.night": [
+   {
+    "file": "beds/valley.night.v2.mp3",
+    "variant": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "time": "night"
+   },
+   {
+    "file": "beds/valley.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "time": "night"
+   }
+  ],
+  "sea.morning": [
+   {
+    "file": "beds/sea.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea",
+    "time": "morning"
+   }
+  ],
+  "sea.dusk": [
+   {
+    "file": "beds/sea.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea",
+    "time": "dusk"
+   }
+  ],
+  "home.dawn": [
+   {
+    "file": "beds/home.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "time": "dawn"
+   }
+  ],
+  "cafe.dawn": [
+   {
+    "file": "beds/cafe.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "time": "dawn"
+   }
+  ],
+  "city.dawn": [
+   {
+    "file": "beds/city.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "time": "dawn"
+   }
+  ],
+  "village.dawn": [
+   {
+    "file": "beds/village.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "time": "dawn"
+   }
+  ],
+  "village.morning": [
+   {
+    "file": "beds/village.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "time": "morning"
+   }
+  ],
+  "village.afternoon": [
+   {
+    "file": "beds/village.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "time": "afternoon"
+   }
+  ],
+  "village.dusk": [
+   {
+    "file": "beds/village.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "time": "dusk"
+   }
+  ],
+  "village.night": [
+   {
+    "file": "beds/village.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "time": "night"
+   }
+  ],
+  "forest.dawn": [
+   {
+    "file": "beds/forest.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "time": "dawn"
+   }
+  ],
+  "valley.dawn": [
+   {
+    "file": "beds/valley.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "time": "dawn"
+   }
+  ],
+  "sea.dawn": [
+   {
+    "file": "beds/sea.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea",
+    "time": "dawn"
+   }
+  ],
+  "camp.morning": [
+   {
+    "file": "beds/camp.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp",
+    "time": "morning"
+   }
+  ],
+  "camp.dusk": [
+   {
+    "file": "beds/camp.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp",
+    "time": "dusk"
+   }
+  ],
+  "camp.night": [
+   {
+    "file": "beds/camp.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp",
+    "time": "night"
+   }
+  ],
+  "gallery.morning": [
+   {
+    "file": "beds/gallery.morning.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery",
+    "time": "morning"
+   }
+  ],
+  "gallery.afternoon": [
+   {
+    "file": "beds/gallery.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery",
+    "time": "afternoon"
+   }
+  ],
+  "gallery.dusk": [
+   {
+    "file": "beds/gallery.dusk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery",
+    "time": "dusk"
+   }
+  ],
+  "gallery.night": [
+   {
+    "file": "beds/gallery.night.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery",
+    "time": "night"
+   }
+  ],
+  "camp.dawn": [
+   {
+    "file": "beds/camp.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp",
+    "time": "dawn"
+   }
+  ],
+  "camp.afternoon": [
+   {
+    "file": "beds/camp.afternoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp",
+    "time": "afternoon"
+   }
+  ],
+  "gallery.dawn": [
+   {
+    "file": "beds/gallery.dawn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery",
+    "time": "dawn"
+   }
+  ]
+ },
+ "weather": {
+  "rain.indoor": [
+   {
+    "file": "weather/rain.indoor.v2.mp3",
+    "variant": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "rain",
+    "surface": "indoor"
+   },
+   {
+    "file": "weather/rain.indoor.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "rain",
+    "surface": "indoor"
+   }
+  ],
+  "rain.nature": [
+   {
+    "file": "weather/rain.nature.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "rain",
+    "surface": "nature"
+   }
+  ],
+  "rain.urban": [
+   {
+    "file": "weather/rain.urban.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "rain",
+    "surface": "urban"
+   }
+  ],
+  "rain.water": [
+   {
+    "file": "weather/rain.water.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "rain",
+    "surface": "water"
+   }
+  ],
+  "wind.indoor": [
+   {
+    "file": "weather/wind.indoor.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "wind",
+    "surface": "indoor"
+   }
+  ],
+  "wind.nature": [
+   {
+    "file": "weather/wind.nature.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "wind",
+    "surface": "nature"
+   }
+  ],
+  "wind.urban": [
+   {
+    "file": "weather/wind.urban.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "wind",
+    "surface": "urban"
+   }
+  ],
+  "wind.water": [
+   {
+    "file": "weather/wind.water.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "wind",
+    "surface": "water"
+   }
+  ],
+  "drizzle.indoor": [
+   {
+    "file": "weather/drizzle.indoor.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "drizzle",
+    "surface": "indoor"
+   }
+  ],
+  "drizzle.nature": [
+   {
+    "file": "weather/drizzle.nature.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "drizzle",
+    "surface": "nature"
+   }
+  ],
+  "storm.indoor": [
+   {
+    "file": "weather/storm.indoor.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "storm",
+    "surface": "indoor"
+   }
+  ],
+  "storm.nature": [
+   {
+    "file": "weather/storm.nature.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "storm",
+    "surface": "nature"
+   }
+  ],
+  "rain.tent": [
+   {
+    "file": "weather/rain.tent.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "rain",
+    "surface": "tent"
+   }
+  ],
+  "heavysnow.indoor": [
+   {
+    "file": "weather/heavysnow.indoor.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 29.999887,
+    "samples": 1322995,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "heavysnow",
+    "surface": "indoor"
+   }
+  ],
+  "heavysnow.nature": [
+   {
+    "file": "weather/heavysnow.nature.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "heavysnow",
+    "surface": "nature"
+   }
+  ],
+  "heavysnow.urban": [
+   {
+    "file": "weather/heavysnow.urban.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "heavysnow",
+    "surface": "urban"
+   }
+  ],
+  "heavysnow.tent": [
+   {
+    "file": "weather/heavysnow.tent.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "heavysnow",
+    "surface": "tent"
+   }
+  ],
+  "cloudy.indoor": [
+   {
+    "file": "weather/cloudy.indoor.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "cloudy",
+    "surface": "indoor"
+   }
+  ],
+  "cloudy.nature": [
+   {
+    "file": "weather/cloudy.nature.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "cloudy",
+    "surface": "nature"
+   }
+  ],
+  "cloudy.urban": [
+   {
+    "file": "weather/cloudy.urban.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "cloudy",
+    "surface": "urban"
+   }
+  ],
+  "cloudy.water": [
+   {
+    "file": "weather/cloudy.water.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "cloudy",
+    "surface": "water"
+   }
+  ],
+  "cloudy.tent": [
+   {
+    "file": "weather/cloudy.tent.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 30,
+    "samples": 1323000,
+    "sr": 44100,
+    "delay": 1105,
+    "weather": "cloudy",
+    "surface": "tent"
+   }
+  ]
+ },
+ "events": {
+  "forest.bird1": [
+   {
+    "file": "event/forest.bird1.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.16229,
+    "samples": 139457,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "forest.bird2": [
+   {
+    "file": "event/forest.bird2.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 1.766667,
+    "samples": 77910,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "sea.wave": [
+   {
+    "file": "event/sea.wave.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.593333,
+    "samples": 158466,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea"
+   }
+  ],
+  "cafe.cup": [
+   {
+    "file": "event/cafe.cup.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 0.477891,
+    "samples": 21075,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe"
+   }
+  ],
+  "thunder.far1": [
+   {
+    "file": "event/thunder.far1.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 6.352313,
+    "samples": 280137,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "*",
+    "weather": "storm"
+   }
+  ],
+  "forest.owl": [
+   {
+    "file": "event/forest.owl.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.763152,
+    "samples": 165955,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "times": [
+     "night"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "forest.twig": [
+   {
+    "file": "event/forest.twig.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 0.905374,
+    "samples": 39927,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest"
+   }
+  ],
+  "sea.gull": [
+   {
+    "file": "event/sea.gull.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4,
+    "samples": 176400,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea",
+    "times": [
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "cafe.grinder": [
+   {
+    "file": "event/cafe.grinder.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4.777959,
+    "samples": 210708,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ]
+   }
+  ],
+  "cafe.door": [
+   {
+    "file": "event/cafe.door.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 1.462381,
+    "samples": 64491,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe"
+   }
+  ],
+  "home.clock": [
+   {
+    "file": "event/home.clock.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4.105578,
+    "samples": 181056,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "times": [
+     "night",
+     "dawn"
+    ]
+   }
+  ],
+  "home.car": [
+   {
+    "file": "event/home.car.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 5.089841,
+    "samples": 224462,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home"
+   }
+  ],
+  "city.bike": [
+   {
+    "file": "event/city.bike.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3,
+    "samples": 132300,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "times": [
+     "morning",
+     "afternoon",
+     "dusk"
+    ]
+   }
+  ],
+  "city.bus": [
+   {
+    "file": "event/city.bus.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 5.610272,
+    "samples": 247413,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city"
+   }
+  ],
+  "valley.splash": [
+   {
+    "file": "event/valley.splash.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.477687,
+    "samples": 109266,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley"
+   }
+  ],
+  "valley.bird": [
+   {
+    "file": "event/valley.bird.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.977551,
+    "samples": 175410,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "thunder.far2": [
+   {
+    "file": "event/thunder.far2.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 6.999977,
+    "samples": 308699,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "*",
+    "weather": "storm"
+   }
+  ],
+  "village.rooster": [
+   {
+    "file": "event/village.rooster.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 1.930476,
+    "samples": 85134,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "times": [
+     "dawn",
+     "morning"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "village.dog": [
+   {
+    "file": "event/village.dog.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.631474,
+    "samples": 116048,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village"
+   }
+  ],
+  "camp.pop": [
+   {
+    "file": "event/camp.pop.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 1.312449,
+    "samples": 57879,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp"
+   }
+  ],
+  "camp.log": [
+   {
+    "file": "event/camp.log.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.706508,
+    "samples": 163457,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp"
+   }
+  ],
+  "gallery.steps": [
+   {
+    "file": "event/gallery.steps.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.32161,
+    "samples": 146483,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery"
+   }
+  ],
+  "gallery.door": [
+   {
+    "file": "event/gallery.door.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.846077,
+    "samples": 125512,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery"
+   }
+  ],
+  "home.kettle": [
+   {
+    "file": "event/home.kettle.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 0.395828,
+    "samples": 17456,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home"
+   }
+  ],
+  "home.door": [
+   {
+    "file": "event/home.door.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3,
+    "samples": 132300,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home"
+   }
+  ],
+  "home.sparrow": [
+   {
+    "file": "event/home.sparrow.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4,
+    "samples": 176400,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "home",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "cafe.milk": [
+   {
+    "file": "event/cafe.milk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4.999932,
+    "samples": 220497,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe",
+    "times": [
+     "morning",
+     "afternoon",
+     "dusk"
+    ]
+   }
+  ],
+  "cafe.spoon": [
+   {
+    "file": "event/cafe.spoon.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 1.683946,
+    "samples": 74262,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe"
+   }
+  ],
+  "cafe.pour": [
+   {
+    "file": "event/cafe.pour.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.426372,
+    "samples": 107003,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe"
+   }
+  ],
+  "cafe.chair": [
+   {
+    "file": "event/cafe.chair.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.370907,
+    "samples": 104557,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "cafe"
+   }
+  ],
+  "gallery.heels": [
+   {
+    "file": "event/gallery.heels.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.877438,
+    "samples": 126895,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery",
+    "times": [
+     "morning",
+     "afternoon",
+     "dusk",
+     "night"
+    ]
+   }
+  ],
+  "gallery.bench": [
+   {
+    "file": "event/gallery.bench.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 0.243288,
+    "samples": 10729,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "gallery",
+    "times": [
+     "morning",
+     "afternoon",
+     "dusk",
+     "night"
+    ]
+   }
+  ],
+  "city.scooter": [
+   {
+    "file": "event/city.scooter.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.787937,
+    "samples": 167048,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city"
+   }
+  ],
+  "city.crosswalk": [
+   {
+    "file": "event/city.crosswalk.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.60966,
+    "samples": 115086,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "times": [
+     "morning",
+     "afternoon",
+     "dusk"
+    ]
+   }
+  ],
+  "city.pigeons": [
+   {
+    "file": "event/city.pigeons.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.265714,
+    "samples": 99918,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon",
+     "dusk"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "city.train": [
+   {
+    "file": "event/city.train.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 5.94576,
+    "samples": 262208,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "city"
+   }
+  ],
+  "village.magpie": [
+   {
+    "file": "event/village.magpie.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.031905,
+    "samples": 133707,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "village.tractor": [
+   {
+    "file": "event/village.tractor.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 5.660884,
+    "samples": 249645,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "times": [
+     "morning",
+     "afternoon"
+    ]
+   }
+  ],
+  "village.chime": [
+   {
+    "file": "event/village.chime.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4,
+    "samples": 176400,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village"
+   }
+  ],
+  "village.bell": [
+   {
+    "file": "event/village.bell.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 7,
+    "samples": 308700,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "village",
+    "times": [
+     "dawn",
+     "dusk"
+    ]
+   }
+  ],
+  "camp.kettle": [
+   {
+    "file": "event/camp.kettle.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.563016,
+    "samples": 113029,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ]
+   }
+  ],
+  "camp.zipper": [
+   {
+    "file": "event/camp.zipper.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3,
+    "samples": 132300,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp"
+   }
+  ],
+  "camp.wood": [
+   {
+    "file": "event/camp.wood.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.739229,
+    "samples": 164900,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp"
+   }
+  ],
+  "camp.owl": [
+   {
+    "file": "event/camp.owl.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 1.508707,
+    "samples": 66534,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "camp",
+    "times": [
+     "night"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "forest.cuckoo": [
+   {
+    "file": "event/forest.cuckoo.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 0.077392,
+    "samples": 3413,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "times": [
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "forest.squirrel": [
+   {
+    "file": "event/forest.squirrel.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.976281,
+    "samples": 131254,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon",
+     "dusk"
+    ]
+   }
+  ],
+  "forest.gust": [
+   {
+    "file": "event/forest.gust.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 5.048027,
+    "samples": 222618,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest"
+   }
+  ],
+  "forest.flock": [
+   {
+    "file": "event/forest.flock.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.546576,
+    "samples": 112304,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "forest",
+    "times": [
+     "dawn",
+     "morning",
+     "afternoon"
+    ],
+    "tag": "bird"
+   }
+  ],
+  "valley.pebble": [
+   {
+    "file": "event/valley.pebble.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.250204,
+    "samples": 99234,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley"
+   }
+  ],
+  "valley.frog": [
+   {
+    "file": "event/valley.frog.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.684059,
+    "samples": 162467,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley",
+    "times": [
+     "dusk",
+     "night"
+    ]
+   }
+  ],
+  "valley.gust": [
+   {
+    "file": "event/valley.gust.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4.98059,
+    "samples": 219644,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "valley"
+   }
+  ],
+  "sea.horn": [
+   {
+    "file": "event/sea.horn.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.685034,
+    "samples": 162510,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea"
+   }
+  ],
+  "sea.pebbles": [
+   {
+    "file": "event/sea.pebbles.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4.753061,
+    "samples": 209610,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea"
+   }
+  ],
+  "sea.buoy": [
+   {
+    "file": "event/sea.buoy.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 5,
+    "samples": 220500,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "sea"
+   }
+  ],
+  "wx.drip": [
+   {
+    "file": "event/wx.drip.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.403311,
+    "samples": 150086,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "*",
+    "weathers": [
+     "drizzle",
+     "rain",
+     "storm"
+    ]
+   }
+  ],
+  "wx.gust": [
+   {
+    "file": "event/wx.gust.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 3.729342,
+    "samples": 164464,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "*",
+    "weathers": [
+     "wind"
+    ]
+   }
+  ],
+  "wx.crows": [
+   {
+    "file": "event/wx.crows.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 4,
+    "samples": 176400,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "*",
+    "times": [
+     "morning",
+     "afternoon",
+     "dusk"
+    ],
+    "tag": "bird",
+    "weathers": [
+     "cloudy"
+    ]
+   }
+  ],
+  "wx.snowslide": [
+   {
+    "file": "event/wx.snowslide.v1.r2.mp3",
+    "variant": 1,
+    "rev": 2,
+    "dur": 2.120726,
+    "samples": 93524,
+    "sr": 44100,
+    "delay": 1105,
+    "place": "*",
+    "weathers": [
+     "snow",
+     "heavysnow"
+    ]
+   }
+  ]
+ }
+}
