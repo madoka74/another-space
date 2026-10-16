@@ -3,7 +3,8 @@ import RealityKit
 import ARKit
 import QuartzCore
 
-/// 공간 스캔: 집 안을 걸어 다니면 비전프로가 알아본 바닥(청록)·벽과 물건(금빛)이 반투명하게 덮임 → 저장하면 방 자동 구분
+/// 공간 스캔: 집 안을 걸어 다니면 알아본 바닥(청록)·벽과 물건(금빛)이 반투명하게 덮이고, 안내판에 위에서 본 지도가 쌓임.
+/// 비전프로는 멀리 떨어진 곳의 그물을 스스로 지우지만(메모리 절약), 앱은 한 번 본 곳을 끝까지 모아 둠 → 저장할 때 집 전체가 들어감
 struct ScanView: View {
     let replace: String?
     @State private var s: ScanSession
@@ -30,46 +31,74 @@ private struct ScanHud: View {
     let s: ScanSession
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("공간 스캔").font(.title.weight(.bold))
-            Text(s.guide).font(.title3).fixedSize(horizontal: false, vertical: true)
-            Text(s.stat).font(.headline).foregroundStyle(.secondary)
-            if let m = s.message { Text(m).font(.headline).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
-            HStack(spacing: 14) {
-                Button("취소") { s.cancel() }
-                Spacer()
-                Button {
-                    s.save()
-                } label: {
-                    if s.saving { ProgressView() } else { Text("저장하고 방 나누기").font(.title3.weight(.semibold)) }
+        HStack(alignment: .top, spacing: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("공간 스캔").font(.title.weight(.bold))
+                Text(s.guide).font(.title3).fixedSize(horizontal: false, vertical: true)
+                Text(s.stat).font(.headline).foregroundStyle(.secondary)
+                if let m = s.message { Text(m).font(.headline).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
+                Spacer(minLength: 4)
+                HStack(spacing: 14) {
+                    Button("취소") { s.cancel() }
+                    Spacer()
+                    Button {
+                        s.save()
+                    } label: {
+                        if s.saving { ProgressView() } else { Text("저장하고 방 구성하기").font(.title3.weight(.semibold)) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!s.canSave || s.saving)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!s.canSave || s.saving)
             }
+            .frame(width: 420)
+            // 위에서 본 지도: 청록 = 알아본 바닥, 흰색 = 벽·가구, 하늘색 = 창, 금빛 점 = 나
+            ZStack {
+                RoundedRectangle(cornerRadius: 16).fill(Color.black.opacity(0.35))
+                if let img = s.map {
+                    GeometryReader { geo in
+                        let iw = CGFloat(img.width), ih = CGFloat(img.height)
+                        let k = min(geo.size.width / iw, geo.size.height / ih)
+                        let ox = (geo.size.width - iw * k) / 2, oy = (geo.size.height - ih * k) / 2
+                        Image(decorative: img, scale: 1)
+                            .resizable()
+                            .interpolation(.none)
+                            .frame(width: iw * k, height: ih * k)
+                            .offset(x: ox, y: oy)
+                        Circle()
+                            .fill(Color(red: 1, green: 0.8, blue: 0.4))
+                            .frame(width: 12, height: 12)
+                            .position(x: ox + s.me.x * k, y: oy + s.me.y * k)
+                    }
+                    .padding(10)
+                } else {
+                    Text("둘러보면 여기에\n지도가 그려져요").multilineTextAlignment(.center).foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 340, height: 340)
         }
         .padding(28)
-        .frame(width: 560)
         .glassBackgroundEffect()
     }
 }
 
 @MainActor @Observable
 final class ScanSession {
-    var guide = "집 안의 모든 방을 천천히 걸어 다니며 바닥과 벽을 골고루 바라봐 주세요. 문턱을 넘어 방 안쪽까지 들어가야 그 방이 생겨요."
+    var guide = "방마다 문턱을 넘어 안쪽까지 들어가, 벽에서 1m쯤 떨어져 벽을 따라 천천히 한 바퀴 돌며 바닥과 벽 아래쪽을 바라봐 주세요. 창가·베란다처럼 바깥과 닿은 곳은 가까이 가서 한 번 더 봐 주세요."
     var stat = "공간을 알아보는 중…"
     var canSave = false
     var saving = false
     var message: String?
+    var map: CGImage?
+    var me = CGPoint.zero                 // 지도 그림 위 내 위치 (그림 픽셀)
 
     let root = Entity()
     @ObservationIgnored var updateSub: EventSubscription?
     @ObservationIgnored private let replace: String?
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
-    @ObservationIgnored private var anchors: [UUID: MeshAnchor] = [:]
+    @ObservationIgnored private var copies: [UUID: MeshCopy] = [:]      // 한 번 본 그물은 비전프로가 지워도 계속 가짐
     @ObservationIgnored private var viz: [UUID: ModelEntity] = [:]
     @ObservationIgnored private var vizAt: [UUID: Double] = [:]
-    @ObservationIgnored private var floorArea: [UUID: Float] = [:]
     @ObservationIgnored private var path: [SIMD3<Float>] = []
     @ObservationIgnored private var walked: Float = 0
     @ObservationIgnored private var head = SIMD3<Float>(0, 1.5, 0)
@@ -78,6 +107,9 @@ final class ScanSession {
     @ObservationIgnored private var hudYaw: Float = 0
     @ObservationIgnored private var hudPlaced = false
     @ObservationIgnored private var statTimer: Float = 0
+    @ObservationIgnored private var mapTimer: Float = 0
+    @ObservationIgnored private var mapBusy = false
+    @ObservationIgnored private var cov: RoomSegment.Coverage?
     @ObservationIgnored private var ended = false
     @ObservationIgnored private var floorMat: UnlitMaterial
     @ObservationIgnored private var otherMat: UnlitMaterial
@@ -109,11 +141,8 @@ final class ScanSession {
             let a = u.anchor
             switch u.event {
             case .removed:
-                anchors[a.id] = nil
-                floorArea[a.id] = nil
-                viz.removeValue(forKey: a.id)?.removeFromParent()
+                break                       // 멀어져서 비전프로가 지운 것: 앱은 마지막 모양을 그대로 가짐 (보이는 것도 그대로)
             default:
-                anchors[a.id] = a
                 show(a)
             }
         }
@@ -131,7 +160,7 @@ final class ScanSession {
         root.addChild(e)
     }
 
-    /// 알아본 그물을 반투명하게 보여 줌 (0.6초에 한 번만 다시 만듦): 바닥은 청록, 나머지는 금빛
+    /// 알아본 그물을 반투명하게 보여 주고 복사해 둠 (한 덩어리당 0.6초에 한 번)
     private func show(_ a: MeshAnchor) {
         let now = CACurrentMediaTime()
         if let e = viz[a.id], let last = vizAt[a.id], now - last < 0.6 {
@@ -139,28 +168,19 @@ final class ScanSession {
             return
         }
         vizAt[a.id] = now
-        let v = MeshRead.vertices(a.geometry.vertices)
-        let f = MeshRead.indices(a.geometry.faces)
-        let cls = MeshRead.classes(a.geometry.classifications, faces: f.count / 3)
+        let copy = MeshCopy(a)
+        copies[a.id] = copy
+        let v = copy.v, f = copy.f, cls = copy.c
         guard v.count >= 3, f.count >= 3 else { return }
         var fl: [UInt32] = [], ot: [UInt32] = []
-        var area: Float = 0
         var i = 0, fi = 0
-        let up = simd_normalize(simd_make_float3(simd_inverse(a.originFromAnchorTransform) * SIMD4<Float>(0, 1, 0, 0)))
         while i + 2 < f.count {
-            let ia = Int(f[i]), ib = Int(f[i + 1]), ic = Int(f[i + 2])
-            if ia < v.count, ib < v.count, ic < v.count {
-                if cls[fi] == MeshClass.floor {
-                    fl += [f[i], f[i + 1], f[i + 2]]
-                    let cr = simd_cross(v[ib] - v[ia], v[ic] - v[ia])
-                    area += abs(simd_dot(cr, up)) * 0.5
-                } else if cls[fi] != MeshClass.ceiling {
-                    ot += [f[i], f[i + 1], f[i + 2]]
-                }
+            if Int(f[i]) < v.count, Int(f[i + 1]) < v.count, Int(f[i + 2]) < v.count {
+                if fi < cls.count && cls[fi] == MeshClass.floor { fl += [f[i], f[i + 1], f[i + 2]] }
+                else if fi >= cls.count || cls[fi] != MeshClass.ceiling { ot += [f[i], f[i + 1], f[i + 2]] }
             }
             i += 3; fi += 1
         }
-        floorArea[a.id] = area
         var descs: [MeshDescriptor] = []
         var mats: [RealityKit.Material] = []
         if !fl.isEmpty {
@@ -197,12 +217,25 @@ final class ScanSession {
             path.append(head)
         }
         placeHud(dt)
+        if let c = cov { me = CGPoint(x: CGFloat((head.x - c.ox) / c.cell), y: CGFloat((head.z - c.oz) / c.cell)) }
         statTimer += dt
         if statTimer > 1 {
             statTimer = 0
-            let a = floorArea.values.reduce(0, +)
+            let a = cov?.floorArea ?? 0
             stat = String(format: "알아본 바닥 %.1f㎡ · 걸은 거리 %.0fm", a, walked)
             canSave = a >= 3 && path.count >= 4
+        }
+        // 지도는 2.5초마다 (다른 스레드에서 계산)
+        mapTimer += dt
+        if mapTimer > 2.5 && !mapBusy {
+            mapTimer = 0
+            mapBusy = true
+            let list = Array(copies.values), hy = head.y
+            Task {
+                let c = await Task.detached(priority: .utility) { RoomSegment.coverage(list, headY: hy) }.value
+                mapBusy = false
+                if let c { cov = c; map = c.image }
+            }
         }
     }
 
@@ -218,7 +251,7 @@ final class ScanSession {
         while dy < -.pi { dy += 2 * .pi }
         if !hudPlaced { hudYaw = yaw; hudPlaced = true } else if abs(dy) > 0.5 { hudYaw += dy * min(1, dt * 2.5) }
         let q = simd_quatf(angle: hudYaw, axis: [0, 1, 0])
-        let target = head + q.act(SIMD3<Float>(0, -0.32, -0.85))
+        let target = head + q.act(SIMD3<Float>(0, -0.32, -0.95))
         hud.position = hud.position + (target - hud.position) * min(1, dt * 4)
         hud.orientation = q
     }
@@ -229,12 +262,12 @@ final class ScanSession {
         AppModel.shared.finish()
     }
 
-    /// 저장: 그물 복사 → (다른 스레드) 격자·방 구분 → 월드 앵커 → 파일
+    /// 저장: 모아 둔 그물 → (다른 스레드) 격자·방 구분·사각형 제안 → 월드 앵커 → 파일
     func save() {
         guard !saving, let w = world else { return }
         saving = true
         message = nil
-        let input = RoomSegment.Input(meshes: anchors.values.map { MeshCopy($0) }, path: path, headY: head.y)
+        let input = RoomSegment.Input(meshes: Array(copies.values), path: path, headY: head.y)
         let replaceId = replace
         let id = replaceId ?? UUID().uuidString
         let old = replaceId.flatMap { SpaceStore.load($0) }
@@ -275,7 +308,7 @@ final class ScanSession {
             // 다시 스캔: 예전 앵커는 지움
             for r in old?.rec.anchors ?? [] { if let u = UUID(uuidString: r.a) { try? await w.removeAnchor(forID: u) } }
             ended = true
-            AppModel.shared.finish(savedId: id, message: "방 \(data.rec.rooms.count)곳으로 나눴어요. 지도에서 합치기·나누기·이름 붙이기로 다듬어 주세요.")
+            AppModel.shared.finish(savedId: id, message: "방 \(data.rec.rooms.count)곳을 사각형으로 구성해 두었어요. 지도에서 실제 집 모양에 맞게 다듬어 주세요.")
         }
     }
 }

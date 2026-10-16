@@ -25,42 +25,45 @@ final class RoomWorld {
 
     var outdoor: Bool { !style.skylight }
 
-    init(_ d: SpaceData, _ r: RoomRec) {
+    typealias PRect = (SIMD2<Float>, SIMD2<Float>)
+
+    init(_ d: SpaceData, _ r: RoomRec, layout: Layout) {
         room = r
         style = Worlds.style(r.place, time: r.time)
         angle = d.rec.angle
         // 밤·폭우라도 벽과 가구가 알아볼 수 있을 만큼은 밝게 (안전)
         tint = simd_max(Worlds.timeTint(r.time, indoor: Worlds.indoor(r.place)) * Worlds.weatherDim(r.weather), SIMD3<Float>(0.32, 0.33, 0.4))
         world.components.set(WorldComponent())
-        build(d)
+        build(d, layout)
     }
 
     // MARK: 만들기
-    private func build(_ d: SpaceData) {
+    private func build(_ d: SpaceData, _ L: Layout) {
         let rec = d.rec
         let floorY = rec.floorY
         let ceilY = floorY + room.ceil
-        if let b = d.bounds(of: room.id) {
-            let cu = Float(b.0 + b.2) / 2, cv = Float(b.1 + b.3) / 2
-            let c = rec.world(cu, cv)
+        let rects = L.rects(room.id)                 // 이 방이 차지하는 곳 (문·통로 포함, 평면 좌표 m)
+        if let f = rects.first {
+            var lo = f.0, hi = f.1
+            for r in rects { lo = simd_min(lo, r.0); hi = simd_max(hi, r.1) }
+            let c = L.flat((lo + hi) / 2)
             center = SIMD3<Float>(c.x, floorY, c.y)
-            halfSize = SIMD2<Float>(Float(b.2 - b.0), Float(b.3 - b.1)) * rec.cell / 2
+            halfSize = (hi - lo) / 2
         }
-        let rects = d.rects(of: room.id)
-        let wide = d.rects(mask: d.mask(room.id, grow: 2))     // 벽 밑까지 20cm 더 (틈으로 현실이 보이지 않게)
 
-        // 바닥 (방 모양, 바닥 위 6mm)
-        if let m = Self.flatMesh(wide, rec: rec, y: floorY + 0.006, tile: style.floorTile) {
-            let e = ModelEntity(mesh: m, materials: [Tex.unlit(style.floor, tint: style.floorTint * tint)])
-            local.addChild(e)
+        // 바닥 (바닥 위 6mm)
+        if let m = Self.flatMesh(rects, L, y: floorY + 0.006, tile: style.floorTile) {
+            local.addChild(ModelEntity(mesh: m, materials: [Tex.unlit(style.floor, tint: style.floorTint * tint)]))
         }
-        // 천장 = 하늘 세계로 열린 창 (천장보다 3cm 아래)
-        if let m = Self.flatMesh(wide, rec: rec, y: ceilY - 0.03, tile: 1) {
+        // 천장 = 하늘 세계로 열린 창 (천장보다 2cm 아래)
+        if let m = Self.flatMesh(rects, L, y: ceilY - 0.02, tile: 1) {
             let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
             p.components.set(PortalComponent(target: world))
             local.addChild(p)
         }
-        if style.skylight { addSkylightFrame(rects, rec: rec, y: ceilY - 0.06) }
+        // 벽 (사각형 둘레에 반듯하게) + 창 (하늘 세계로 열린 창)
+        addWalls(L.walls.filter { $0.room == room.id }, L, floorY: floorY, ceilY: ceilY)
+        if style.skylight { addSkylightFrame(rects, L, y: ceilY - 0.06) }
 
         // 하늘 세계
         let skyTex = Worlds.skyName(time: room.time, weather: room.weather)
@@ -89,10 +92,9 @@ final class RoomWorld {
             world.addChild(e)
         }
         if outdoor {
-            for r in rects.sorted(by: { ($0.2 - $0.0) * ($0.3 - $0.1) > ($1.2 - $1.0) * ($1.3 - $1.1) }).prefix(5) {
-                let cu = Float(r.0 + r.2) / 2, cv = Float(r.1 + r.3) / 2
-                let c = rec.world(cu, cv)
-                let sx = Float(r.2 - r.0) * rec.cell, sz = Float(r.3 - r.1) * rec.cell
+            for r in rects.sorted(by: { ($0.1.x - $0.0.x) * ($0.1.y - $0.0.y) > ($1.1.x - $1.0.x) * ($1.1.y - $1.0.y) }).prefix(5) {
+                let c = L.flat((r.0 + r.1) / 2)
+                let sx = r.1.x - r.0.x, sz = r.1.y - r.0.y
                 guard sx * sz > 0.4 else { continue }
                 var list: [Entity] = []
                 if ["drizzle", "rain", "storm", "snow", "heavysnow"].contains(w) {
@@ -289,30 +291,110 @@ final class RoomWorld {
     }
 
     /// 실내 장소: 유리 지붕 틀 (1m 간격 가는 들보)
-    private func addSkylightFrame(_ rects: [(Int, Int, Int, Int)], rec: SpaceRec, y: Float) {
+    private func addSkylightFrame(_ rects: [PRect], _ L: Layout, y: Float) {
         let m = UnlitMaterial(color: Tex.color(SIMD3<Float>(0.18, 0.15, 0.12) * tint))
         let q = simd_quatf(angle: -angle, axis: [0, 1, 0])
-        let step = 10
         for r in rects {
-            // u 방향 들보 (v가 10칸마다)
-            for v in stride(from: (r.1 / step + 1) * step, to: r.3, by: step) {
-                let len = Float(r.2 - r.0) * rec.cell
-                guard len > 0.3 else { continue }
-                let c = rec.world(Float(r.0 + r.2) / 2, Float(v))
-                let b = ModelEntity(mesh: .generateBox(width: len, height: 0.07, depth: 0.05), materials: [m])
-                b.position = SIMD3<Float>(c.x, y, c.y)
-                b.orientation = q
-                local.addChild(b)
+            // u 방향 들보 (v가 1m마다)
+            var v = (r.0.y).rounded(.down) + 1
+            while v < r.1.y {
+                let len = r.1.x - r.0.x
+                if len > 0.3 {
+                    let c = L.flat(SIMD2<Float>((r.0.x + r.1.x) / 2, v))
+                    let b = ModelEntity(mesh: .generateBox(width: len, height: 0.07, depth: 0.05), materials: [m])
+                    b.position = SIMD3<Float>(c.x, y, c.y)
+                    b.orientation = q
+                    local.addChild(b)
+                }
+                v += 1
             }
-            // v 방향 들보 (u가 10칸마다)
-            for u in stride(from: (r.0 / step + 1) * step, to: r.2, by: step) {
-                let len = Float(r.3 - r.1) * rec.cell
-                guard len > 0.3 else { continue }
-                let c = rec.world(Float(u), Float(r.1 + r.3) / 2)
-                let b = ModelEntity(mesh: .generateBox(width: 0.05, height: 0.07, depth: len), materials: [m])
-                b.position = SIMD3<Float>(c.x, y, c.y)
-                b.orientation = q
-                local.addChild(b)
+            // v 방향 들보 (u가 1m마다)
+            var u = (r.0.x).rounded(.down) + 1
+            while u < r.1.x {
+                let len = r.1.y - r.0.y
+                if len > 0.3 {
+                    let c = L.flat(SIMD2<Float>(u, (r.0.y + r.1.y) / 2))
+                    let b = ModelEntity(mesh: .generateBox(width: 0.05, height: 0.07, depth: len), materials: [m])
+                    b.position = SIMD3<Float>(c.x, y, c.y)
+                    b.orientation = q
+                    local.addChild(b)
+                }
+                u += 1
+            }
+        }
+    }
+
+    /// 벽: 바닥부터 천장까지 반듯한 판. 해를 보는 쪽은 밝게, 반대쪽은 그늘지게.
+    /// 창: 높이 0.85m~2.15m 부분을 하늘 세계로 열린 창으로 (위아래는 벽)
+    private func addWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
+        let sun = Worlds.sunDir(room.time)
+        var parts: [[(SIMD3<Float>, SIMD3<Float>, Float, Float, Float, Float)]] = [[], [], []]   // 그늘 단계별: 아래 두 점·높이 범위·무늬 시작
+        var windows: [(SIMD3<Float>, SIMD3<Float>, Float, Float)] = []
+        for s in segs {
+            let a2 = L.flat(s.a), b2 = L.flat(s.b)
+            let a = SIMD3<Float>(a2.x, floorY, a2.y), b = SIMD3<Float>(b2.x, floorY, b2.y)
+            let nw = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))               // 방 안쪽 방향 (저장 좌표)
+            let l = simd_dot(SIMD3<Float>(nw.x, 0, nw.y), sun)
+            let k = l > 0.25 ? 0 : (l > -0.25 ? 1 : 2)
+            let along0 = abs(s.a.x - s.b.x) > abs(s.a.y - s.b.y) ? s.a.x : s.a.y
+            let top = ceilY - floorY
+            if s.window && top > 1.6 {
+                let w0: Float = 0.85, w1 = min(2.15, top - 0.15)
+                parts[k].append((a, b, 0, w0, along0, 0))
+                parts[k].append((a, b, w1, top, along0, 0))
+                windows.append((a, b, w0, w1))
+            } else {
+                parts[k].append((a, b, 0, top, along0, 0))
+            }
+        }
+        let shade: [Float] = [1.0, 0.82, 0.66]
+        for k in 0..<3 where !parts[k].isEmpty {
+            var pos: [SIMD3<Float>] = [], uv: [SIMD2<Float>] = [], idx: [UInt32] = []
+            let tile = style.wallTile
+            for (a, b, y0, y1, along0, _) in parts[k] {
+                let len = simd_distance(a, b)
+                let base = UInt32(pos.count)
+                pos += [a + SIMD3<Float>(0, y0, 0), b + SIMD3<Float>(0, y0, 0), b + SIMD3<Float>(0, y1, 0), a + SIMD3<Float>(0, y1, 0)]
+                uv += [SIMD2<Float>(along0 / tile, -y0 / tile), SIMD2<Float>((along0 + len) / tile, -y0 / tile),
+                       SIMD2<Float>((along0 + len) / tile, -y1 / tile), SIMD2<Float>(along0 / tile, -y1 / tile)]
+                idx += [base, base + 1, base + 2, base, base + 2, base + 3, base, base + 2, base + 1, base, base + 3, base + 2]
+            }
+            var d = MeshDescriptor(name: "wall\(k)")
+            d.positions = MeshBuffers.Positions(pos)
+            d.textureCoordinates = MeshBuffers.TextureCoordinates(uv)
+            d.primitives = .triangles(idx)
+            if let m = try? MeshResource.generate(from: [d]) {
+                local.addChild(ModelEntity(mesh: m, materials: [Tex.unlit(style.wall, tint: style.wallTint * tint * shade[k])]))
+            }
+        }
+        if !windows.isEmpty {
+            var pos: [SIMD3<Float>] = [], idx: [UInt32] = []
+            for (a, b, y0, y1) in windows {
+                let base = UInt32(pos.count)
+                pos += [a + SIMD3<Float>(0, y0, 0), b + SIMD3<Float>(0, y0, 0), b + SIMD3<Float>(0, y1, 0), a + SIMD3<Float>(0, y1, 0)]
+                idx += [base, base + 1, base + 2, base, base + 2, base + 3, base, base + 2, base + 1, base, base + 3, base + 2]
+            }
+            var d = MeshDescriptor(name: "window")
+            d.positions = MeshBuffers.Positions(pos)
+            d.primitives = .triangles(idx)
+            if let m = try? MeshResource.generate(from: [d]) {
+                let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
+                p.components.set(PortalComponent(target: world))
+                local.addChild(p)
+                // 창틀
+                let frame = UnlitMaterial(color: Tex.color(SIMD3<Float>(0.22, 0.2, 0.18) * tint))
+                for (a, b, y0, y1) in windows {
+                    let len = simd_distance(a, b)
+                    let mid = (a + b) / 2
+                    let dir = simd_normalize(b - a)
+                    let yaw = atan2(-dir.z, dir.x)
+                    for y in [y0, y1] {
+                        let bar = ModelEntity(mesh: .generateBox(width: len, height: 0.05, depth: 0.04), materials: [frame])
+                        bar.position = mid + SIMD3<Float>(0, y, 0)
+                        bar.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0])
+                        local.addChild(bar)
+                    }
+                }
             }
         }
     }
@@ -399,12 +481,11 @@ final class RoomWorld {
 
     // MARK: 그물 만들기
     /// 방 칸 직사각형들로 평평한 판 (위아래 양면, 무늬는 저장 좌표 기준으로 tile m마다 반복)
-    static func flatMesh(_ rects: [(Int, Int, Int, Int)], rec: SpaceRec, y: Float, tile: Float) -> MeshResource? {
+    static func flatMesh(_ rects: [PRect], _ L: Layout, y: Float, tile: Float) -> MeshResource? {
         guard !rects.isEmpty else { return nil }
         var pos: [SIMD3<Float>] = [], uv: [SIMD2<Float>] = [], idx: [UInt32] = []
         for r in rects {
-            let corners = [rec.world(Float(r.0), Float(r.1)), rec.world(Float(r.2), Float(r.1)),
-                           rec.world(Float(r.2), Float(r.3)), rec.world(Float(r.0), Float(r.3))]
+            let corners = [L.flat(r.0), L.flat(SIMD2<Float>(r.1.x, r.0.y)), L.flat(r.1), L.flat(SIMD2<Float>(r.0.x, r.1.y))]
             let b = UInt32(pos.count)
             for c in corners {
                 pos.append(SIMD3<Float>(c.x, y, c.y))

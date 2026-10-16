@@ -7,6 +7,7 @@ struct HomeView: View {
     @State private var path: [String] = []
     @State private var safetyFor: String?
     @State private var deleting: SpaceRec?
+    @State private var theming: ThemeTarget?
     private var model: AppModel { AppModel.shared }
 
     var body: some View {
@@ -55,6 +56,7 @@ struct HomeView: View {
                 model.start(.explore(s.id))
             } cancel: { safetyFor = nil }
         }
+        .sheet(item: $theming) { t in ThemeSheet(target: t) { theming = nil } }
         .alert("이 공간을 지울까요?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
             Button("지우기", role: .destructive) {
                 if let d = deleting { SpaceStore.delete(d.id); model.reload() }
@@ -86,7 +88,7 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label("집 안의 모든 방을 천천히 걸어 다니며 바닥과 벽을 골고루 바라봐요.", systemImage: "figure.walk")
                 Label("문턱을 넘어 방 안쪽까지 들어가야 그 방이 생겨요.", systemImage: "door.left.hand.open")
-                Label("스캔이 끝나면 방이 자동으로 나뉘고, 합치기·나누기·이름 붙이기로 다듬을 수 있어요.", systemImage: "square.split.2x2")
+                Label("스캔이 끝나면 방마다 사각형으로 구성돼요. 사각형을 끌고 붙여 실제 집 모양에 맞추고, 방마다 이름과 세계를 정해요.", systemImage: "square.split.2x2")
             }
             .foregroundStyle(.secondary)
             Button {
@@ -103,6 +105,8 @@ struct HomeView: View {
             ForEach(model.spaces) { s in
                 SpaceCard(space: s) {
                     safetyFor = s.id
+                } theme: { r in
+                    theming = ThemeTarget(space: s.id, room: r)
                 } edit: {
                     path = [s.id]
                 } rescan: {
@@ -123,10 +127,46 @@ struct HomeView: View {
 
 private struct SheetId: Identifiable { let id: String }
 
+/// 메인 메뉴에서 방 하나의 세계 바꾸기
+struct ThemeTarget: Identifiable, Hashable {
+    let space: String
+    let room: Int
+    var id: String { "\(space)#\(room)" }
+}
+
+private struct ThemeSheet: View {
+    let target: ThemeTarget
+    let done: () -> Void
+    @State private var room: RoomRec?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            if let r = room {
+                HStack {
+                    Circle().fill(RoomColor.of(r.id)).frame(width: 12, height: 12)
+                    Text(r.name).font(.title2.weight(.bold))
+                    Spacer()
+                    Button("완료", action: done).buttonStyle(.borderedProminent)
+                }
+                Text(r.title).font(.title3)
+                ThemePicker(room: r) { p, w, t in
+                    SpaceStore.setTheme(target.space, room: r.id, place: p, weather: w, time: t)
+                    room?.place = p; room?.weather = w; room?.time = t
+                    AppModel.shared.reload()
+                }
+            }
+        }
+        .padding(30)
+        .frame(width: 720)
+        .onAppear { room = SpaceStore.list().first { $0.id == target.space }?.room(target.room) }
+    }
+}
+
 /// 공간 카드: 방마다 정한 세계 미리 보기 + 탐험 시작
 private struct SpaceCard: View {
     let space: SpaceRec
     let explore: () -> Void
+    let theme: (Int) -> Void
     let edit: () -> Void
     let rescan: () -> Void
     let delete: () -> Void
@@ -138,7 +178,7 @@ private struct SpaceCard: View {
                 Text("방 \(space.rooms.count)곳").foregroundStyle(.secondary)
                 Spacer()
                 Menu {
-                    Button("방 편집", systemImage: "square.split.2x2", action: edit)
+                    Button("방 구성", systemImage: "square.split.2x2", action: edit)
                     Button("다시 스캔", systemImage: "viewfinder", action: rescan)
                     Button("지우기", systemImage: "trash", role: .destructive, action: delete)
                 } label: { Image(systemName: "ellipsis").frame(width: 36, height: 36) }
@@ -146,14 +186,23 @@ private struct SpaceCard: View {
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], alignment: .leading, spacing: 10) {
                 ForEach(space.rooms) { r in
-                    HStack(spacing: 10) {
-                        Circle().fill(RoomColor.of(r.id)).frame(width: 10, height: 10)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(r.name).font(.headline)
-                            Text(r.title).font(.subheadline).foregroundStyle(.secondary)
+                    Button { theme(r.id) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: Worlds.icon(r.place)).frame(width: 28).foregroundStyle(RoomColor.of(r.id))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(r.name).font(.headline)
+                                Text(r.title).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "paintpalette").foregroundStyle(.secondary)
                         }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                        .contentShape(RoundedRectangle(cornerRadius: 14))
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
                 }
             }
             HStack(spacing: 12) {
@@ -161,7 +210,7 @@ private struct SpaceCard: View {
                     Label("탐험 시작", systemImage: "sparkles").font(.title3).padding(.horizontal, 10).padding(.vertical, 4)
                 }
                 .disabled(!AppModel.supported || space.rooms.isEmpty)
-                Button("방 편집", action: edit)
+                Button("방 구성", action: edit)
             }
         }
         .padding(24)

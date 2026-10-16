@@ -1,5 +1,6 @@
 import Foundation
 import simd
+import CoreGraphics
 
 /// 스캔한 그물 → 위에서 본 격자(10cm 칸) → 방 자동 구분.
 /// 순서: 바닥·벽 칸 표시 → 벽의 작은 구멍 메우기 → 걸어 다닌 곳에서 닿는 바닥만 남김(거울 속·벽 너머 가짜 공간 제거)
@@ -97,6 +98,7 @@ enum RoomSegment {
         var wallCnt = [UInt16](repeating: 0, count: W * H)
         var ceilSum = [Float](repeating: 0, count: W * H)
         var ceilN = [UInt16](repeating: 0, count: W * H)
+        var win = [UInt8](repeating: 0, count: W * H)
         for t in 0..<nTri {
             let n = N[t], cl = C[t]
             let hgt = Ctr[t].y - floorY
@@ -107,7 +109,8 @@ enum RoomSegment {
                 || ((cl == MeshClass.none || cl == 10) && abs(n.y) < 0.35 && hgt > 1.3 && hgt < 2.0)
             let isFloor = (cl == MeshClass.floor && hgt < 0.3) || (n.y > 0.85 && hgt < 0.08 && hgt > -0.2)
             let isTop = !isWall && !isCeil && n.y > 0.7 && hgt >= 0.08 && hgt < 1.3   // 탁자·의자·침대 윗면 → 그 아래도 바닥
-            guard isCeil || isWall || isFloor || isTop else { continue }
+            let isWin = cl == MeshClass.window && hgt > 0.3 && hgt < 2.4               // 창 (벽을 세울 때 그 자리를 하늘로 열린 창으로)
+            guard isCeil || isWall || isFloor || isTop || isWin else { continue }
             let a = P[3 * t], b = P[3 * t + 1], c = P[3 * t + 2]
             let edge = max(simd_distance(a, b), simd_distance(b, c), simd_distance(c, a))
             let k = max(1, min(40, Int(ceil(edge / (cell * 0.5)))))
@@ -115,9 +118,10 @@ enum RoomSegment {
                 for j in 0...(k - i) {
                     let p = a + (b - a) * (Float(i) / Float(k)) + (c - a) * (Float(j) / Float(k))
                     guard let ci = cellIndex(loc(p)) else { continue }
+                    if isWin { win[ci] = 1 }
                     if isWall { wallCnt[ci] &+= 1 }
                     else if isCeil { ceilSum[ci] += p.y - floorY; ceilN[ci] &+= 1 }
-                    else { floorCnt[ci] &+= 1 }
+                    else if isFloor || isTop { floorCnt[ci] &+= 1 }
                 }
             }
         }
@@ -195,7 +199,9 @@ enum RoomSegment {
 
         let rec = SpaceRec(id: id, name: name, at: Date().timeIntervalSince1970 * 1000, cell: cell, angle: angle,
                            ox: origin.x, oz: origin.y, w: W, h: H, floorY: floorY, anchors: [], rooms: rooms)
-        return (SpaceData(rec: rec, kind: kind, room: room), anchorPts)
+        var sd = SpaceData(rec: rec, kind: kind, room: room, win: win)
+        sd.proposeShapes(keepRooms: true)          // 방마다 사각형 몇 개로 덮고, 방 사이 벽 없는 곳은 문·통로로
+        return (sd, anchorPts)
     }
 
     // MARK: 방 구분 (격자만으로)
@@ -387,5 +393,83 @@ enum RoomSegment {
             }
         }
         return d
+    }
+
+    // MARK: 스캔 중 보여 주는 지도
+    struct Coverage {
+        let image: CGImage
+        let ox: Float, oz: Float          // 그림 왼쪽 위 = 세계 (x, z)
+        let cell: Float
+        let w: Int, h: Int
+        let floorArea: Float              // 알아본 바닥 넓이 (㎡)
+    }
+
+    /// 지금까지 모은 그물로 위에서 본 지도 (바닥 청록, 벽·가구 흰색, 창 하늘색). 세계 x, z 그대로(돌리지 않음)
+    static func coverage(_ meshes: [MeshCopy], headY: Float) -> Coverage? {
+        var fl: [SIMD2<Float>] = [], wl: [SIMD2<Float>] = [], wn: [SIMD2<Float>] = []
+        var fys: [Float] = []
+        var cs: [(SIMD3<Float>, SIMD3<Float>, UInt8)] = []
+        for m in meshes {
+            let wv = m.v.map { simd_make_float3(m.m * SIMD4<Float>($0, 1)) }
+            var i = 0, fi = 0
+            while i + 2 < m.f.count {
+                defer { i += 3; fi += 1 }
+                let a = Int(m.f[i]), b = Int(m.f[i + 1]), c = Int(m.f[i + 2])
+                guard a < wv.count, b < wv.count, c < wv.count else { continue }
+                let cr = simd_cross(wv[b] - wv[a], wv[c] - wv[a])
+                let l = simd_length(cr)
+                guard l > 1e-9 else { continue }
+                let n = cr / l, ctr = (wv[a] + wv[b] + wv[c]) / 3
+                let cl: UInt8 = fi < m.c.count ? m.c[fi] : 0
+                if cl == MeshClass.floor && n.y > 0.8 { fys.append(ctr.y) }
+                cs.append((ctr, n, cl))
+            }
+        }
+        fys.sort()
+        let floorY: Float = fys.isEmpty ? headY - 1.55 : fys[fys.count / 2]
+        for (ctr, n, cl) in cs {
+            let hgt = ctr.y - floorY
+            if hgt < -0.3 || hgt > 2.4 { continue }
+            if cl == MeshClass.window { wn.append(ctr.xz) }
+            else if (cl == MeshClass.floor || n.y > 0.85) && hgt < 0.1 { fl.append(ctr.xz) }
+            else if abs(n.y) < 0.5 && hgt > 0.3 && hgt < 2.0 { wl.append(ctr.xz) }
+        }
+        guard let first = fl.first ?? wl.first else { return nil }
+        var lo = first, hi = first
+        for p in fl + wl { lo = simd_min(lo, p); hi = simd_max(hi, p) }
+        let cell: Float = 0.1
+        let W = min(400, Int((hi.x - lo.x) / cell) + 3), H = min(400, Int((hi.y - lo.y) / cell) + 3)
+        var kind = [UInt8](repeating: 0, count: W * H)
+        func put(_ p: SIMD2<Float>, _ k: UInt8) {
+            let u = Int((p.x - lo.x) / cell) + 1, v = Int((p.y - lo.y) / cell) + 1
+            guard u >= 0, v >= 0, u < W, v < H else { return }
+            if k > kind[v * W + u] { kind[v * W + u] = k }
+        }
+        fl.forEach { put($0, 1) }
+        wl.forEach { put($0, 2) }
+        wn.forEach { put($0, 3) }
+        var px = [UInt8](repeating: 0, count: W * H * 4)
+        var floorCells = 0
+        for i in 0..<(W * H) {
+            let c: (UInt8, UInt8, UInt8, UInt8)
+            switch kind[i] {
+            case 1: c = (60, 150, 145, 200); floorCells += 1
+            case 2: c = (235, 235, 235, 255)
+            case 3: c = (120, 190, 255, 255)
+            default: c = (0, 0, 0, 0)
+            }
+            px[i * 4] = c.0; px[i * 4 + 1] = c.1; px[i * 4 + 2] = c.2; px[i * 4 + 3] = c.3
+        }
+        // 그림은 미리 곱한 알파
+        for i in 0..<(W * H) where px[i * 4 + 3] < 255 {
+            let a = Float(px[i * 4 + 3]) / 255
+            px[i * 4] = UInt8(Float(px[i * 4]) * a); px[i * 4 + 1] = UInt8(Float(px[i * 4 + 1]) * a); px[i * 4 + 2] = UInt8(Float(px[i * 4 + 2]) * a)
+        }
+        guard let prov = CGDataProvider(data: Data(px) as CFData),
+              let img = CGImage(width: W, height: H, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: W * 4,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                provider: prov, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else { return nil }
+        return Coverage(image: img, ox: lo.x - cell, oz: lo.y - cell, cell: cell, w: W, h: H, floorArea: Float(floorCells) * cell * cell)
     }
 }

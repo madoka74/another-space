@@ -1,0 +1,226 @@
+import Foundation
+import simd
+
+/// 벽 한 줄 (평면 좌표 m). n: 걸을 수 있는 쪽(방 안)으로 향함
+struct WallSeg: Sendable {
+    var a: SIMD2<Float>
+    var b: SIMD2<Float>
+    var n: SIMD2<Float>
+    var room: Int
+    var window: Bool
+}
+
+/// 사각형들을 5cm 칸으로 그려 둔 탐험용 배치.
+/// - 걸을 수 있는 곳 = 방 사각형 + 문·통로 사각형
+/// - 벽 = 걸을 수 있는 칸과 아닌 칸 사이 (방끼리 바로 맞닿은 곳, 문·통로는 벽 없음)
+/// - 창 = 벽 바로 바깥 40cm 안에 스캔이 창으로 알아본 칸이 있는 곳
+struct Layout: Sendable {
+    static let res: Float = 0.05
+    let u0: Float, v0: Float
+    let W: Int, H: Int
+    let walk: [UInt8]           // 0 아님, 1 방, 2 문·통로
+    let owner: [UInt8]          // 그 칸의 방 (문·통로는 가장 가까운 방)
+    let dist: [Int16]           // 걸을 수 없는 칸까지 거리 (칸)
+    let ox: Float, oz: Float
+    let ex: SIMD2<Float>, ez: SIMD2<Float>
+    let floorY: Float
+    let ceil: [Float]           // 방 id → 천장 높이(바닥에서)
+    let walls: [WallSeg]
+
+    init(_ d: SpaceData) {
+        let shapes = d.shapes
+        let r = Layout.res
+        var lo = SIMD2<Float>(0, 0), hi = SIMD2<Float>(1, 1)
+        if let f = shapes.first {
+            lo = SIMD2<Float>(f.u0, f.v0); hi = SIMD2<Float>(f.u1, f.v1)
+            for s in shapes { lo = simd_min(lo, SIMD2<Float>(s.u0, s.v0)); hi = simd_max(hi, SIMD2<Float>(s.u1, s.v1)) }
+        }
+        // 원점은 5cm 배수에 맞추고 둘레에 한 칸씩 여유
+        let bu = (lo.x / r).rounded(.down) * r - r, bv = (lo.y / r).rounded(.down) * r - r
+        let w = min(1200, max(4, Int(((hi.x - bu) / r).rounded(.up)) + 2))
+        let h = min(1200, max(4, Int(((hi.y - bv) / r).rounded(.up)) + 2))
+        u0 = bu; v0 = bv; W = w; H = h
+        ox = d.rec.ox; oz = d.rec.oz; ex = d.rec.ex; ez = d.rec.ez; floorY = d.rec.floorY
+        var c = [Float](repeating: 2.4, count: 256)
+        for rm in d.rec.rooms where rm.id > 0 && rm.id < 256 { c[rm.id] = rm.ceil }
+        ceil = c
+
+        var wk = [UInt8](repeating: 0, count: w * h)
+        var ow = [UInt8](repeating: 0, count: w * h)
+        func range(_ s: ShapeRec) -> (Int, Int, Int, Int) {
+            (max(0, Int(((s.u0 - bu) / r).rounded())), max(0, Int(((s.v0 - bv) / r).rounded())),
+             min(w, Int(((s.u1 - bu) / r).rounded())), min(h, Int(((s.v1 - bv) / r).rounded())))
+        }
+        for s in shapes where !s.isDoor && s.room < 256 {           // 방 (나중 것이 위)
+            let (a0, b0, a1, b1) = range(s)
+            guard a1 > a0, b1 > b0 else { continue }
+            for v in b0..<b1 { for u in a0..<a1 { wk[v * w + u] = 1; ow[v * w + u] = UInt8(s.room) } }
+        }
+        for s in shapes where s.isDoor {                            // 문·통로는 방이 아닌 칸만 채움
+            let (a0, b0, a1, b1) = range(s)
+            guard a1 > a0, b1 > b0 else { continue }
+            for v in b0..<b1 { for u in a0..<a1 where wk[v * w + u] == 0 { wk[v * w + u] = 2 } }
+        }
+        // 문·통로 칸의 방 = 맞닿은 방 중 가까운 것 (방에서 퍼져 나감)
+        var q: [Int] = []
+        for i in 0..<(w * h) where wk[i] == 1 { q.append(i) }
+        var qi = 0
+        while qi < q.count {
+            let i = q[qi]; qi += 1
+            let u = i % w, v = i / w
+            for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let uu = u + du, vv = v + dv
+                guard uu >= 0, vv >= 0, uu < w, vv < h else { continue }
+                let j = vv * w + uu
+                if wk[j] == 2 && ow[j] == 0 { ow[j] = ow[i]; q.append(j) }
+            }
+        }
+        for i in 0..<(w * h) where wk[i] == 2 && ow[i] == 0 { wk[i] = 0 }      // 어느 방과도 안 닿은 통로는 버림
+        walk = wk; owner = ow
+
+        // 걸을 수 없는 칸까지 거리 (4방향 퍼짐)
+        var ds = [Int16](repeating: Int16.max, count: w * h)
+        var fq: [Int] = []
+        for i in 0..<(w * h) where wk[i] == 0 { ds[i] = 0; fq.append(i) }
+        var fi = 0
+        while fi < fq.count {
+            let i = fq[fi]; fi += 1
+            let u = i % w, v = i / w
+            for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let uu = u + du, vv = v + dv
+                guard uu >= 0, vv >= 0, uu < w, vv < h else { continue }
+                let j = vv * w + uu
+                if ds[j] > ds[i] + 1 { ds[j] = ds[i] + 1; fq.append(j) }
+            }
+        }
+        dist = ds
+
+        // 벽: 칸 경계마다 만들고, 같은 줄·같은 방·같은 종류(창 여부)는 이어 붙임
+        func isWin(_ p: SIMD2<Float>, _ out: SIMD2<Float>) -> Bool {
+            for k in 1...4 {
+                let q = (p + out * (Float(k) * 0.1)) / d.rec.cell
+                if d.windowAt(Int(q.x.rounded(.down)), Int(q.y.rounded(.down))) { return true }
+            }
+            return false
+        }
+        var segs: [WallSeg] = []
+        // 가로 경계 (v 줄 사이): 위 칸(v-1)과 아래 칸(v)
+        for v in 0...h {
+            var cur: WallSeg?
+            for u in 0...w {
+                var seg: WallSeg?
+                if u < w {
+                    let up = v > 0 ? wk[(v - 1) * w + u] : 0, dn = v < h ? wk[v * w + u] : 0
+                    if (up == 0) != (dn == 0) {
+                        let inside = up != 0 ? (v - 1) * w + u : v * w + u
+                        let n = SIMD2<Float>(0, up != 0 ? -1 : 1)
+                        let a = SIMD2<Float>(bu + Float(u) * r, bv + Float(v) * r)
+                        let b = a + SIMD2<Float>(r, 0)
+                        seg = WallSeg(a: a, b: b, n: n, room: Int(ow[inside]), window: isWin((a + b) / 2, -n))
+                    }
+                }
+                if let s = seg, var c = cur, c.room == s.room, c.n == s.n, c.window == s.window, simd_distance(c.b, s.a) < 1e-4 {
+                    c.b = s.b; cur = c
+                } else {
+                    if let c = cur { segs.append(c) }
+                    cur = seg
+                }
+            }
+            if let c = cur { segs.append(c) }
+        }
+        // 세로 경계 (u 줄 사이): 왼 칸(u-1)과 오른 칸(u)
+        for u in 0...w {
+            var cur: WallSeg?
+            for v in 0...h {
+                var seg: WallSeg?
+                if v < h {
+                    let lf = u > 0 ? wk[v * w + u - 1] : 0, rt = u < w ? wk[v * w + u] : 0
+                    if (lf == 0) != (rt == 0) {
+                        let inside = lf != 0 ? v * w + u - 1 : v * w + u
+                        let n = SIMD2<Float>(lf != 0 ? -1 : 1, 0)
+                        let a = SIMD2<Float>(bu + Float(u) * r, bv + Float(v) * r)
+                        let b = a + SIMD2<Float>(0, r)
+                        seg = WallSeg(a: a, b: b, n: n, room: Int(ow[inside]), window: isWin((a + b) / 2, -n))
+                    }
+                }
+                if let s = seg, var c = cur, c.room == s.room, c.n == s.n, c.window == s.window, simd_distance(c.b, s.a) < 1e-4 {
+                    c.b = s.b; cur = c
+                } else {
+                    if let c = cur { segs.append(c) }
+                    cur = seg
+                }
+            }
+            if let c = cur { segs.append(c) }
+        }
+        // 창은 50cm 안 되면 벽으로 (조각난 창 방지)
+        walls = segs.map { s in
+            var t = s
+            if t.window && simd_distance(t.a, t.b) < 0.5 { t.window = false }
+            return t
+        }
+    }
+
+    /// 저장 좌표 (x, z) → 평면 좌표
+    func plane(_ x: Float, _ z: Float) -> SIMD2<Float> {
+        let d = SIMD2<Float>(x - ox, z - oz)
+        return SIMD2<Float>(simd_dot(d, ex), simd_dot(d, ez))
+    }
+    /// 평면 좌표 → 저장 좌표 (x, z)
+    func flat(_ p: SIMD2<Float>) -> SIMD2<Float> { SIMD2<Float>(ox, oz) + ex * p.x + ez * p.y }
+
+    private func index(_ p: SIMD2<Float>) -> Int? {
+        let u = Int(((p.x - u0) / Layout.res).rounded(.down)), v = Int(((p.y - v0) / Layout.res).rounded(.down))
+        return (u >= 0 && v >= 0 && u < W && v < H) ? v * W + u : nil
+    }
+
+    /// 그 자리의 방 (걸을 수 없는 곳이면 0)과 벽까지 거리(m)
+    func at(x: Float, z: Float) -> (room: Int, wall: Float) {
+        guard let i = index(plane(x, z)), walk[i] != 0 else { return (0, 0) }
+        return (Int(owner[i]), Float(dist[i]) * Layout.res)
+    }
+
+    /// 근처(반경 m)까지 둘러봐서 가장 가까운 방 — 문틀·벽 사이를 지날 때 깜박이지 않게
+    func roomNear(x: Float, z: Float, radius: Float) -> Int {
+        let p = plane(x, z)
+        if let i = index(p), walk[i] != 0 { return Int(owner[i]) }
+        let k = Int((radius / Layout.res).rounded(.up))
+        guard let c = index(p) else { return 0 }
+        let cu = c % W, cv = c / W
+        var best = 0, bd = Int.max
+        for dv in -k...k {
+            for du in -k...k {
+                let u = cu + du, v = cv + dv
+                guard u >= 0, v >= 0, u < W, v < H, walk[v * W + u] != 0 else { continue }
+                if du * du + dv * dv < bd { bd = du * du + dv * dv; best = Int(owner[v * W + u]) }
+            }
+        }
+        return best
+    }
+
+    /// 방 r이 차지하는 칸(문·통로 포함)을 직사각형들로 (평면 좌표 m)
+    func rects(_ room: Int) -> [(SIMD2<Float>, SIMD2<Float>)] {
+        var used = [Bool](repeating: false, count: W * H)
+        func mine(_ i: Int) -> Bool { walk[i] != 0 && Int(owner[i]) == room && !used[i] }
+        var out: [(SIMD2<Float>, SIMD2<Float>)] = []
+        for v in 0..<H {
+            var u = 0
+            while u < W {
+                if !mine(v * W + u) { u += 1; continue }
+                var u1 = u
+                while u1 < W, mine(v * W + u1) { u1 += 1 }
+                var v1 = v + 1
+                while v1 < H {
+                    var full = true
+                    for k in u..<u1 where !mine(v1 * W + k) { full = false; break }
+                    if !full { break }
+                    v1 += 1
+                }
+                for vv in v..<v1 { for k in u..<u1 { used[vv * W + k] = true } }
+                out.append((SIMD2<Float>(u0 + Float(u) * Layout.res, v0 + Float(v) * Layout.res),
+                            SIMD2<Float>(u0 + Float(u1) * Layout.res, v0 + Float(v1) * Layout.res)))
+                u = u1
+            }
+        }
+        return out
+    }
+}

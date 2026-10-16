@@ -46,6 +46,35 @@ enum Worlds {
 
     static func label(_ list: [AxisItem], _ id: String) -> String { list.first { $0.id == id }?.label ?? id }
 
+    /// 칩에 쓰는 기호 (SF Symbols)
+    static func icon(_ id: String) -> String {
+        switch id {
+        case "camp": return "tent"
+        case "forest": return "tree"
+        case "valley": return "mountain.2"
+        case "sea": return "water.waves"
+        case "village": return "leaf"
+        case "city": return "building.2"
+        case "cafe": return "cup.and.saucer"
+        case "gallery": return "photo.artframe"
+        case "home": return "house"
+        case "clear": return "sun.max"
+        case "cloudy": return "cloud"
+        case "wind": return "wind"
+        case "drizzle": return "cloud.drizzle"
+        case "rain": return "cloud.rain"
+        case "storm": return "cloud.heavyrain"
+        case "snow": return "cloud.snow"
+        case "heavysnow": return "snowflake"
+        case "dawn": return "sunrise"
+        case "morning": return "sun.horizon"
+        case "afternoon": return "sun.max.fill"
+        case "dusk": return "sunset"
+        case "night": return "moon.stars"
+        default: return "circle"
+        }
+    }
+
     /// "구름 낀 오후의 캠핑장"
     static func title(place: String, weather: String, time: String) -> String {
         "\(adj[weather] ?? label(weathers, weather)) \(label(times, time))의 \(label(places, place))"

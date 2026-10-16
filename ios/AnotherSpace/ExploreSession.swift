@@ -4,7 +4,8 @@ import ARKit
 import QuartzCore
 
 /// 탐험: 저장한 공간을 다시 알아본 뒤, 방마다 다른 세계를 입힘.
-/// 바닥·천장(하늘)은 저장한 방 모양으로, 벽·가구는 지금 비전프로가 보고 있는 실제 그물로 → 의자를 옮겨도 그 자리에 다시 입혀짐
+/// - 바닥·벽·천장(하늘)·창: 사각형으로 구성한 집 모양에서 반듯하게 만듦 (유리·거울·스캔이 빈 곳도 빈틈없이)
+/// - 가구·물건: 지금 비전프로가 보고 있는 실제 그물로 → 의자를 옮겨도 그 자리에 다시 입혀짐
 struct ExploreView: View {
     let spaceId: String
     @State private var s: ExploreSession
@@ -27,79 +28,66 @@ struct ExploreView: View {
     }
 }
 
-/// 아래를 내려다보면 보이는 작은 안내판: 지금 세계 이름 + 나가기
+/// 아래를 내려다보면 보이는 안내판: 지금 세계 이름 · 테마 바꾸기 · 나가기
 private struct ExploreHud: View {
     let s: ExploreSession
 
     var body: some View {
-        VStack(spacing: 10) {
-            if !s.title.isEmpty {
-                Text(s.title).font(.title2.weight(.semibold))
-                if !s.sub.isEmpty { Text(s.sub).font(.headline).foregroundStyle(.secondary) }
+        VStack(spacing: 12) {
+            if let r = s.room {
+                Text(r.title).font(.title2.weight(.semibold))
+                Text(r.name).font(.headline).foregroundStyle(.secondary)
             }
             if let m = s.message {
                 Text(m).font(.headline).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
-            Button {
-                s.exit()
-            } label: {
-                Label("현실로 돌아가기", systemImage: "arrow.uturn.backward").font(.title3)
+            if s.themeOpen, let r = s.room {
+                ThemePicker(room: r, compact: true) { p, w, t in s.setTheme(place: p, weather: w, time: t) }
+                    .padding(.top, 4)
             }
+            HStack(spacing: 14) {
+                if s.room != nil {
+                    Button {
+                        s.themeOpen.toggle()
+                    } label: {
+                        Label(s.themeOpen ? "테마 닫기" : "테마 바꾸기", systemImage: s.themeOpen ? "chevron.down" : "paintpalette")
+                    }
+                }
+                Button {
+                    s.exit()
+                } label: {
+                    Label("현실로 돌아가기", systemImage: "arrow.uturn.backward")
+                }
+            }
+            .font(.title3)
         }
         .padding(22)
-        .frame(width: 460)
+        .frame(width: s.themeOpen ? 640 : 480)
         .glassBackgroundEffect()
     }
 }
 
-/// 격자에서 방 찾기 (다른 스레드에서도 쓰도록 값만 복사)
-struct RoomLookup: Sendable {
-    let w: Int, h: Int
-    let cell: Float, ox: Float, oz: Float
-    let ex: SIMD2<Float>, ez: SIMD2<Float>
-    let floorY: Float
-    let room: [UInt8]
-    let ceil: [Float]                // 방 id → 천장 높이(바닥에서)
-    let wallTile: [Float]
-    let propTile: [Float]
+/// 가구 입히기에 필요한 값 (다른 스레드로 넘김)
+struct SkinInfo: Sendable {
+    let layout: Layout
     let sun: [SIMD3<Float>]          // 방 id → 해 방향 (저장 좌표)
+    let propTile: [Float]
 
-    init(_ d: SpaceData) {
-        w = d.rec.w; h = d.rec.h; cell = d.rec.cell; ox = d.rec.ox; oz = d.rec.oz
-        ex = d.rec.ex; ez = d.rec.ez; floorY = d.rec.floorY
-        room = d.room
-        var c = [Float](repeating: 2.4, count: 256), wt = [Float](repeating: 2, count: 256), pt = [Float](repeating: 1, count: 256)
+    init(_ d: SpaceData, _ L: Layout) {
+        layout = L
         var sn = [SIMD3<Float>](repeating: SIMD3<Float>(0, 1, 0), count: 256)
-        for r in d.rec.rooms where r.id < 256 {
-            c[r.id] = r.ceil
-            let st = Worlds.style(r.place, time: r.time)
-            wt[r.id] = st.wallTile; pt[r.id] = st.propTile
+        var pt = [Float](repeating: 1, count: 256)
+        for r in d.rec.rooms where r.id > 0 && r.id < 256 {
             sn[r.id] = Worlds.sunDir(r.time)
+            pt[r.id] = Worlds.style(r.place, time: r.time).propTile
         }
-        ceil = c; wallTile = wt; propTile = pt; sun = sn
-    }
-
-    func roomAt(_ x: Float, _ z: Float, radius: Int = 0) -> Int {
-        let d = SIMD2<Float>(x - ox, z - oz)
-        let u = Int(floor(simd_dot(d, ex) / cell)), v = Int(floor(simd_dot(d, ez) / cell))
-        func at(_ u: Int, _ v: Int) -> Int { (u >= 0 && v >= 0 && u < w && v < h) ? Int(room[v * w + u]) : 0 }
-        let r0 = at(u, v)
-        if r0 != 0 || radius == 0 { return r0 }
-        var best = 0, bd = Int.max
-        for dv in -radius...radius {
-            for du in -radius...radius {
-                let r = at(u + du, v + dv)
-                if r != 0, du * du + dv * dv < bd { bd = du * du + dv * dv; best = r }
-            }
-        }
-        return best
+        sun = sn; propTile = pt
     }
 }
 
-/// 그물 한 덩어리를 방·종류(벽/물건/창)·그늘별로 나눈 결과
+/// 그물 한 덩어리를 방·그늘별로 나눈 결과 (가구·물건만)
 struct SkinGroup: Sendable {
     let room: Int
-    let kind: Int        // 0 벽, 1 물건, 2 창(하늘로 열린 창)
     let shade: Int       // 0 해 쪽, 1 옆, 2 그늘
     var pos: [SIMD3<Float>] = []
     var uv: [SIMD2<Float>] = []
@@ -107,8 +95,11 @@ struct SkinGroup: Sendable {
 }
 
 enum Skin {
-    /// 실제 그물 → 방마다 입힐 조각들. 방 밖(스캔 안 한 곳·뺀 곳)·천장·바닥 면은 버림(바닥은 따로 깔고, 천장은 하늘)
-    static func build(_ m: MeshCopy, _ L: RoomLookup, _ fit: Fit) -> [SkinGroup] {
+    /// 실제 그물 → 방 안 가구·물건만 골라 입힐 조각들.
+    /// 벽은 사각형에서 반듯하게 세우므로 벽 가까이(15cm)의 면은 버림. 방 밖(거울 속·창밖·구성하지 않은 곳)·천장·바닥 면도 버림.
+    /// 벽에서 떨어져 있는 실제 벽면(구성을 넓게 잡았을 때)은 물건처럼 입혀서 보이게 함 (부딪히지 않게)
+    static func build(_ m: MeshCopy, _ I: SkinInfo, _ fit: Fit) -> [SkinGroup] {
+        let L = I.layout
         var groups: [Int: SkinGroup] = [:]
         let wv = m.v.map { simd_make_float3(m.m * SIMD4<Float>($0, 1)) }
         var i = 0, fi = 0
@@ -125,37 +116,26 @@ enum Skin {
             let ctr = fit.toSaved((a + b + c) / 3)
             let ns = fit.dirToSaved(n)
             let hgt = ctr.y - L.floorY
-            if hgt < -0.3 { continue }                      // 바닥 아래 (창밖 땅 등)
-            // 면이 바라보는 쪽의 방 (벽의 양면이 각자 자기 방으로)
-            var r = 0
-            let hz = SIMD2<Float>(ns.x, ns.z), hl = simd_length(hz)
-            if hl > 0.3 { let dd = hz / hl; r = L.roomAt(ctr.x + dd.x * 0.2, ctr.z + dd.y * 0.2, radius: 1) }
-            if r == 0 { r = L.roomAt(ctr.x, ctr.z, radius: 2) }
-            if r == 0 || r >= 256 { continue }
-            if cls == MeshClass.ceiling || hgt > L.ceil[r] - 0.02 { continue }
-            if cls == MeshClass.floor || (ns.y > 0.8 && hgt < 0.07) { continue }
-            let kind: Int
-            if cls == MeshClass.window { kind = 2 }
-            else if cls == MeshClass.wall || cls == MeshClass.door || (abs(ns.y) < 0.5 && hgt > 1.7) { kind = 0 }
-            else { kind = 1 }
-            let l = simd_dot(ns, L.sun[r])
-            let shade = kind == 2 ? 0 : (l > 0.35 ? 0 : (l > -0.15 ? 1 : 2))
-            let key = r * 16 + kind * 4 + shade
-            var g = groups[key] ?? SkinGroup(room: r, kind: kind, shade: shade)
+            let here = L.at(x: ctr.x, z: ctr.z)
+            let r = here.room
+            if r == 0 || r >= 256 { continue }                       // 방 밖
+            if here.wall < 0.15 { continue }                         // 반듯한 벽이 덮는 곳
+            if cls == MeshClass.ceiling || hgt > L.ceil[r] - 0.1 { continue }
+            if cls == MeshClass.floor || (ns.y > 0.8 && hgt < 0.06) || hgt < -0.05 { continue }
+            let l = simd_dot(ns, I.sun[r])
+            let shade = l > 0.35 ? 0 : (l > -0.15 ? 1 : 2)
+            let key = r * 4 + shade
+            var g = groups[key] ?? SkinGroup(room: r, shade: shade)
             let base = UInt32(g.pos.count)
             g.pos += [a, b, c]
-            if kind != 2 {
-                let tile = kind == 0 ? L.wallTile[r] : L.propTile[r]
-                for p in [a, b, c] {
-                    let q = fit.toSaved(p)
-                    let uv: SIMD2<Float>
-                    if abs(ns.y) > 0.7 { uv = SIMD2<Float>(q.x, q.z) }
-                    else if abs(ns.x) > abs(ns.z) { uv = SIMD2<Float>(q.z, -q.y) }
-                    else { uv = SIMD2<Float>(q.x, -q.y) }
-                    g.uv.append(uv / tile)
-                }
-            } else {
-                g.uv += [SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(0, 1)]
+            let tile = I.propTile[r]
+            for p in [a, b, c] {
+                let q = fit.toSaved(p)
+                let uv: SIMD2<Float>
+                if abs(ns.y) > 0.7 { uv = SIMD2<Float>(q.x, q.z) }
+                else if abs(ns.x) > abs(ns.z) { uv = SIMD2<Float>(q.z, -q.y) }
+                else { uv = SIMD2<Float>(q.x, -q.y) }
+                g.uv.append(uv / tile)
             }
             g.idx += [base, base + 1, base + 2, base, base + 2, base + 1]      // 양면
             groups[key] = g
@@ -166,9 +146,9 @@ enum Skin {
 
 @MainActor @Observable
 final class ExploreSession {
-    var title = ""
-    var sub = ""
+    var room: RoomRec?
     var message: String? = "공간을 알아보는 중이에요. 스캔했던 곳을 천천히 둘러봐 주세요."
+    var themeOpen = false
 
     let root = Entity()
     @ObservationIgnored var updateSub: EventSubscription?
@@ -178,7 +158,8 @@ final class ExploreSession {
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
-    @ObservationIgnored private var lookup: RoomLookup?
+    @ObservationIgnored private var layout: Layout?
+    @ObservationIgnored private var info: SkinInfo?
     @ObservationIgnored private var worlds: [Int: RoomWorld] = [:]
     @ObservationIgnored private var saved: [String: AnchorRec] = [:]
     @ObservationIgnored private var allIds: Set<String> = []
@@ -208,7 +189,6 @@ final class ExploreSession {
     @ObservationIgnored private var buildTimer: Float = 0
     @ObservationIgnored private var nextEvent: Float = 6
     @ObservationIgnored private var nextThunder: Float = 8
-    @ObservationIgnored private var startedAt: Float = 0
     @ObservationIgnored private var ended = false
     @ObservationIgnored private let player = AmbientPlayer()
 
@@ -217,12 +197,14 @@ final class ExploreSession {
     }
 
     func start() async {
-        guard let d = SpaceStore.load(spaceId), !d.rec.rooms.isEmpty else {
-            message = "공간을 불러오지 못했어요. 메인 창에서 다시 스캔해 주세요."
+        guard let d = SpaceStore.load(spaceId), !d.rec.rooms.isEmpty, !d.shapes.isEmpty else {
+            message = "공간을 불러오지 못했어요. 메인 창에서 방 구성을 확인해 주세요."
             return
         }
         data = d
-        lookup = RoomLookup(d)
+        let L = Layout(d)
+        layout = L
+        info = SkinInfo(d, L)
         for a in d.rec.anchors { saved[a.a] = a }
         allIds = SpaceStore.allAnchorIds()
         root.addChild(spaceRoot)
@@ -230,22 +212,7 @@ final class ExploreSession {
         root.addChild(player.root)
         spaceRoot.components.set(OpacityComponent(opacity: 0))
         skinRoot.components.set(OpacityComponent(opacity: 0))
-        for r in d.rec.rooms {
-            let w = RoomWorld(d, r)
-            spaceRoot.addChild(w.world)
-            spaceRoot.addChild(w.local)
-            worlds[r.id] = w
-        }
-        // 소리는 미리 받아 둠 (방에 들어갈 때 바로 나게)
-        let rooms = d.rec.rooms
-        Task.detached(priority: .utility) {
-            let lib = AmbientLibrary.shared
-            guard await lib.load() else { return }
-            for r in rooms {
-                if let b = await lib.bed(r.place, r.time) { _ = await lib.loopFile(b) }
-                if let w = await lib.weatherLayer(r.weather, place: r.place) { _ = await lib.loopFile(w) }
-            }
-        }
+        for r in d.rec.rooms { addWorld(d, r, L) }
 
         let auth = await ar.requestAuthorization(for: [.worldSensing])
         guard auth[.worldSensing] == .allowed else {
@@ -261,6 +228,13 @@ final class ExploreSession {
         }
         Task { await self.watchMeshes(m) }
         await watchWorld(w)
+    }
+
+    private func addWorld(_ d: SpaceData, _ r: RoomRec, _ L: Layout) {
+        let w = RoomWorld(d, r, layout: L)
+        spaceRoot.addChild(w.world)
+        spaceRoot.addChild(w.local)
+        worlds[r.id] = w
     }
 
     func stop() {
@@ -281,6 +255,27 @@ final class ExploreSession {
         hud = e
         e.position = [0, 1.1, -0.7]
         root.addChild(e)
+    }
+
+    // MARK: 테마 바꾸기 (지금 방)
+    func setTheme(place: String, weather: String, time: String) {
+        guard var d = data, let L = layout, current != 0 else { return }
+        d.updateRoom(current) { $0.place = place; $0.weather = weather; $0.time = time }
+        data = d
+        try? SpaceStore.save(d)
+        guard let r = d.rec.room(current) else { return }
+        // 이 방의 세계만 새로 만듦
+        if let old = worlds[current] {
+            old.world.removeFromParent()
+            old.local.removeFromParent()
+        }
+        addWorld(d, r, L)
+        worlds[current]?.setActive(true)
+        info = SkinInfo(d, L)
+        for k in 0..<4 { mats[current * 4 + k] = nil }
+        dirty.formUnion(meshes.keys)
+        room = r
+        player.enter(r, force: true)
     }
 
     // MARK: 비전프로가 알려 주는 것
@@ -367,22 +362,22 @@ final class ExploreSession {
         if let lh = lastHead, dt > 0 { speed += (simd_distance(lh.xz, head.xz) / dt - speed) * min(1, dt * 4) }
         lastHead = head
 
-        if let fit, let L = lookup {
-            // 지금 있는 방 (0.5초 넘게 머물러야 바뀜)
+        if let fit, let L = layout, let I = info {
+            // 지금 있는 방 (0.5초 넘게 머물러야 바뀜). 문틀·벽 사이를 지날 때는 25cm 안의 방으로
             let hs = fit.toSaved(head)
-            let r = L.roomAt(hs.x, hs.z, radius: 3)
+            let r = L.roomNear(x: hs.x, z: hs.z, radius: 0.25)
             if r != candidate { candidate = r; candidateT = 0 } else { candidateT += dt }
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
             outsideT = r == 0 ? outsideT + dt : 0
             buildTimer += dt
-            if buildTimer > 0.25 { buildTimer = 0; buildSome(fit, L) }
+            if buildTimer > 0.25 { buildTimer = 0; buildSome(fit, I) }
         }
 
-        // 안전: 공간을 아직 못 찾았거나, 방 밖(스캔 안 한 곳·뺀 곳)이거나, 너무 빠르면 현실이 보이게
+        // 안전: 공간을 아직 못 찾았거나, 구성한 방 밖이거나, 너무 빠르면 현실이 보이게
         var target: Float = 1
         var why: String?
         if fit == nil { target = 0 }
-        else if outsideT > 0.6 { target = 0; why = "스캔한 방 밖이에요. 현실이 보이게 했어요." }
+        else if outsideT > 0.6 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
         else if speed > 1.4 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
         let rate: Float = target < fade ? 3 : 1.1
         fade += (target - fade) * min(1, dt * rate)
@@ -405,11 +400,10 @@ final class ExploreSession {
     private func enterRoom(_ r: Int) {
         worlds[current]?.setActive(false)
         current = r
-        guard let room = data?.rec.room(r) else { return }
+        guard let rm = data?.rec.room(r) else { return }
         worlds[r]?.setActive(true)
-        title = room.title
-        sub = room.name
-        player.enter(room)
+        room = rm
+        player.enter(rm)
         nextEvent = t + Float.random(in: 3...8)
         nextThunder = t + Float.random(in: 4...10)
     }
@@ -438,8 +432,8 @@ final class ExploreSession {
         }
     }
 
-    // MARK: 실제 그물 입히기
-    private func buildSome(_ fit: Fit, _ L: RoomLookup) {
+    // MARK: 실제 그물(가구·물건) 입히기
+    private func buildSome(_ fit: Fit, _ I: SkinInfo) {
         let now = CACurrentMediaTime()
         var started = 0
         for id in dirty where !building.contains(id) {
@@ -452,7 +446,7 @@ final class ExploreSession {
             started += 1
             let copy = MeshCopy(a)
             Task {
-                let groups = await Task.detached(priority: .userInitiated) { Skin.build(copy, L, fit) }.value
+                let groups = await Task.detached(priority: .userInitiated) { Skin.build(copy, I, fit) }.value
                 building.remove(id)
                 guard !ended, meshes[id] != nil else { return }
                 apply(id, groups)
@@ -463,43 +457,33 @@ final class ExploreSession {
     private func apply(_ id: UUID, _ groups: [SkinGroup]) {
         var descs: [MeshDescriptor] = []
         var ms: [RealityKit.Material] = []
-        var portals: [(Int, MeshDescriptor)] = []
         for g in groups where !g.idx.isEmpty {
-            var d = MeshDescriptor(name: "g\(g.room)_\(g.kind)_\(g.shade)")
+            var d = MeshDescriptor(name: "g\(g.room)_\(g.shade)")
             d.positions = MeshBuffers.Positions(g.pos)
             d.textureCoordinates = MeshBuffers.TextureCoordinates(g.uv)
             d.primitives = .triangles(g.idx)
-            if g.kind == 2 { portals.append((g.room, d)); continue }
             d.materials = .allFaces(UInt32(ms.count))
             descs.append(d)
-            ms.append(material(g.room, g.kind, g.shade))
+            ms.append(material(g.room, g.shade))
         }
         let e: ModelEntity
         if let old = meshEnts[id] { e = old } else { e = ModelEntity(); skinRoot.addChild(e); meshEnts[id] = e }
-        for c in Array(e.children) { c.removeFromParent() }
         if !descs.isEmpty, let mesh = try? MeshResource.generate(from: descs) {
             e.model = ModelComponent(mesh: mesh, materials: ms)
         } else {
             e.model = nil
         }
-        // 창문 = 그 방 하늘 세계로 열린 창
-        for (r, d) in portals {
-            guard let wld = worlds[r], let mesh = try? MeshResource.generate(from: [d]) else { continue }
-            let p = ModelEntity(mesh: mesh, materials: [PortalMaterial()])
-            p.components.set(PortalComponent(target: wld.world))
-            e.addChild(p)
-        }
     }
 
-    private func material(_ room: Int, _ kind: Int, _ shade: Int) -> UnlitMaterial {
-        let key = room * 16 + kind * 4 + shade
+    private func material(_ room: Int, _ shade: Int) -> UnlitMaterial {
+        let key = room * 4 + shade
         if let m = mats[key] { return m }
         let k: Float = [1.0, 0.8, 0.62][min(2, shade)]
         let m: UnlitMaterial
         if let wld = worlds[room] {
             let st = wld.style
             // 가구·물건은 둘레보다 조금 밝게 (부딪히지 않게 눈에 잘 띄도록)
-            m = kind == 0 ? Tex.unlit(st.wall, tint: st.wallTint * wld.tint * k) : Tex.unlit(st.prop, tint: st.propTint * wld.tint * k * 1.18)
+            m = Tex.unlit(st.prop, tint: st.propTint * wld.tint * k * 1.18)
         } else {
             m = UnlitMaterial(color: .gray)
         }
@@ -508,7 +492,7 @@ final class ExploreSession {
     }
 
     // MARK: 안내판
-    /// 내려다볼 때만 보이는 안내판 (공간을 찾는 중이거나 알릴 말이 있으면 늘 보임)
+    /// 내려다볼 때만 보이는 안내판 (공간을 찾는 중이거나, 알릴 말이 있거나, 테마를 고르는 중이면 늘 보임)
     private func placeHud(_ dt: Float) {
         guard let hud else { return }
         var f = SIMD3<Float>(fwd.x, 0, fwd.z)
@@ -518,13 +502,14 @@ final class ExploreSession {
             var dy = yaw - hudYaw
             while dy > .pi { dy -= 2 * .pi }
             while dy < -.pi { dy += 2 * .pi }
-            if !hudPlaced { hudYaw = yaw; hudPlaced = true } else if abs(dy) > 0.45 { hudYaw += dy * min(1, dt * 2.5) }
+            let follow: Float = themeOpen ? 0.9 : 0.45                 // 테마를 고르는 동안은 덜 따라옴 (손을 뻗을 수 있게)
+            if !hudPlaced { hudYaw = yaw; hudPlaced = true } else if abs(dy) > follow { hudYaw += dy * min(1, dt * 2.5) }
         }
         let q = simd_quatf(angle: hudYaw, axis: [0, 1, 0])
-        let target = head + q.act(SIMD3<Float>(0, -0.55, -0.5))
+        let target = head + q.act(themeOpen ? SIMD3<Float>(0, -0.4, -0.6) : SIMD3<Float>(0, -0.55, -0.5))
         hud.position = hud.position + (target - hud.position) * min(1, dt * 5)
-        hud.orientation = q * simd_quatf(angle: -0.5, axis: [1, 0, 0])
-        let want: Float = (message != nil || fwd.y < -0.45) ? 1 : 0
+        hud.orientation = q * simd_quatf(angle: themeOpen ? -0.3 : -0.5, axis: [1, 0, 0])
+        let want: Float = (message != nil || themeOpen || fwd.y < -0.45) ? 1 : 0
         hudShow += (want - hudShow) * min(1, dt * 5)
         hud.components.set(OpacityComponent(opacity: hudShow))
         hud.isEnabled = hudShow > 0.02

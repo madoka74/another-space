@@ -10,7 +10,7 @@ targets:
     platform: visionOS
     sources:
       - path: AnotherSpace
-        excludes: ["Resources/**"]
+        excludes: ["Resources/**", "Sounds/**"]
       # 바닥·벽 무늬, 하늘 그림 (폴더 그대로 앱에 담음: 앱 안 tex/, sky/)
       # 앱 맨 위에 'Resources'라는 폴더를 두면 서명이 실패함(맥 앱 구조로 오해) → 두 폴더를 따로 담음
       - path: AnotherSpace/Resources/tex
@@ -19,6 +19,11 @@ targets:
       - path: AnotherSpace/Resources/sky
         type: folder
         buildPhase: resources
+      # 엠비언트 소리 (빌드할 때 엠비언트의 목록과 R2 소리 파일을 받아 담음 → 앱 안 Sounds/)
+      - path: AnotherSpace/Sounds
+        type: folder
+        buildPhase: resources
+        optional: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blankishworks.another-space

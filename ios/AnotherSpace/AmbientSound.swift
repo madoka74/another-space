@@ -33,17 +33,23 @@ actor AmbientLibrary {
     }
 
     /// 목록 받기 (실패하면 지난번에 받아 둔 목록)
+    /// 앱에 담은 소리 폴더 (빌드할 때 엠비언트 저장소의 목록·소리를 그대로 담음)
+    static var bundled: URL { Bundle.main.bundleURL.appendingPathComponent("Sounds", isDirectory: true) }
+
+    /// 목록 읽기: 앱에 담은 목록 → (없으면) 서버 → 지난번에 받아 둔 목록
     func load() async -> Bool {
         if loaded { return true }
         let cached = dir.appendingPathComponent("manifest.json")
-        var data: Data?
-        var req = URLRequest(url: Self.base.appendingPathComponent("manifest.json"))
-        req.timeoutInterval = 8
-        if let res = try? await URLSession.shared.data(for: req), (res.1 as? HTTPURLResponse)?.statusCode == 200 {
-            data = res.0
-            try? res.0.write(to: cached, options: .atomic)
-        } else {
-            data = try? Data(contentsOf: cached)
+        var data: Data? = try? Data(contentsOf: Self.bundled.appendingPathComponent("manifest.json"))
+        if data == nil {
+            var req = URLRequest(url: Self.base.appendingPathComponent("manifest.json"))
+            req.timeoutInterval = 8
+            if let res = try? await URLSession.shared.data(for: req), (res.1 as? HTTPURLResponse)?.statusCode == 200 {
+                data = res.0
+                try? res.0.write(to: cached, options: .atomic)
+            } else {
+                data = try? Data(contentsOf: cached)
+            }
         }
         guard let data, let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
         audioBase = (j["audioBase"] as? String) ?? "/audio/"
@@ -144,7 +150,10 @@ actor AmbientLibrary {
     /// 한 번 나는 소리 파일
     func oneShot(_ e: AmbientEntry) async -> URL? { await download(e.file) }
 
+    /// 소리 파일: 앱에 담은 것 → 받아 둔 것 → (둘 다 없을 때만) 서버
     private func download(_ rel: String) async -> URL? {
+        let inApp = Self.bundled.appendingPathComponent(rel)
+        if FileManager.default.fileExists(atPath: inApp.path) { return inApp }
         let out = dir.appendingPathComponent(rel.replacingOccurrences(of: "/", with: "_"))
         if FileManager.default.fileExists(atPath: out.path) { return out }
         if let t = inflight[rel] { return await t.value }
@@ -239,8 +248,8 @@ final class AmbientPlayer {
     }
 
     /// 방이 바뀜: 이전 방 소리는 천천히 줄이고 새 방 소리를 키움
-    func enter(_ r: RoomRec?) {
-        guard current != r?.id else { return }
+    func enter(_ r: RoomRec?, force: Bool = false) {
+        guard force || current != r?.id else { return }
         if let old = current { fadeOut(old) }
         current = r?.id
         guard let r else { return }
@@ -248,7 +257,7 @@ final class AmbientPlayer {
         let myGen = gen
         Task {
             guard await AmbientLibrary.shared.load() else {
-                status = "소리 목록을 받지 못했어요 (인터넷 연결을 확인해 주세요)"
+                status = "소리 목록을 찾지 못했어요"
                 return
             }
             status = nil
