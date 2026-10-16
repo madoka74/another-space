@@ -1,6 +1,7 @@
 # 비전프로 앱 빌드 → TestFlight 업로드
 # ios/ 파일이나 version.json 을 GitHub에 올리면 자동으로 돌고, Actions 탭에서 'Run workflow'로 직접 돌릴 수도 있음.
 # 필요한 저장소 Secrets: APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8, SIGN_P12, SIGN_P12_PASSWORD (다른 앱과 같은 값)
+#   + 소리 내장용: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (엠비언트 저장소와 같은 값), AMBIENT_TOKEN (엠비언트 저장소 읽기 전용 토큰)
 name: visionOS TestFlight
 on:
   workflow_dispatch:
@@ -19,6 +20,37 @@ jobs:
       - name: 비전프로(visionOS) 빌드 도구 확인
         run: |
           if xcodebuild -showsdks | grep -q xros; then echo "visionOS SDK 있음"; else xcodebuild -downloadPlatform visionOS; fi
+      - name: 엠비언트 소리 목록 가져오기
+        env:
+          AMBIENT_TOKEN: ${{ secrets.AMBIENT_TOKEN }}
+        run: |
+          mkdir -p ios/AnotherSpace/Sounds
+          if [ -n "$AMBIENT_TOKEN" ]; then
+            curl -fsSL -H "Authorization: Bearer $AMBIENT_TOKEN" -H "Accept: application/vnd.github.raw" \
+              https://api.github.com/repos/madoka74/ambient/contents/web/manifest.json -o ios/AnotherSpace/Sounds/manifest.json
+          elif [ -f sounds/manifest.json ]; then
+            cp sounds/manifest.json ios/AnotherSpace/Sounds/manifest.json
+          else
+            echo "::error::AMBIENT_TOKEN 비밀값(또는 저장소의 sounds/manifest.json)이 없어 소리 목록을 가져올 수 없어요"; exit 1
+          fi
+          python3 -c "import json;m=json.load(open('ios/AnotherSpace/Sounds/manifest.json'));print('목록:', {k: len(m.get(k, {})) for k in ('beds','weather','events')})"
+      - name: 소리 파일 담기 (엠비언트 R2에서)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npm install -g wrangler@4 > /dev/null 2>&1
+          python3 -c "
+          import json
+          m = json.load(open('ios/AnotherSpace/Sounds/manifest.json'))
+          fs = sorted({e['file'] for sec in ('beds', 'weather', 'events') for l in m.get(sec, {}).values() for e in l})
+          open('sound-files.txt', 'w').write('\n'.join(fs) + '\n')
+          "
+          cat sound-files.txt | xargs -P 8 -I{} sh -c 'mkdir -p "ios/AnotherSpace/Sounds/$(dirname "{}")" && wrangler r2 object get "ambient-audio/{}" --file "ios/AnotherSpace/Sounds/{}" --remote > /dev/null 2>&1 || echo "받지 못함: {}"'
+          n=$(find ios/AnotherSpace/Sounds -name '*.mp3' -size +1k | wc -l | tr -d ' ')
+          echo "소리 $n개 담음 (목록 $(wc -l < sound-files.txt | tr -d ' ')개)"
+          du -sh ios/AnotherSpace/Sounds
+          if [ "$n" -eq 0 ]; then echo "::error::소리를 하나도 받지 못했어요 (CLOUDFLARE_API_TOKEN·CLOUDFLARE_ACCOUNT_ID 확인)"; exit 1; fi
       - name: XcodeGen으로 프로젝트 만들기
         run: |
           brew install xcodegen
