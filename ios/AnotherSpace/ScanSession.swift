@@ -270,7 +270,8 @@ final class ScanSession {
         guard !saving, let w = world else { return }
         saving = true
         message = nil
-        let input = RoomSegment.Input(meshes: [store.snapshot()], path: path, headY: head.y)
+        let snap = store.snapshot()
+        let input = RoomSegment.Input(meshes: [snap], path: path, headY: head.y)
         let replaceId = replace
         let id = replaceId ?? UUID().uuidString
         let old = replaceId.flatMap { SpaceStore.load($0) }
@@ -308,6 +309,8 @@ final class ScanSession {
                 message = "저장하지 못했어요. 다시 눌러 주세요."
                 return
             }
+            // 모은 그물도 저장 (탐험 때 다른 방 가구를 미리 그려 둠)
+            await Task.detached(priority: .utility) { SpaceStore.saveMesh(id, snap) }.value
             // 다시 스캔: 예전 앵커는 지움
             for r in old?.rec.anchors ?? [] { if let u = UUID(uuidString: r.a) { try? await w.removeAnchor(forID: u) } }
             ended = true

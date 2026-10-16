@@ -100,6 +100,20 @@ struct Fit: Equatable, Sendable {
                   translation: SIMD3<Float>(t.x, y, t.y))
     }
 
+    /// o 쪽으로 k(0~1)만큼 (회전은 짧은 쪽으로)
+    func lerp(_ o: Fit, _ k: Float) -> Fit {
+        let a0 = atan2(s, c), a1 = atan2(o.s, o.c)
+        var d = a1 - a0
+        while d > .pi { d -= 2 * .pi }
+        while d < -.pi { d += 2 * .pi }
+        let a = a0 + d * k
+        var f = Fit()
+        f.c = cos(a); f.s = sin(a)
+        f.t = t + (o.t - t) * k
+        f.y = y + (o.y - y) * k
+        return f.differs(o, meters: 0.002, radians: 0.001) ? f : o
+    }
+
     func differs(_ o: Fit, meters: Float, radians: Float) -> Bool {
         let da = abs(atan2(s * o.c - c * o.s, c * o.c + s * o.s))
         return simd_distance(t, o.t) > meters || abs(y - o.y) > meters || da > radians

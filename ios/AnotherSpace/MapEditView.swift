@@ -4,7 +4,9 @@ import CoreGraphics
 /// 방 구성 편집: 위에서 본 스캔 지도 위에 사각형을 놓아 집을 구성함.
 /// - 사각형 그리기: 누른 곳에 점이 바로 보이고, 끌거나 두 번째 점을 누르면 사각형. 다른 사각형·스캔 벽 가까이에서는 착 붙음
 /// - 고르기: 누르면 고름(여러 개 고르기 켜면 계속 더함), 모서리 점 4개를 끌어 크기 조절, 몸통을 끌어 옮기기
-/// - 결합: 고른 사각형들을 한 방으로 / 분리: 고른 사각형을 하나씩 다른 방으로 / 문·통로: 방 사이를 잇는 곳(벽이 안 생김)
+/// - 결합: 고른 사각형들을 한 방으로 / 분리: 고른 사각형을 하나씩 다른 방으로
+/// - 다른 방끼리 맞닿은 곳에는 벽이 섬. 문 그리기로 그 경계에 걸쳐 그린 문·통로 사각형 자리만 뚫림 (틈이 있으면 틈도 메움)
+/// - 바라보는 사각형·모서리 점은 빛나서 무엇을 잡을지 미리 보임
 /// 바꿀 때마다 바로 저장됨
 struct MapEditView: View {
     let spaceId: String
@@ -30,8 +32,9 @@ struct MapEditView: View {
     @State private var nameText = ""
     @State private var spaceName = ""
     @State private var toast: String?
+    @State private var unifyRoom: RoomRec?
 
-    enum Tool: Hashable { case select, draw }
+    enum Tool: Hashable { case select, draw, door }
     enum Guide: Hashable { case u(Float), v(Float) }
     enum DragKind {
         case corner(Int, Int, ShapeRec)        // 사각형 id, 모서리 번호, 끌기 전 모양
@@ -56,6 +59,7 @@ struct MapEditView: View {
         }
         .navigationTitle(spaceName.isEmpty ? "방 구성" : spaceName)
         .onAppear(perform: load)
+        .sheet(item: $unifyRoom) { r in unifySheet(r) }
         .alert("방 이름", isPresented: $renaming) {
             TextField("이름", text: $nameText)
             Button("이대로") { rename(nameText) }
@@ -89,7 +93,11 @@ struct MapEditView: View {
     private func mapArea(_ d: SpaceData, _ size: CGSize) -> some View {
         let V = view2(d, size)
         return ZStack(alignment: .bottomTrailing) {
-            Canvas { ctx, _ in draw(ctx, d, V) }
+            ZStack(alignment: .topLeading) {
+                Canvas { ctx, _ in draw(ctx, d, V) }
+                hoverLayer(d, V)
+            }
+                .frame(width: size.width, height: size.height)
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0, coordinateSpace: .local)
@@ -112,6 +120,38 @@ struct MapEditView: View {
 
     private func setZoom(_ z: CGFloat) { zoom = min(8, max(0.5, z)); zoomBase = zoom }
 
+    /// 바라보는 곳 알려 주기: 사각형·모서리 점마다 보이지 않는 판을 얹어, 시선이 닿으면 시스템이 빛나게 해 줌
+    /// (손동작은 이 판들을 감싼 지도 전체가 받음. 겹친 곳은 위에 있는 것 = 잡히는 것이 빛남)
+    private func hoverLayer(_ d: SpaceData, _ V: View2) -> some View {
+        let picked = Set(sel)
+        let rooms = d.shapes.filter { !$0.isDoor && !picked.contains($0.id) }
+        let doors = d.shapes.filter { $0.isDoor && !picked.contains($0.id) }
+        let chosen = d.shapes.filter { picked.contains($0.id) }
+        let order = tool == .select ? rooms + doors + chosen : []
+        // 고르기: 고른 사각형의 모서리 / 그리기: 모든 사각형의 모서리 (거기서 시작하면 착 붙음)
+        let pts: [CGPoint] = (tool == .select ? chosen : d.shapes).flatMap { s in (0..<4).map { V.screen(s.corner($0)) } }
+        let dot: CGFloat = tool == .select ? 52 : 34
+        return ZStack(alignment: .topLeading) {
+            ForEach(order, id: \.id) { s in
+                let r = rect(s, V)
+                Rectangle()
+                    .fill(Color.white.opacity(0.001))
+                    .frame(width: max(2, r.width), height: max(2, r.height))
+                    .contentShape(.hoverEffect, Rectangle())
+                    .hoverEffect(.highlight)
+                    .position(x: r.midX, y: r.midY)
+            }
+            ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
+                Circle()
+                    .fill(Color.white.opacity(0.001))
+                    .frame(width: dot, height: dot)
+                    .contentShape(.hoverEffect, Circle())
+                    .hoverEffect(.highlight)
+                    .position(p)
+            }
+        }
+    }
+
     private func draw(_ ctx: GraphicsContext, _ d: SpaceData, _ V: View2) {
         // 스캔 지도 (바닥 어두운 회색, 벽 밝게, 창 하늘색)
         if let bg {
@@ -130,9 +170,9 @@ struct MapEditView: View {
             while v <= p1.y { let y = V.screen(SIMD2<Float>(0, v)).y; grid.move(to: CGPoint(x: 0, y: y)); grid.addLine(to: CGPoint(x: V.size.width, y: y)); v += 1 }
             ctx.stroke(grid, with: .color(.white.opacity(0.06)), lineWidth: 1)
         }
-        // 사각형
+        // 사각형 (방 먼저, 문·통로는 그 위에)
         let picked = Set(sel)
-        for s in d.shapes {
+        for s in d.shapes.filter({ !$0.isDoor }) + d.shapes.filter(\.isDoor) {
             let r = rect(s, V)
             let path = Path(r)
             if s.isDoor {
@@ -184,7 +224,7 @@ struct MapEditView: View {
                      at: CGPoint(x: r.midX, y: r.maxY + 14))
         }
         // 첫 점 / 지금 가리키는 점 (그리기)
-        for (p, big) in [(pin, true), (tool == .draw ? cursor : nil, false)] {
+        for (p, big) in [(pin, true), (tool != .select ? cursor : nil, false)] {
             guard let p else { continue }
             let q = V.screen(p)
             let r: CGFloat = big ? 12 : 7
@@ -244,7 +284,7 @@ struct MapEditView: View {
             let start = V.plane(v.startLocation)
             if let hit = cornerHit(v.startLocation, d, V), let s = d.shapes.first(where: { $0.id == hit.0 }) {
                 drag = .corner(hit.0, hit.1, s)
-            } else if tool == .draw {
+            } else if tool != .select {
                 let sp = snap(start, V, excluding: nil).0
                 drag = .create(pin ?? sp, pin != nil)
             } else if let s = shapeHit(start, d) {
@@ -320,8 +360,10 @@ struct MapEditView: View {
         return nil
     }
 
+    /// 고른 것 → 문·통로 → 방 순서 (빛나는 것과 같은 순서)
     private func shapeHit(_ p: SIMD2<Float>, _ d: SpaceData) -> ShapeRec? {
         if let s = d.shapes.last(where: { sel.contains($0.id) && $0.contains(p.x, p.y) }) { return s }
+        if let s = d.shapes.last(where: { $0.isDoor && $0.contains(p.x, p.y) }) { return s }
         return d.shapes.last { $0.contains(p.x, p.y) }
     }
 
@@ -334,11 +376,12 @@ struct MapEditView: View {
     }
 
     private func create(_ a: SIMD2<Float>, _ b: SIMD2<Float>) {
+        let door = tool == .door
         change { d in
-            if let id = d.addShape(a, b) { sel = [id] }
+            if let id = d.addShape(a, b, door: door) { sel = [id] }
         }
         tool = .select
-        flash("새 방을 만들었어요. 이름과 세계를 정해 주세요.")
+        flash(door ? "문·통로를 만들었어요. 이 자리는 벽이 뚫려 양쪽 방이 이어져요." : "새 방을 만들었어요. 이름과 세계를 정해 주세요.")
     }
 
     private func commitDrag() {
@@ -358,10 +401,11 @@ struct MapEditView: View {
                     .onSubmit { saveName() }
                 Picker("도구", selection: $tool) {
                     Label("고르기", systemImage: "hand.point.up.left").tag(Tool.select)
-                    Label("사각형 그리기", systemImage: "rectangle.dashed").tag(Tool.draw)
+                    Label("방 그리기", systemImage: "rectangle.dashed").tag(Tool.draw)
+                    Label("문 그리기", systemImage: "door.left.hand.open").tag(Tool.door)
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: tool) { _, t in pin = nil; cursor = nil; if t == .draw { sel = [] } }
+                .onChange(of: tool) { _, t in pin = nil; cursor = nil; if t != .select { sel = [] } }
                 Toggle("여러 개 고르기", isOn: $multi)
                 Text(hint(d)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
@@ -378,7 +422,7 @@ struct MapEditView: View {
                             if picked.allSatisfy(\.isDoor) {
                                 Button { change { $0.setDoor(sel, false) } } label: { Label("방으로", systemImage: "square") }
                             } else {
-                                Button { change { $0.setDoor(sel, true) }; flash("문·통로는 벽이 생기지 않고 양쪽 방을 이어 줘요") } label: {
+                                Button { change { $0.setDoor(sel, true) }; flash("문·통로가 덮은 자리는 벽이 뚫려 양쪽 방을 이어 줘요") } label: {
                                     Label("문·통로로", systemImage: "door.left.hand.open")
                                 }
                             }
@@ -410,7 +454,16 @@ struct MapEditView: View {
                     .buttonStyle(.plain)
                 }
                 Divider()
-                Button { change { $0.shuffleAll() }; flash("모든 방의 세계를 새로 섞었어요") } label: { Label("모든 방 세계 섞기", systemImage: "shuffle") }
+                Text("세계 정하는 방식").font(.headline)
+                Text(d.rec.isUnified ? "지금: 모든 방이 같은 세계 (탐험 중에 바꿔도 모든 방이 같이 바뀜)"
+                                     : "지금: 방마다 다른 세계 (탐험 중에 바꾸면 그 방만 바뀜)")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Button { change { $0.shuffleAll() }; flash("방마다 다른 세계로 새로 섞었어요") } label: { Label("방마다 무작위", systemImage: "shuffle") }
+                    Button { unifyRoom = d.rec.rooms.first } label: { Label("모든 방 같게", systemImage: "square.on.square") }
+                        .disabled(d.rec.rooms.isEmpty)
+                }
+                .buttonStyle(.bordered)
                 Button { change { $0.proposeShapes(keepRooms: true) }; sel = []; flash("스캔을 바탕으로 다시 구성했어요") } label: {
                     Label("스캔에서 다시 구성", systemImage: "arrow.counterclockwise")
                 }
@@ -440,8 +493,11 @@ struct MapEditView: View {
                 }
             }
             Text(r.title).font(.headline)
+            if d.rec.isUnified {
+                Text("모든 방 같은 세계예요 — 여기서 바꾸면 모든 방이 같이 바뀌어요.").font(.caption).foregroundStyle(.secondary)
+            }
             ThemePicker(room: r) { p, w, t in
-                change { d in d.updateRoom(r.id) { rr in rr.place = p; rr.weather = w; rr.time = t } }
+                change { d in d.setTheme(r.id, place: p, weather: w, time: t) }
             }
             Stepper(value: Binding(get: { Double(r.ceil) }, set: { v in change { d in d.updateRoom(r.id) { rr in rr.ceil = Float(v) } } }),
                     in: 2.0...3.6, step: 0.05) {
@@ -452,12 +508,39 @@ struct MapEditView: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
     }
 
+    /// '모든 방 같게': 세계 하나를 골라 모든 방에 적용
+    private func unifySheet(_ r: RoomRec) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("모든 방을 같은 세계로").font(.title2.weight(.bold))
+                Spacer()
+                Button("완료") { unifyRoom = nil }.buttonStyle(.borderedProminent)
+            }
+            Text(r.title).font(.title3)
+            ThemePicker(room: r) { p, w, t in
+                change { $0.setAll(place: p, weather: w, time: t) }
+                var nr = r
+                nr.place = p; nr.weather = w; nr.time = t
+                unifyRoom = nr
+            }
+        }
+        .padding(30)
+        .frame(width: 720)
+        .onAppear {
+            // 시트를 열자마자 지금 세계로 모든 방을 맞춤
+            change { $0.setAll(place: r.place, weather: r.weather, time: r.time) }
+        }
+    }
+
     private func hint(_ d: SpaceData) -> String {
+        if tool == .door {
+            return "실제 문이 있는 자리에, 두 방의 경계를 가로지르도록 사각형을 그리세요(방끼리 떨어져 있으면 틈을 덮게). 그 자리만 벽이 뚫려 이어져요. 바라보는 모서리 점이 빛나요."
+        }
         if tool == .draw {
             return pin == nil ? "새 사각형의 한 모서리를 누르세요(점이 보여요). 그대로 끌거나, 맞은편 모서리를 한 번 더 누르면 만들어져요. 다른 사각형 변이나 스캔 벽(흰 선) 가까이에서는 착 붙어요."
                 : "맞은편 모서리를 누르세요. 다른 곳을 고르려면 도구를 '고르기'로 바꾸세요."
         }
-        if sel.isEmpty { return "사각형을 누르면 골라져요. 모서리의 흰 점을 끌면 크기가, 사각형을 끌면 위치가 바뀌어요. 빈 곳을 끌면 지도가 움직이고, 두 손가락으로 확대할 수 있어요." }
+        if sel.isEmpty { return "바라보는 사각형이 빛나요. 누르면 골라지고, 모서리의 흰 점을 끌면 크기가, 사각형을 끌면 위치가 바뀌어요. 다른 방끼리 붙이면 사이에 벽이 서고, 문 그리기로 문 자리만 뚫을 수 있어요." }
         return multi ? "계속 눌러 더 고르세요. 여러 방을 고르고 '결합'하면 한 방이, '분리'하면 각각 다른 방이 돼요."
             : "'여러 개 고르기'를 켜면 사각형 여러 개를 한 번에 결합·분리할 수 있어요."
     }

@@ -71,6 +71,9 @@ struct SpaceRec: Codable, Identifiable, Equatable {
     var anchors: [AnchorRec]
     var rooms: [RoomRec]
     var shapes: [ShapeRec]?          // v0.2부터: 집을 이루는 사각형들 (없으면 예전 공간 → 스캔에서 다시 제안)
+    var unified: Bool?               // v0.3.1부터: true면 모든 방이 같은 세계 (바꾸면 모든 방이 같이 바뀜)
+
+    var isUnified: Bool { unified ?? false }
 
     var ex: SIMD2<Float> { SIMD2<Float>(cos(angle), sin(angle)) }
     var ez: SIMD2<Float> { SIMD2<Float>(-sin(angle), cos(angle)) }
@@ -220,8 +223,24 @@ struct SpaceData: Equatable {
         f(&rec.rooms[i])
     }
 
-    /// 모든 방에 세계를 새로 섞어 배정 (장소는 되도록 겹치지 않게)
+    /// 세계 바꾸기: '모든 방 같게'면 모든 방을, 아니면 그 방만
+    mutating func setTheme(_ id: Int, place: String, weather: String, time: String) {
+        if rec.isUnified {
+            setAll(place: place, weather: weather, time: time)
+        } else {
+            updateRoom(id) { $0.place = place; $0.weather = weather; $0.time = time }
+        }
+    }
+
+    /// 모든 방을 같은 세계로 ('모든 방 같게'로 바뀜)
+    mutating func setAll(place: String, weather: String, time: String) {
+        rec.unified = true
+        for i in rec.rooms.indices { rec.rooms[i].place = place; rec.rooms[i].weather = weather; rec.rooms[i].time = time }
+    }
+
+    /// 모든 방에 세계를 새로 섞어 배정 (장소는 되도록 겹치지 않게) — '방마다 다르게'로 바뀜
     mutating func shuffleAll() {
+        rec.unified = false
         var g = SystemRandomNumberGenerator()
         var used = Set<String>()
         for i in rec.rooms.indices {
@@ -355,28 +374,35 @@ enum Grid {
                         guard uu >= 0, vv >= 0, uu < W, vv < H else { break }
                         let o = own[vv * W + uu]
                         if o == s.room { break }
-                        if o != 0 { hit = (o, k); break }
+                        if o != 0 {
+                            // 바로 맞닿은 방: 스캔에서 그 경계에 벽이 없을 때만 (열린 곳)
+                            if k == 1 && (d.kind[v * W + u] == RoomSegment.WALL || d.kind[vv * W + uu] == RoomSegment.WALL) { break }
+                            hit = (o, k); break
+                        }
                         if d.kind[vv * W + uu] == RoomSegment.WALL { break }
                     }
                     hits.append(hit)
                 }
                 var i = 0
                 while i < hits.count {
-                    guard let hi = hits[i], hi.1 > 1 else { i += 1; continue }
-                    let o = hi.0
+                    guard let hi = hits[i] else { i += 1; continue }
+                    let o = hi.0, touch = hi.1 == 1
                     var j = i, gap = 0
-                    while j < hits.count, let hj = hits[j], hj.0 == o, hj.1 > 1 { gap = max(gap, hj.1 - 1); j += 1 }
+                    while j < hits.count, let hj = hits[j], hj.0 == o, (hj.1 == 1) == touch { gap = max(gap, hj.1 - 1); j += 1 }
                     if j - i >= 5 && s.room < o {
                         let c0 = cells[i], c1 = cells[j - 1]
+                        // 틈이 있으면 틈을 채우고, 바로 맞닿았으면 경계를 가로질러 20cm (벽이 안 생기게)
                         let r: ShapeRec
                         if du == 0 {
-                            let vv0 = dv < 0 ? a.v0 - gap : a.v1
+                            let vv0 = touch ? (dv < 0 ? a.v0 - 1 : a.v1 - 1) : (dv < 0 ? a.v0 - gap : a.v1)
+                            let len = touch ? 2 : gap
                             r = ShapeRec(id: nid, room: 0, u0: Float(min(c0.0, c1.0)) * cell, v0: Float(vv0) * cell,
-                                         u1: Float(max(c0.0, c1.0) + 1) * cell, v1: Float(vv0 + gap) * cell)
+                                         u1: Float(max(c0.0, c1.0) + 1) * cell, v1: Float(vv0 + len) * cell)
                         } else {
-                            let uu0 = du < 0 ? a.u0 - gap : a.u1
+                            let uu0 = touch ? (du < 0 ? a.u0 - 1 : a.u1 - 1) : (du < 0 ? a.u0 - gap : a.u1)
+                            let len = touch ? 2 : gap
                             r = ShapeRec(id: nid, room: 0, u0: Float(uu0) * cell, v0: Float(min(c0.1, c1.1)) * cell,
-                                         u1: Float(uu0 + gap) * cell, v1: Float(max(c0.1, c1.1) + 1) * cell)
+                                         u1: Float(uu0 + len) * cell, v1: Float(max(c0.1, c1.1) + 1) * cell)
                         }
                         out.append(r)
                         nid += 1
@@ -440,11 +466,54 @@ enum SpaceStore {
 
     static func delete(_ id: String) { try? FileManager.default.removeItem(at: folder(id)) }
 
-    /// 방 하나의 세계만 바꿔 저장 (메인 메뉴·탐험 중 테마 바꾸기)
+    /// 세계 바꿔 저장 (메인 메뉴·탐험 중 테마 바꾸기). '모든 방 같게'면 모든 방이 같이 바뀜
     static func setTheme(_ id: String, room: Int, place: String, weather: String, time: String) {
         guard var s = load(id) else { return }
-        s.updateRoom(room) { $0.place = place; $0.weather = weather; $0.time = time }
+        s.setTheme(room, place: place, weather: weather, time: time)
         try? save(s)
+    }
+
+    // MARK: 스캔 그물 (탐험 때 다른 방 가구를 미리 그려 두는 데 씀)
+    /// 삼각형마다 꼭짓점 9개(Float) + 분류 1바이트. 저장 좌표
+    static func saveMesh(_ id: String, _ m: MeshCopy) {
+        let f = folder(id)
+        try? FileManager.default.createDirectory(at: f, withIntermediateDirectories: true)
+        let n = min(m.f.count / 3, m.c.count)
+        var pos = [Float]()
+        pos.reserveCapacity(n * 9)
+        for t in 0..<n {
+            for k in 0..<3 {
+                let i = Int(m.f[t * 3 + k])
+                guard i < m.v.count else { continue }
+                let p = simd_make_float3(m.m * SIMD4<Float>(m.v[i], 1))
+                pos += [p.x, p.y, p.z]
+            }
+        }
+        guard pos.count == n * 9 else { return }
+        var head = [UInt32(n)]
+        var data = Data(bytes: &head, count: 4)
+        pos.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
+        data.append(contentsOf: m.c.prefix(n))
+        try? data.write(to: f.appendingPathComponent("mesh.bin"), options: .atomic)
+    }
+
+    /// (삼각형 꼭짓점들 [a,b,c,…], 분류) — 없으면 nil (예전에 스캔한 공간)
+    static func loadMesh(_ id: String) -> ([SIMD3<Float>], [UInt8])? {
+        guard let data = try? Data(contentsOf: folder(id).appendingPathComponent("mesh.bin")), data.count >= 4 else { return nil }
+        let n = Int(data.prefix(4).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) })
+        guard n > 0, data.count >= 4 + n * 36 + n else { return nil }
+        var pts = [SIMD3<Float>]()
+        pts.reserveCapacity(n * 3)
+        data.withUnsafeBytes { raw in
+            let base = raw.baseAddress!.advanced(by: 4)
+            for i in 0..<(n * 3) {
+                let p = base.advanced(by: i * 12)
+                pts.append(SIMD3<Float>(p.loadUnaligned(as: Float.self), p.loadUnaligned(fromByteOffset: 4, as: Float.self),
+                                        p.loadUnaligned(fromByteOffset: 8, as: Float.self)))
+            }
+        }
+        let cls = [UInt8](data[(4 + n * 36)..<(4 + n * 36 + n)])
+        return (pts, cls)
     }
 
     /// 모든 공간의 앵커 id (어느 공간에도 없는 앵커는 지운 공간의 것이라 정리함)

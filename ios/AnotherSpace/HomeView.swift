@@ -138,6 +138,7 @@ private struct ThemeSheet: View {
     let target: ThemeTarget
     let done: () -> Void
     @State private var room: RoomRec?
+    @State private var unified = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -149,6 +150,9 @@ private struct ThemeSheet: View {
                     Button("완료", action: done).buttonStyle(.borderedProminent)
                 }
                 Text(r.title).font(.title3)
+                if unified {
+                    Text("모든 방 같은 세계예요 — 바꾸면 모든 방이 같이 바뀌어요.").font(.callout).foregroundStyle(.secondary)
+                }
                 ThemePicker(room: r) { p, w, t in
                     SpaceStore.setTheme(target.space, room: r.id, place: p, weather: w, time: t)
                     room?.place = p; room?.weather = w; room?.time = t
@@ -158,7 +162,11 @@ private struct ThemeSheet: View {
         }
         .padding(30)
         .frame(width: 720)
-        .onAppear { room = SpaceStore.list().first { $0.id == target.space }?.room(target.room) }
+        .onAppear {
+            let sp = SpaceStore.list().first { $0.id == target.space }
+            room = sp?.room(target.room)
+            unified = sp?.isUnified ?? false
+        }
     }
 }
 

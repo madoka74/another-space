@@ -50,7 +50,8 @@ private struct ExploreHud: View {
                     Button {
                         s.themeOpen.toggle()
                     } label: {
-                        Label(s.themeOpen ? "테마 닫기" : "테마 바꾸기", systemImage: s.themeOpen ? "chevron.down" : "paintpalette")
+                        Label(s.themeOpen ? "테마 닫기" : (s.unified ? "모든 방 테마 바꾸기" : "테마 바꾸기"),
+                              systemImage: s.themeOpen ? "chevron.down" : "paintpalette")
                     }
                 }
                 Button {
@@ -89,31 +90,93 @@ struct SkinInfo: Sendable {
 struct SkinGroup: Sendable {
     let room: Int
     let shade: Int       // 0 해 쪽, 1 옆, 2 그늘
+    var cell: Int64 = 0  // 미리 그려 두는 스캔 그물: 1m 칸 (실제 그물이 그 칸을 덮으면 숨김)
     var pos: [SIMD3<Float>] = []
     var uv: [SIMD2<Float>] = []
     var idx: [UInt32] = []
 }
 
+struct SkinResult: Sendable {
+    var groups: [SkinGroup] = []
+    var cells: Set<Int64> = []     // 이 그물이 덮는 1m 칸 (저장 좌표) — 그 칸의 미리 그린 가구는 숨김
+}
+
 enum Skin {
+    static func cellKey(_ x: Float, _ z: Float) -> Int64 {
+        (Int64((x).rounded(.down)) + 100_000) << 20 | (Int64((z).rounded(.down)) + 100_000)
+    }
+
+    /// 허공에 뜬 조각 걸러내기: 꼭짓점을 함께 쓰는 삼각형끼리 묶어서, 아주 작은 묶음이나
+    /// 바닥에서 떠 있는 작고 얇은 묶음(사람·반사·스캔 찌꺼기)은 버림. 삼각형마다 남길지
+    static func keepMask(_ wv: [SIMD3<Float>], _ f: [UInt32], floorY: Float) -> [Bool] {
+        let nt = f.count / 3
+        var parent = Array(0..<wv.count)
+        func find(_ x: Int) -> Int {
+            var x = x
+            while parent[x] != x { parent[x] = parent[parent[x]]; x = parent[x] }
+            return x
+        }
+        for t in 0..<nt {
+            let a = Int(f[t * 3]), b = Int(f[t * 3 + 1]), c = Int(f[t * 3 + 2])
+            guard a < wv.count, b < wv.count, c < wv.count else { continue }
+            let ra = find(a), rb = find(b), rc = find(c)
+            if ra != rb { parent[rb] = ra }
+            let r2 = find(rc)
+            let r1 = find(a)
+            if r1 != r2 { parent[r2] = r1 }
+        }
+        struct Comp { var n = 0; var area: Float = 0; var lo = SIMD3<Float>(repeating: .infinity); var hi = SIMD3<Float>(repeating: -.infinity) }
+        var comps: [Int: Comp] = [:]
+        var root = [Int](repeating: -1, count: nt)
+        for t in 0..<nt {
+            let a = Int(f[t * 3]), b = Int(f[t * 3 + 1]), c = Int(f[t * 3 + 2])
+            guard a < wv.count, b < wv.count, c < wv.count else { continue }
+            let r = find(a)
+            root[t] = r
+            var cp = comps[r] ?? Comp()
+            cp.n += 1
+            cp.area += simd_length(simd_cross(wv[b] - wv[a], wv[c] - wv[a])) / 2
+            cp.lo = simd_min(cp.lo, simd_min(wv[a], simd_min(wv[b], wv[c])))
+            cp.hi = simd_max(cp.hi, simd_max(wv[a], simd_max(wv[b], wv[c])))
+            comps[r] = cp
+        }
+        var keep = [Bool](repeating: false, count: nt)
+        for t in 0..<nt {
+            guard root[t] >= 0, let cp = comps[root[t]] else { continue }
+            let ext = cp.hi - cp.lo
+            let size = max(ext.x, max(ext.y, ext.z))
+            if cp.n < 10 || cp.area < 0.03 { continue }                                  // 부스러기
+            if cp.lo.y - floorY > 0.3 && cp.area < 0.12 && size < 0.6 { continue }      // 허공에 뜬 작은 조각
+            keep[t] = true
+        }
+        return keep
+    }
+
     /// 실제 그물 → 방 안 가구·물건만 골라 입힐 조각들.
     /// 벽은 사각형에서 반듯하게 세우므로 벽 가까이(15cm)의 면은 버림. 방 밖(거울 속·창밖·구성하지 않은 곳)·천장·바닥 면도 버림.
     /// 벽에서 떨어져 있는 실제 벽면(구성을 넓게 잡았을 때)은 물건처럼 입혀서 보이게 함 (부딪히지 않게)
-    static func build(_ m: MeshCopy, _ I: SkinInfo, _ fit: Fit) -> [SkinGroup] {
+    /// chunked: 미리 그려 두는 스캔 그물 — 1m 칸마다 나눔
+    static func build(_ m: MeshCopy, _ I: SkinInfo, _ fit: Fit, chunked: Bool = false) -> SkinResult {
         let L = I.layout
-        var groups: [Int: SkinGroup] = [:]
+        var out = SkinResult()
+        var groups: [Int64: SkinGroup] = [:]
         let wv = m.v.map { simd_make_float3(m.m * SIMD4<Float>($0, 1)) }
+        let keep = keepMask(wv, m.f, floorY: L.floorY + fit.y)
         var i = 0, fi = 0
         while i + 2 < m.f.count {
             defer { i += 3; fi += 1 }
             let ia = Int(m.f[i]), ib = Int(m.f[i + 1]), ic = Int(m.f[i + 2])
             guard ia < wv.count, ib < wv.count, ic < wv.count else { continue }
             let a = wv[ia], b = wv[ib], c = wv[ic]
+            let ctr = fit.toSaved((a + b + c) / 3)
+            let ck = cellKey(ctr.x, ctr.z)
+            if !chunked { out.cells.insert(ck) }
+            guard fi < keep.count, keep[fi] else { continue }
             let cr = simd_cross(b - a, c - a)
             let len = simd_length(cr)
             guard len > 1e-9 else { continue }
             let n = cr / len
             let cls: UInt8 = fi < m.c.count ? m.c[fi] : 0
-            let ctr = fit.toSaved((a + b + c) / 3)
             let ns = fit.dirToSaved(n)
             let hgt = ctr.y - L.floorY
             let here = L.at(x: ctr.x, z: ctr.z)
@@ -124,8 +187,9 @@ enum Skin {
             if cls == MeshClass.floor || (ns.y > 0.8 && hgt < 0.06) || hgt < -0.05 { continue }
             let l = simd_dot(ns, I.sun[r])
             let shade = l > 0.35 ? 0 : (l > -0.15 ? 1 : 2)
-            let key = r * 4 + shade
-            var g = groups[key] ?? SkinGroup(room: r, shade: shade)
+            let cell: Int64 = chunked ? ck : 0
+            let key = (cell << 12) | Int64(r * 4 + shade)
+            var g = groups[key] ?? SkinGroup(room: r, shade: shade, cell: cell)
             let base = UInt32(g.pos.count)
             g.pos += [a, b, c]
             let tile = I.propTile[r]
@@ -140,7 +204,25 @@ enum Skin {
             g.idx += [base, base + 1, base + 2, base, base + 2, base + 1]      // 양면
             groups[key] = g
         }
-        return Array(groups.values)
+        out.groups = Array(groups.values)
+        return out
+    }
+
+    /// 저장한 스캔 그물 → 꼭짓점을 합친(이어진 면을 알 수 있게) 그물 하나
+    static func weld(_ pts: [SIMD3<Float>], _ cls: [UInt8]) -> MeshCopy {
+        var index: [Int64: UInt32] = [:]
+        index.reserveCapacity(pts.count / 2)
+        var v: [SIMD3<Float>] = []
+        var f: [UInt32] = []
+        f.reserveCapacity(pts.count)
+        for p in pts {
+            let k = (Int64((p.x * 200).rounded()) + 1_000_000) << 42 | (Int64((p.y * 200).rounded()) + 1_000_000) << 21 | (Int64((p.z * 200).rounded()) + 1_000_000)
+            if let i = index[k] { f.append(i) } else {
+                let i = UInt32(v.count)
+                v.append(p); index[k] = i; f.append(i)
+            }
+        }
+        return MeshCopy(id: UUID(), m: matrix_identity_float4x4, v: v, f: f, c: cls)
     }
 }
 
@@ -149,12 +231,19 @@ final class ExploreSession {
     var room: RoomRec?
     var message: String? = "공간을 알아보는 중이에요. 스캔했던 곳을 천천히 둘러봐 주세요."
     var themeOpen = false
+    var unified = false             // 모든 방이 같은 세계 (테마를 바꾸면 모든 방이 같이 바뀜)
 
     let root = Entity()
     @ObservationIgnored var updateSub: EventSubscription?
     @ObservationIgnored private let spaceId: String
     @ObservationIgnored private let spaceRoot = Entity()      // 저장 좌표 → 지금 좌표
     @ObservationIgnored private let skinRoot = Entity()       // 실제 그물 (지금 좌표)
+    @ObservationIgnored private let savedRoot = Entity()      // 스캔 때 저장한 그물로 미리 그린 가구 (저장 좌표)
+    @ObservationIgnored private var savedChunks: [Int64: (ModelEntity, [Int])] = [:]   // 1m 칸 → (엔티티, 재질 키들)
+    @ObservationIgnored private var liveCells: [UUID: Set<Int64>] = [:]
+    @ObservationIgnored private var cellCount: [Int64: Int] = [:]
+    @ObservationIgnored private var savedTask: Task<Void, Never>?
+    @ObservationIgnored private var ready = false             // 모든 방 세계를 다 만들었는지
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -165,8 +254,10 @@ final class ExploreSession {
     @ObservationIgnored private var themeTask: Task<Void, Never>?
     @ObservationIgnored private var saved: [String: AnchorRec] = [:]
     @ObservationIgnored private var allIds: Set<String> = []
-    @ObservationIgnored private var live: [String: simd_float4x4] = [:]
-    @ObservationIgnored private var fit: Fit?
+    @ObservationIgnored private var poses: [String: simd_float4x4] = [:]   // 다시 찾은 앵커의 마지막 위치 (잠깐 놓쳐도 지우지 않음)
+    @ObservationIgnored private var fit: Fit?                 // 지금 쓰는 좌표 맞춤 (목표 쪽으로 부드럽게 따라감)
+    @ObservationIgnored private var fitTarget: Fit?
+    @ObservationIgnored private var skinFit: Fit?             // 가구를 마지막으로 다시 입힐 때의 맞춤
     @ObservationIgnored private var meshes: [UUID: MeshAnchor] = [:]
     @ObservationIgnored private var meshEnts: [UUID: ModelEntity] = [:]
     @ObservationIgnored private var builtAt: [UUID: Double] = [:]
@@ -204,6 +295,7 @@ final class ExploreSession {
             return
         }
         data = d
+        unified = d.rec.isUnified
         let L = Layout(d)
         layout = L
         info = SkinInfo(d, L)
@@ -211,6 +303,7 @@ final class ExploreSession {
         for a in d.rec.anchors { saved[a.a] = a }
         allIds = SpaceStore.allAnchorIds()
         root.addChild(spaceRoot)
+        spaceRoot.addChild(savedRoot)
         root.addChild(skinRoot)
         root.addChild(player.root)
         spaceRoot.components.set(OpacityComponent(opacity: 0))
@@ -239,7 +332,11 @@ final class ExploreSession {
         while !ended {
             guard let d = data, let L = layout else { return }
             let todo = d.rec.rooms.filter { worlds[$0.id] == nil }
-            guard !todo.isEmpty else { return }
+            guard !todo.isEmpty else {
+                ready = true
+                buildSaved()
+                return
+            }
             let near = neighbors[current] ?? []
             let next = todo.first { $0.id == current } ?? todo.first { near.contains($0.id) } ?? todo[0]
             await Tex.preload(RoomWorld.textures(next))
@@ -288,28 +385,99 @@ final class ExploreSession {
     func setTheme(place: String, weather: String, time: String) {
         guard var d = data, let L = layout, current != 0 else { return }
         let id = current
-        d.updateRoom(id) { $0.place = place; $0.weather = weather; $0.time = time }
+        d.setTheme(id, place: place, weather: weather, time: time)       // '모든 방 같게'면 모든 방이 바뀜
         data = d
+        unified = d.rec.isUnified
         try? SpaceStore.save(d)
         guard let r = d.rec.room(id) else { return }
         room = r
         info = SkinInfo(d, L)
         player.enter(r, force: true)
-        // 새 그림을 미리 읽은 뒤 이 방의 세계만 바꿔 끼움 (읽는 동안은 예전 세계가 그대로 보임)
+        let targets = d.rec.isUnified ? d.rec.rooms.map(\.id) : [id]
+        // 새 그림을 미리 읽은 뒤 바꿔 끼움 (지금 방 먼저, 읽는 동안은 예전 세계가 그대로 보임)
         themeTask?.cancel()
         let snapshot = d
         themeTask = Task {
             await Tex.preload(RoomWorld.textures(r))
-            guard !Task.isCancelled, !ended, let cur = data?.rec.room(id), cur == r else { return }
-            if let old = worlds[id] {
-                old.world.removeFromParent()
-                old.local.removeFromParent()
+            for rid in [id] + targets.filter({ $0 != id }) {
+                guard !Task.isCancelled, !ended else { return }
+                let dd = data ?? snapshot
+                guard let rr = dd.rec.room(rid) else { continue }
+                if let old = worlds[rid] {
+                    old.world.removeFromParent()
+                    old.local.removeFromParent()
+                }
+                addWorld(dd, rr, L)
+                for k in 0..<4 { mats[rid * 4 + k] = nil }
+                refreshActive()
+                await Task.yield()
             }
-            addWorld(data ?? snapshot, r, L)
-            refreshActive()
-            for k in 0..<4 { mats[id * 4 + k] = nil }
+            guard !Task.isCancelled, !ended else { return }
             dirty.formUnion(meshes.keys)
+            buildSaved()
         }
+    }
+
+    // MARK: 미리 그려 두는 가구 (스캔 때 저장한 그물)
+    /// 모든 방의 가구를 처음부터 그려 둠. 비전프로가 지금 보고 있는 실제 그물이 그 1m 칸을 덮으면
+    /// 미리 그린 것은 숨기고 실제 그물을 씀 → 옮긴 의자도 가까이 가면 제자리에 다시 입혀짐
+    private func buildSaved() {
+        guard let I = info else { return }
+        let id = spaceId
+        savedTask?.cancel()
+        savedTask = Task {
+            let res = await Task.detached(priority: .utility) { () -> SkinResult? in
+                guard let m = SpaceStore.loadMesh(id) else { return nil }
+                return Skin.build(Skin.weld(m.0, m.1), I, Fit(), chunked: true)
+            }.value
+            guard !Task.isCancelled, !ended, let res else { return }
+            for (_, v) in savedChunks { v.0.removeFromParent() }
+            savedChunks = [:]
+            var byCell: [Int64: [SkinGroup]] = [:]
+            for g in res.groups where !g.idx.isEmpty { byCell[g.cell, default: []].append(g) }
+            var n = 0
+            for (cell, list) in byCell {
+                guard !Task.isCancelled, !ended else { return }
+                var descs: [MeshDescriptor] = []
+                var keys: [Int] = []
+                for g in list {
+                    var md = MeshDescriptor(name: "s\(g.room)_\(g.shade)")
+                    md.positions = MeshBuffers.Positions(g.pos)
+                    md.textureCoordinates = MeshBuffers.TextureCoordinates(g.uv)
+                    md.primitives = .triangles(g.idx)
+                    md.materials = .allFaces(UInt32(keys.count))
+                    descs.append(md)
+                    keys.append(g.room * 4 + g.shade)
+                }
+                guard let mesh = try? MeshResource.generate(from: descs) else { continue }
+                let ms: [RealityKit.Material] = keys.map { material($0 / 4, $0 % 4) }
+                let e = ModelEntity(mesh: mesh, materials: ms)
+                e.isEnabled = (cellCount[cell] ?? 0) == 0
+                savedRoot.addChild(e)
+                savedChunks[cell] = (e, keys)
+                n += 1
+                if n % 8 == 0 { await Task.yield() }          // 한꺼번에 만들어 화면이 멈추지 않게
+            }
+        }
+    }
+
+    /// 실제 그물이 덮는 칸이 바뀌면 미리 그린 가구를 숨기거나 다시 보임
+    private func setLiveCells(_ id: UUID, _ cells: Set<Int64>) {
+        let old = liveCells[id] ?? []
+        for c in old.subtracting(cells) {
+            let k = (cellCount[c] ?? 1) - 1
+            if k <= 0 {
+                cellCount[c] = nil
+                if let e = savedChunks[c]?.0 { e.isEnabled = true }
+            } else {
+                cellCount[c] = k
+            }
+        }
+        for c in cells.subtracting(old) {
+            cellCount[c, default: 0] += 1
+            if let e = savedChunks[c]?.0 { e.isEnabled = false }
+        }
+        liveCells[id] = cells.isEmpty ? nil : cells
     }
 
     // MARK: 비전프로가 알려 주는 것
@@ -319,10 +487,11 @@ final class ExploreSession {
             let key = a.id.uuidString
             switch u.event {
             case .removed:
-                live[key] = nil
+                poses[key] = nil
             default:
+                // 잠깐 놓친(추적 안 됨) 앵커도 마지막 위치를 그대로 씀: 놓칠 때마다 다른 앵커들로 다시 맞추면 공간이 튀어 깜빡임
                 if saved[key] != nil {
-                    if a.isTracked { live[key] = a.originFromAnchorTransform; updateFit() } else { live[key] = nil }
+                    if a.isTracked { poses[key] = a.originFromAnchorTransform; updateFit() }
                 } else if !allIds.contains(key) {
                     try? await w.removeAnchor(forID: a.id)          // 지운 공간의 앵커 정리
                 }
@@ -338,6 +507,7 @@ final class ExploreSession {
                 meshes[a.id] = nil
                 dirty.remove(a.id)
                 meshEnts.removeValue(forKey: a.id)?.removeFromParent()
+                setLiveCells(a.id, [])
             default:
                 meshes[a.id] = a
                 dirty.insert(a.id)
@@ -349,7 +519,7 @@ final class ExploreSession {
     private func updateFit() {
         var A: [SIMD2<Float>] = [], B: [SIMD2<Float>] = []
         var dy: Float = 0
-        for (k, m) in live {
+        for (k, m) in poses {
             guard let r = saved[k] else { continue }
             A.append(r.pos.xz); B.append(SIMD2<Float>(m.columns.3.x, m.columns.3.z))
             dy += m.columns.3.y - r.pos.y
@@ -368,7 +538,7 @@ final class ExploreSession {
             let th = atan2(crs, dot)
             f.c = cos(th); f.s = sin(th)
             f.t = cb - SIMD2<Float>(ca.x * f.c - ca.y * f.s, ca.x * f.s + ca.y * f.c)
-        } else if let one = live.first, let r = saved[one.key] {
+        } else if let one = poses.first, let r = saved[one.key] {
             let m = one.value
             let ax = SIMD2<Float>(m.columns.0.x, m.columns.0.z)
             let l = simd_length(ax)
@@ -377,12 +547,14 @@ final class ExploreSession {
             let p = r.pos.xz
             f.t = SIMD2<Float>(m.columns.3.x, m.columns.3.z) - SIMD2<Float>(p.x * f.c - p.y * f.s, p.x * f.s + p.y * f.c)
         }
-        if let old = fit, !f.differs(old, meters: 0.08, radians: 0.03) { return }
-        let first = fit == nil
-        fit = f
-        spaceRoot.transform = f.transform
-        dirty.formUnion(meshes.keys)          // 그물을 새 좌표로 다시 입힘
-        if first { message = nil }
+        fitTarget = f
+        if fit == nil {                        // 처음: 바로 맞춤
+            fit = f
+            skinFit = f
+            spaceRoot.transform = f.transform
+            dirty.formUnion(meshes.keys)
+            message = nil
+        }
     }
 
     // MARK: 매 프레임
@@ -395,6 +567,17 @@ final class ExploreSession {
         fwd = -simd_make_float3(m.columns.2)
         if let lh = lastHead, dt > 0 { speed += (simd_distance(lh.xz, head.xz) / dt - speed) * min(1, dt * 4) }
         lastHead = head
+
+        // 좌표 맞춤이 조금 바뀌면 순간 이동하지 않고 부드럽게 따라감 (크게 틀어졌을 때만 바로)
+        if let tg = fitTarget, let cur = fit, tg != cur {
+            let nf = tg.differs(cur, meters: 0.6, radians: 0.3) ? tg : cur.lerp(tg, min(1, dt * 2.5))
+            fit = nf
+            spaceRoot.transform = nf.transform
+            if let sf = skinFit, nf.differs(sf, meters: 0.12, radians: 0.04) {
+                skinFit = nf
+                dirty.formUnion(meshes.keys)          // 많이 바뀌었을 때만 가구를 새 좌표로 다시 입힘
+            }
+        }
 
         if let fit, let L = layout, let I = info {
             // 지금 있는 방 (0.5초 넘게 머물러야 바뀜). 문틀·벽 사이를 지날 때는 25cm 안의 방으로
@@ -410,7 +593,7 @@ final class ExploreSession {
         // 안전: 공간을 아직 못 찾았거나, 구성한 방 밖이거나, 너무 빠르면 현실이 보이게
         var target: Float = 1
         var why: String?
-        if fit == nil { target = 0 }
+        if fit == nil || !ready { target = 0 }
         else if outsideT > 0.6 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
         else if speed > 1.4 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
         let rate: Float = target < fade ? 3 : 1.1
@@ -422,7 +605,8 @@ final class ExploreSession {
             appliedFade = v
         }
         if fit != nil {
-            let msg = why ?? player.status
+            let total = data?.rec.rooms.count ?? 0
+            let msg = ready ? (why ?? player.status) : "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
             if msg != message { message = msg }
         }
 
@@ -490,10 +674,11 @@ final class ExploreSession {
             builtAt[id] = now
             let copy = MeshCopy(a)
             Task {
-                let groups = await Task.detached(priority: .userInitiated) { Skin.build(copy, I, fit) }.value
+                let res = await Task.detached(priority: .userInitiated) { Skin.build(copy, I, fit) }.value
                 building.remove(id)
                 guard !ended, meshes[id] != nil else { return }
-                apply(id, groups)
+                apply(id, res.groups)
+                setLiveCells(id, res.cells)
             }
         }
     }
