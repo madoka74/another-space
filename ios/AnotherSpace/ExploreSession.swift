@@ -249,6 +249,7 @@ final class ExploreSession {
     @ObservationIgnored private var doorState: [Int: Float] = [:]   // 1 닫힘(벽) → 0 열림
     @ObservationIgnored private var doorShow: [Int: Float] = [:]    // 문틀·열쇠 보이는 정도
     @ObservationIgnored private var doorSide: [Int: Float] = [:]    // 문을 열 때 서 있던 쪽 (지나가면 닫음)
+    @ObservationIgnored private var lastSide: [Int: Float] = [:]    // 문 밖에서 마지막으로 서 있던 쪽
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -669,17 +670,28 @@ final class ExploreSession {
     private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ L: Layout) {
         guard let d = data else { return }
         let p = L.plane(hs.x, hs.z)
+        let breath = 0.5 + 0.5 * sin(t * 2.4)                                   // 숨 쉬듯
+        var glowMat: PhysicallyBasedMaterial?
         for (i, ds) in L.doors.enumerated() {
             var same = false
             if let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
                 same = ra.place == rb.place && ra.weather == rb.weather && ra.time == rb.time
             }
-            let dist = Self.segDist(p, ds.a, ds.b)
-            let side = simd_dot(p - ds.a, ds.n)                     // + 면 roomA 쪽
-            let here = side >= 0 ? ds.roomA : ds.roomB             // 지금 서 있는 쪽 방
-            if doorOpen.contains(i) {
-                let crossed = (doorSide[i] ?? side) * side < 0 && abs(side) > 0.1
-                if crossed || dist > Self.doorReach { doorOpen.remove(i) }
+            let dist = ds.dist(p)
+            let inside = ds.inside(p)
+            let side = ds.side(p)                                              // + 면 방 A 쪽
+            let here = side >= 0 ? ds.roomA : ds.roomB
+            if !same {
+                if inside {
+                    // 문 자리 안에 서 있으면(닫힌 문짝을 그냥 지나쳐 들어와도) 열어 둠 — 들어온 쪽을 기억
+                    if !doorOpen.contains(i) { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
+                } else {
+                    lastSide[i] = side
+                    if doorOpen.contains(i) {
+                        let crossed = (doorSide[i] ?? side) * side < 0          // 반대편으로 나감 = 지나감
+                        if crossed || dist > Self.doorReach { doorOpen.remove(i) }
+                    }
+                }
             }
             let target: Float = (same || doorOpen.contains(i)) ? 0 : 1
             var st = doorState[i] ?? target
@@ -694,7 +706,8 @@ final class ExploreSession {
                     e.scale = SIMD3<Float>(max(0.001, st), 1, 1)
                 }
             }
-            let want: Float = (!same && dist < Self.doorReach && !doorOpen.contains(i)) ? 1 : 0
+            // 문틀·열쇠: 다른 세계 사이, 닫혀 있고, 문 밖 1m 안일 때 — 서 있는 쪽 방의 문짝에만
+            let want: Float = (!same && !inside && dist < Self.doorReach && !doorOpen.contains(i)) ? 1 : 0
             var sh = doorShow[i] ?? 0
             sh += (want - sh) * min(1, dt * 4)
             if abs(sh - want) < 0.01 { sh = want }
@@ -703,13 +716,12 @@ final class ExploreSession {
                 guard let ui = worlds[rid]?.doorUI[i] else { continue }
                 let v: Float = rid == here ? sh : 0
                 ui.root.isEnabled = v > 0.02
-                if ui.root.isEnabled {
-                    ui.root.components.set(OpacityComponent(opacity: v))
-                    let breath = 0.5 + 0.5 * sin(t * 2.4)                                     // 숨 쉬듯
-                    ui.glow.components.set(OpacityComponent(opacity: 0.25 + 0.6 * breath))
-                    ui.key.position = [0, 0.012 * sin(t * 1.3), 0]                           // 둥실둥실
-                    ui.key.orientation = simd_quatf(angle: 0.35 * sin(t * 0.7), axis: [0, 1, 0])
-                }
+                guard ui.root.isEnabled else { continue }
+                ui.root.components.set(OpacityComponent(opacity: v))
+                ui.key.position = [0, 0.012 * sin(t * 1.3), 0]                       // 둥실둥실
+                ui.key.orientation = simd_quatf(angle: 0.3 * sin(t * 0.7), axis: [0, 1, 0])
+                if glowMat == nil { glowMat = RoomWorld.gold(rough: 0.22, glow: 0.2 + 2.2 * breath) }
+                if let gm = glowMat { for e in ui.parts { e.model?.materials = [gm] } }
             }
         }
     }
@@ -729,8 +741,8 @@ final class ExploreSession {
                     let hs = f.toSaved(head)
                     let p = L.plane(hs.x, hs.z)
                     let ds = L.doors[i]
-                    if Self.segDist(p, ds.a, ds.b) < Self.doorReach {
-                        doorSide[i] = simd_dot(p - ds.a, ds.n)
+                    if ds.dist(p) < Self.doorReach {
+                        doorSide[i] = ds.side(p)
                         doorOpen.insert(i)
                     }
                 }

@@ -115,8 +115,8 @@ final class RoomWorld {
     private let sortGroup = ModelSortGroup(depthPass: nil)
     /// 문 번호 → 이 방 쪽 문짝 (닫히면 이 방 벽처럼 보임). 열 때 가로로 오므라듦
     private(set) var doorPanels: [Int: [Entity]] = [:]
-    /// 문 번호 → 가까이 가면 보이는 문틀·열쇠 구멍·떠 있는 열쇠 (root, 숨 쉬는 빛, 열쇠)
-    private(set) var doorUI: [Int: (root: Entity, glow: Entity, key: Entity)] = [:]
+    /// 문 번호 → 가까이 가면 보이는 문틀·열쇠 구멍·떠 있는 열쇠 (root, 떠다니는 열쇠, 열쇠 조각들 — 숨 쉬는 빛은 조각들의 발광을 바꿈)
+    private(set) var doorUI: [Int: (root: Entity, key: Entity, parts: [ModelEntity])] = [:]
 
     var outdoor: Bool { style.open }
     var dark: Bool { room.time == "night" || room.time == "dawn" }
@@ -283,17 +283,22 @@ final class RoomWorld {
         let top = ceilY - floorY
         let sun = Worlds.sunDir(room.time)
         for (i, ds) in L.doors.enumerated() where ds.roomA == room.id || ds.roomB == room.id {
-            let a2 = L.flat(ds.a), b2 = L.flat(ds.b)
+            let (ea, eb, en) = ds.edge(for: room.id)                 // 이 방 쪽 입구 변
+            let a2 = L.flat(ea), b2 = L.flat(eb)
             let len = simd_distance(a2, b2)
             guard len > 0.2 else { continue }
             let dir = (b2 - a2) / len
-            let nw = L.flat(ds.normal(for: room.id)) - L.flat(SIMD2<Float>(0, 0))      // 이 방 쪽
-            let yaw = atan2(-dir.y, dir.x)
+            let nw = L.flat(en) - L.flat(SIMD2<Float>(0, 0))        // 이 방 쪽
+            // 문짝의 앞면(+z)이 이 방을 보게: x축 = 입구 변 방향, z축 = 방 쪽
+            var xdir = SIMD3<Float>(dir.x, 0, dir.y)
+            let zdir = SIMD3<Float>(nw.x, 0, nw.y)
+            if simd_dot(simd_cross(xdir, SIMD3<Float>(0, 1, 0)), zdir) < 0 { xdir = -xdir }
+            let yaw = atan2(-xdir.z, xdir.x)
             let q = simd_quatf(angle: yaw, axis: [0, 1, 0])
             let mid = (a2 + b2) / 2
-            func place(_ e: Entity, _ off: Float, y: Float = floorY) {
+            func place(_ e: Entity, _ off: Float) {
                 let p = mid + nw * off
-                e.position = SIMD3<Float>(p.x, y, p.y)
+                e.position = SIMD3<Float>(p.x, floorY, p.y)
                 e.orientation = q
             }
             let hl = len / 2
@@ -308,12 +313,11 @@ final class RoomWorld {
                     local.addChild(e)
                     list.append(e)
                 }
-                // 문짝 너머 울타리 (벽과 같은 모양이 이어지게)
+                // 문짝 너머 울타리 (양옆 벽과 같은 모양이 이어지게)
                 var fence = Geo()
                 let tileW = style.barrierH * 2
-                let along0 = abs(ds.a.x - ds.b.x) > abs(ds.a.y - ds.b.y) ? min(ds.a.x, ds.b.x) : min(ds.a.y, ds.b.y)
                 fence.wall(SIMD3<Float>(-hl - 0.25, 0, 0), SIMD3<Float>(hl + 0.25, 0, 0), y0: -0.05, y1: style.barrierH,
-                           u0: (along0 - 0.25) / tileW, u1: (along0 + len + 0.25) / tileW, v0: 0.02, v1: 1)
+                           u0: 0, u1: (len + 0.5) / tileW, v0: 0.02, v1: 1)
                 if let e = fence.entity("doorFence\(i)", Tex.cutout(style.barrier, tint: Worlds.safe(tint, min: 0.45))) {
                     layer(e, 6)
                     place(e, -0.22)
@@ -321,12 +325,10 @@ final class RoomWorld {
                     list.append(e)
                 }
             } else {
-                let l = simd_dot(SIMD3<Float>(nw.x, 0, nw.y), sun)
+                let l = simd_dot(zdir, sun)
                 let k = l > 0.25 ? 0 : (l > -0.25 ? 1 : 2)
                 let tile = style.wallTile
-                let along0 = abs(ds.a.x - ds.b.x) > abs(ds.a.y - ds.b.y) ? min(ds.a.x, ds.b.x) : min(ds.a.y, ds.b.y)
-                panel.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: 0, y1: top,
-                           u0: along0 / tile, u1: (along0 + len) / tile, v0: 0, v1: top / tile)
+                panel.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: 0, y1: top, u0: 0, u1: len / tile, v0: 0, v1: top / tile)
                 if let e = panel.entity("door\(i)", Tex.unlit(style.wall, tint: Worlds.safe(tint * shades[k], min: 0.36))) {
                     place(e, 0.012)
                     local.addChild(e)
@@ -335,9 +337,9 @@ final class RoomWorld {
             }
             doorPanels[i] = list
 
-            // 문틀 + 손잡이 (처음엔 숨김)
+            // 문틀 + 열쇠 구멍 + 떠 있는 열쇠 (처음엔 숨김). 모두 이 방 쪽 앞면에만
             let ui = Entity()
-            place(ui, 0.025)
+            place(ui, 0.02)
             let dh = min(2.05, top - 0.05)
             var frame = Geo()
             let fw: Float = 0.06
@@ -346,66 +348,52 @@ final class RoomWorld {
             frame.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: dh - fw, y1: dh, u0: 0, u1: 1)
             let lit = Worlds.safe(tint, min: 0.55)
             if let f = frame.entity("frame", UnlitMaterial(color: Tex.color(SIMD3<Float>(0.42, 0.3, 0.2) * lit))) { ui.addChild(f) }
-            // 열쇠 구멍: 문 가장자리에서 18cm, 높이 1m (놋쇠 판 + 검은 구멍)
-            let hx = hl - min(0.18, hl * 0.4)
-            let brass = Self.gold(rough: 0.35)
-            let plate = ModelEntity(mesh: .generateBox(width: 0.06, height: 0.13, depth: 0.008, cornerRadius: 0.004), materials: [brass])
-            plate.position = [hx, 1.0, 0.004]
-            ui.addChild(plate)
+            // 열쇠 구멍: 문 가로 가운데, 높이 1.4m (아래를 내려다볼 때 뜨는 안내판과 겹치지 않게)
+            let ky: Float = 1.4
+            let rosette = ModelEntity(mesh: .generateCylinder(height: 0.006, radius: 0.032), materials: [Self.gold(rough: 0.4)])
+            rosette.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
+            rosette.position = [0, ky, 0.003]
+            ui.addChild(rosette)
             let black = UnlitMaterial(color: UIColor(white: 0.02, alpha: 1))
-            let hole = ModelEntity(mesh: .generateCylinder(height: 0.004, radius: 0.009), materials: [black])
+            let hole = ModelEntity(mesh: .generateCylinder(height: 0.002, radius: 0.008), materials: [black])
             hole.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
-            hole.position = [hx, 1.012, 0.009]
+            hole.position = [0, ky + 0.007, 0.0068]
             ui.addChild(hole)
-            let slot = ModelEntity(mesh: .generateBox(width: 0.008, height: 0.022, depth: 0.004), materials: [black])
-            slot.position = [hx, 0.997, 0.009]
+            let slot = ModelEntity(mesh: .generateBox(width: 0.007, height: 0.02, depth: 0.002), materials: [black])
+            slot.position = [0, ky - 0.006, 0.0068]
             ui.addChild(slot)
-            // 그 앞에 떠서 천천히 오르내리는 황금 열쇠 + 숨 쉬는 빛. 바라보면 밝아지고, 손가락으로 집으면(누르면) 문이 열림
+            // 열쇠: 구멍 앞 15cm에 떠서 둥실둥실, 숨 쉬듯 빛남. 손가락으로 집으면(누르면) 문이 열림
             let keyRoot = Entity()
-            keyRoot.position = [hx, 1.0, 0.12]
+            keyRoot.position = [0, ky, 0.15]
             keyRoot.name = "door-\(i)"
             keyRoot.components.set(InputTargetComponent())
-            keyRoot.components.set(CollisionComponent(shapes: [.generateBox(size: [0.24, 0.2, 0.16])]))
+            keyRoot.components.set(CollisionComponent(shapes: [.generateBox(size: [0.22, 0.14, 0.12])]))
             keyRoot.components.set(HoverEffectComponent(.highlight(.init(color: UIColor(red: 1, green: 0.85, blue: 0.5, alpha: 1), strength: 2.5))))
-            let key = Self.makeKey()
+            let (key, parts) = Self.makeKey()
             keyRoot.addChild(key)
-            var gm = UnlitMaterial(color: UIColor(red: 1, green: 0.84, blue: 0.5, alpha: 1))
-            if let t = Tex.get("glow") {
-                gm.color = .init(tint: UIColor(red: 1, green: 0.84, blue: 0.5, alpha: 1), texture: .init(t))
-                if let mask = Tex.get("glow_a", raw: true) {
-                    gm.blending = .transparent(opacity: .init(scale: 1, texture: .init(mask)))
-                } else {
-                    gm.blending = .transparent(opacity: .init(floatLiteral: 0.6))
-                }
-            } else {
-                gm.blending = .transparent(opacity: .init(floatLiteral: 0.3))
-            }
-            let glow = ModelEntity(mesh: .generatePlane(width: 0.34, height: 0.34), materials: [gm])
-            glow.position = [0, 0, -0.02]
-            glow.components.set(OpacityComponent(opacity: 0))
-            keyRoot.addChild(glow)
             ui.addChild(keyRoot)
             ui.components.set(OpacityComponent(opacity: 0))
             ui.isEnabled = false
             local.addChild(ui)
-            doorUI[i] = (ui, glow, key)
+            doorUI[i] = (ui, key, parts)
         }
     }
 
     /// 빛을 받는 황금 (실제 방의 빛이 비쳐 반짝임)
-    static func gold(rough: Float) -> PhysicallyBasedMaterial {
+    static func gold(rough: Float, glow: Float = 0.35) -> PhysicallyBasedMaterial {
         var m = PhysicallyBasedMaterial()
         m.baseColor = .init(tint: UIColor(red: 1.0, green: 0.76, blue: 0.33, alpha: 1))
         m.metallic = .init(floatLiteral: 1)
         m.roughness = .init(floatLiteral: rough)
         m.emissiveColor = .init(color: UIColor(red: 1.0, green: 0.7, blue: 0.3, alpha: 1))
-        m.emissiveIntensity = 0.35
+        m.emissiveIntensity = glow
         return m
     }
 
     /// 황금 열쇠 (가로로 누운 모양: 왼쪽 고리, 오른쪽 열쇠 이). 길이 약 15cm
-    static func makeKey() -> Entity {
+    static func makeKey() -> (Entity, [ModelEntity]) {
         let k = Entity()
+        var parts: [ModelEntity] = []
         let m = gold(rough: 0.22)
         // 고리: 짧은 원기둥 14개를 둥글게
         let seg = MeshResource.generateCylinder(height: 0.016, radius: 0.0055)
@@ -416,26 +404,27 @@ final class RoomWorld {
             e.position = [-0.05 + cos(a) * rr, sin(a) * rr, 0]
             e.orientation = simd_quatf(angle: a, axis: [0, 0, 1])          // 원기둥(세로)이 원을 따라 눕도록
             k.addChild(e)
+            parts.append(e)
         }
         // 고리 가운데 장식 + 몸통
         let gem = ModelEntity(mesh: .generateSphere(radius: 0.008), materials: [m])
         gem.position = [-0.05, 0, 0]
-        k.addChild(gem)
+        k.addChild(gem); parts.append(gem)
         let shaft = ModelEntity(mesh: .generateCylinder(height: 0.1, radius: 0.0055), materials: [m])
         shaft.orientation = simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
         shaft.position = [0.025, 0, 0]
-        k.addChild(shaft)
+        k.addChild(shaft); parts.append(shaft)
         let collar = ModelEntity(mesh: .generateCylinder(height: 0.008, radius: 0.009), materials: [m])
         collar.orientation = simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
         collar.position = [-0.02, 0, 0]
-        k.addChild(collar)
+        k.addChild(collar); parts.append(collar)
         // 열쇠 이 (아래로)
         for (x, h) in [(Float(0.062), Float(0.03)), (Float(0.048), Float(0.02))] {
             let bit = ModelEntity(mesh: .generateBox(width: 0.01, height: h, depth: 0.008), materials: [m])
             bit.position = [x, -h / 2, 0]
-            k.addChild(bit)
+            k.addChild(bit); parts.append(bit)
         }
-        return k
+        return (k, parts)
     }
 
     /// 실내 장소: 유리 지붕 틀 (1m 간격 가는 들보)
