@@ -4,7 +4,7 @@ import ARKit
 import QuartzCore
 
 /// 공간 스캔: 집 안을 걸어 다니면 알아본 바닥(청록)·벽과 물건(금빛)이 반투명하게 덮이고, 안내판에 위에서 본 지도가 쌓임.
-/// 비전프로는 멀리 떨어진 곳의 그물을 스스로 지우지만(메모리 절약), 앱은 한 번 본 곳을 끝까지 모아 둠 → 저장할 때 집 전체가 들어감
+/// 비전프로는 멀어진 곳의 그물을 지우거나 줄여서 다시 보내지만, 앱은 4cm 칸마다 삼각형을 모아 두어 한 번 본 곳이 끝까지 남음 → 저장할 때 집 전체가 들어감
 struct ScanView: View {
     let replace: String?
     @State private var s: ScanSession
@@ -96,9 +96,10 @@ final class ScanSession {
     @ObservationIgnored private let replace: String?
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
-    @ObservationIgnored private var copies: [UUID: MeshCopy] = [:]      // 한 번 본 그물은 비전프로가 지워도 계속 가짐
-    @ObservationIgnored private var viz: [UUID: ModelEntity] = [:]
-    @ObservationIgnored private var vizAt: [UUID: Double] = [:]
+    @ObservationIgnored private let store = MeshStore()                 // 한 번 본 곳은 줄지 않게 모아 둠 (MeshStore 설명 참고)
+    @ObservationIgnored private var lastIn: [UUID: Double] = [:]
+    @ObservationIgnored private var chunkViz: [Int64: ModelEntity] = [:]
+    @ObservationIgnored private var vizTimer: Float = 0
     @ObservationIgnored private var path: [SIMD3<Float>] = []
     @ObservationIgnored private var walked: Float = 0
     @ObservationIgnored private var head = SIMD3<Float>(0, 1.5, 0)
@@ -160,48 +161,46 @@ final class ScanSession {
         root.addChild(e)
     }
 
-    /// 알아본 그물을 반투명하게 보여 주고 복사해 둠 (한 덩어리당 0.6초에 한 번)
+    /// 비전프로가 보낸 그물 덩어리를 모아 둠 (한 덩어리당 0.5초에 한 번). 지워지거나 줄어든 모양이 와도 예전에 본 곳은 남음
     private func show(_ a: MeshAnchor) {
         let now = CACurrentMediaTime()
-        if let e = viz[a.id], let last = vizAt[a.id], now - last < 0.6 {
-            e.transform = Transform(matrix: a.originFromAnchorTransform)
-            return
-        }
-        vizAt[a.id] = now
-        let copy = MeshCopy(a)
-        copies[a.id] = copy
-        let v = copy.v, f = copy.f, cls = copy.c
-        guard v.count >= 3, f.count >= 3 else { return }
-        var fl: [UInt32] = [], ot: [UInt32] = []
-        var i = 0, fi = 0
-        while i + 2 < f.count {
-            if Int(f[i]) < v.count, Int(f[i + 1]) < v.count, Int(f[i + 2]) < v.count {
-                if fi < cls.count && cls[fi] == MeshClass.floor { fl += [f[i], f[i + 1], f[i + 2]] }
-                else if fi >= cls.count || cls[fi] != MeshClass.ceiling { ot += [f[i], f[i + 1], f[i + 2]] }
+        if let last = lastIn[a.id], now - last < 0.5 { return }
+        lastIn[a.id] = now
+        store.ingest(MeshCopy(a))
+    }
+
+    /// 바뀐 1.28m 덩어리만 다시 그림: 바닥은 청록, 벽·물건은 금빛 (모은 것 그대로라 지나온 곳도 계속 보임)
+    private func redrawChunks() {
+        for ch in store.takeDirty(16) {
+            let ts = store.trisIn(ch)
+            var pf: [SIMD3<Float>] = [], po: [SIMD3<Float>] = []
+            for t in ts where t.cls != MeshClass.ceiling {
+                if t.cls == MeshClass.floor { pf += [t.a, t.b, t.c] } else { po += [t.a, t.b, t.c] }
             }
-            i += 3; fi += 1
+            var descs: [MeshDescriptor] = []
+            var mats: [RealityKit.Material] = []
+            for (pos, mat, name) in [(pf, floorMat, "floor"), (po, otherMat, "other")] where !pos.isEmpty {
+                var d = MeshDescriptor(name: name)
+                d.positions = MeshBuffers.Positions(pos)
+                var idx: [UInt32] = []
+                idx.reserveCapacity(pos.count * 2)
+                for k in stride(from: 0, to: pos.count, by: 3) {
+                    let b = UInt32(k)
+                    idx += [b, b + 1, b + 2, b, b + 2, b + 1]          // 양면
+                }
+                d.primitives = .triangles(idx)
+                d.materials = .allFaces(UInt32(mats.count))
+                descs.append(d); mats.append(mat)
+            }
+            if descs.isEmpty {
+                chunkViz.removeValue(forKey: ch)?.removeFromParent()
+                continue
+            }
+            guard let mesh = try? MeshResource.generate(from: descs) else { continue }
+            let e: ModelEntity
+            if let old = chunkViz[ch] { e = old } else { e = ModelEntity(); root.addChild(e); chunkViz[ch] = e }
+            e.model = ModelComponent(mesh: mesh, materials: mats)
         }
-        var descs: [MeshDescriptor] = []
-        var mats: [RealityKit.Material] = []
-        if !fl.isEmpty {
-            var d = MeshDescriptor(name: "floor")
-            d.positions = MeshBuffers.Positions(v)
-            d.primitives = .triangles(fl)
-            d.materials = .allFaces(UInt32(mats.count))
-            descs.append(d); mats.append(floorMat)
-        }
-        if !ot.isEmpty {
-            var d = MeshDescriptor(name: "other")
-            d.positions = MeshBuffers.Positions(v)
-            d.primitives = .triangles(ot)
-            d.materials = .allFaces(UInt32(mats.count))
-            descs.append(d); mats.append(otherMat)
-        }
-        guard !descs.isEmpty, let mesh = try? MeshResource.generate(from: descs) else { return }
-        let e: ModelEntity
-        if let old = viz[a.id] { e = old } else { e = ModelEntity(); root.addChild(e); viz[a.id] = e }
-        e.model = ModelComponent(mesh: mesh, materials: mats)
-        e.transform = Transform(matrix: a.originFromAnchorTransform)
     }
 
     func tick(_ dt: Float) {
@@ -217,6 +216,8 @@ final class ScanSession {
             path.append(head)
         }
         placeHud(dt)
+        vizTimer += dt
+        if vizTimer > 0.3 { vizTimer = 0; redrawChunks() }
         if let c = cov { me = CGPoint(x: CGFloat((head.x - c.ox) / c.cell), y: CGFloat((head.z - c.oz) / c.cell)) }
         statTimer += dt
         if statTimer > 1 {
@@ -230,7 +231,7 @@ final class ScanSession {
         if mapTimer > 2.5 && !mapBusy {
             mapTimer = 0
             mapBusy = true
-            let list = Array(copies.values), hy = head.y
+            let list = [store.snapshot()], hy = head.y
             Task {
                 let c = await Task.detached(priority: .utility) { RoomSegment.coverage(list, headY: hy) }.value
                 mapBusy = false
@@ -267,7 +268,7 @@ final class ScanSession {
         guard !saving, let w = world else { return }
         saving = true
         message = nil
-        let input = RoomSegment.Input(meshes: Array(copies.values), path: path, headY: head.y)
+        let input = RoomSegment.Input(meshes: [store.snapshot()], path: path, headY: head.y)
         let replaceId = replace
         let id = replaceId ?? UUID().uuidString
         let old = replaceId.flatMap { SpaceStore.load($0) }

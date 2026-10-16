@@ -70,6 +70,10 @@ struct MeshCopy: Sendable {
         f = MeshRead.indices(a.geometry.faces)
         c = MeshRead.classes(a.geometry.classifications, faces: f.count / 3)
     }
+
+    init(id: UUID, m: simd_float4x4, v: [SIMD3<Float>], f: [UInt32], c: [UInt8]) {
+        self.id = id; self.m = m; self.v = v; self.f = f; self.c = c
+    }
 }
 
 /// 저장할 때의 좌표(저장 좌표) ↔ 지금 좌표: 위에서 본 회전(c, s)·이동(t) + 높이 차이(y)
