@@ -161,6 +161,8 @@ final class ExploreSession {
     @ObservationIgnored private var layout: Layout?
     @ObservationIgnored private var info: SkinInfo?
     @ObservationIgnored private var worlds: [Int: RoomWorld] = [:]
+    @ObservationIgnored private var neighbors: [Int: Set<Int>] = [:]
+    @ObservationIgnored private var themeTask: Task<Void, Never>?
     @ObservationIgnored private var saved: [String: AnchorRec] = [:]
     @ObservationIgnored private var allIds: Set<String> = []
     @ObservationIgnored private var live: [String: simd_float4x4] = [:]
@@ -205,6 +207,7 @@ final class ExploreSession {
         let L = Layout(d)
         layout = L
         info = SkinInfo(d, L)
+        neighbors = L.neighbors()
         for a in d.rec.anchors { saved[a.a] = a }
         allIds = SpaceStore.allAnchorIds()
         root.addChild(spaceRoot)
@@ -212,7 +215,6 @@ final class ExploreSession {
         root.addChild(player.root)
         spaceRoot.components.set(OpacityComponent(opacity: 0))
         skinRoot.components.set(OpacityComponent(opacity: 0))
-        for r in d.rec.rooms { addWorld(d, r, L) }
 
         let auth = await ar.requestAuthorization(for: [.worldSensing])
         guard auth[.worldSensing] == .allowed else {
@@ -227,7 +229,26 @@ final class ExploreSession {
             return
         }
         Task { await self.watchMeshes(m) }
-        await watchWorld(w)
+        Task { await self.watchWorld(w) }
+        // 공간을 알아보는 동안 방 세계를 하나씩 미리 만듦 (그림도 미리 읽어 둠) → 문턱을 넘을 때 기다리지 않음
+        await buildWorlds()
+    }
+
+    /// 아직 안 만든 방 중 '지금 있는 방 → 이웃 방 → 나머지' 순서로 하나씩
+    private func buildWorlds() async {
+        while !ended {
+            guard let d = data, let L = layout else { return }
+            let todo = d.rec.rooms.filter { worlds[$0.id] == nil }
+            guard !todo.isEmpty else { return }
+            let near = neighbors[current] ?? []
+            let next = todo.first { $0.id == current } ?? todo.first { near.contains($0.id) } ?? todo[0]
+            await Tex.preload(RoomWorld.textures(next))
+            guard !ended, worlds[next.id] == nil, let d2 = data, let r = d2.rec.room(next.id) else { continue }
+            addWorld(d2, r, L)
+            refreshActive()
+            if !meshEnts.isEmpty { dirty.formUnion(meshes.keys) }      // 그 방 가구 색을 새 세계에 맞게
+            try? await Task.sleep(for: .milliseconds(30))
+        }
     }
 
     private func addWorld(_ d: SpaceData, _ r: RoomRec, _ L: Layout) {
@@ -235,6 +256,12 @@ final class ExploreSession {
         spaceRoot.addChild(w.world)
         spaceRoot.addChild(w.local)
         worlds[r.id] = w
+    }
+
+    /// 비·눈·반딧불은 지금 방과 이웃 방만 (문턱을 넘을 때 이미 내리고 있게)
+    private func refreshActive() {
+        let on = (neighbors[current] ?? []).union([current])
+        for (id, w) in worlds { w.setActive(on.contains(id)) }
     }
 
     func stop() {
@@ -260,22 +287,29 @@ final class ExploreSession {
     // MARK: 테마 바꾸기 (지금 방)
     func setTheme(place: String, weather: String, time: String) {
         guard var d = data, let L = layout, current != 0 else { return }
-        d.updateRoom(current) { $0.place = place; $0.weather = weather; $0.time = time }
+        let id = current
+        d.updateRoom(id) { $0.place = place; $0.weather = weather; $0.time = time }
         data = d
         try? SpaceStore.save(d)
-        guard let r = d.rec.room(current) else { return }
-        // 이 방의 세계만 새로 만듦
-        if let old = worlds[current] {
-            old.world.removeFromParent()
-            old.local.removeFromParent()
-        }
-        addWorld(d, r, L)
-        worlds[current]?.setActive(true)
-        info = SkinInfo(d, L)
-        for k in 0..<4 { mats[current * 4 + k] = nil }
-        dirty.formUnion(meshes.keys)
+        guard let r = d.rec.room(id) else { return }
         room = r
+        info = SkinInfo(d, L)
         player.enter(r, force: true)
+        // 새 그림을 미리 읽은 뒤 이 방의 세계만 바꿔 끼움 (읽는 동안은 예전 세계가 그대로 보임)
+        themeTask?.cancel()
+        let snapshot = d
+        themeTask = Task {
+            await Tex.preload(RoomWorld.textures(r))
+            guard !Task.isCancelled, !ended, let cur = data?.rec.room(id), cur == r else { return }
+            if let old = worlds[id] {
+                old.world.removeFromParent()
+                old.local.removeFromParent()
+            }
+            addWorld(data ?? snapshot, r, L)
+            refreshActive()
+            for k in 0..<4 { mats[id * 4 + k] = nil }
+            dirty.formUnion(meshes.keys)
+        }
     }
 
     // MARK: 비전프로가 알려 주는 것
@@ -370,7 +404,7 @@ final class ExploreSession {
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
             outsideT = r == 0 ? outsideT + dt : 0
             buildTimer += dt
-            if buildTimer > 0.25 { buildTimer = 0; buildSome(fit, I) }
+            if buildTimer > 0.1 { buildTimer = 0; buildSome(fit, I) }
         }
 
         // 안전: 공간을 아직 못 찾았거나, 구성한 방 밖이거나, 너무 빠르면 현실이 보이게
@@ -398,10 +432,13 @@ final class ExploreSession {
     }
 
     private func enterRoom(_ r: Int) {
-        worlds[current]?.setActive(false)
         current = r
-        guard let rm = data?.rec.room(r) else { return }
-        worlds[r]?.setActive(true)
+        guard let d = data, let L = layout, let rm = d.rec.room(r) else { return }
+        if worlds[r] == nil {                               // 아직 못 만든 방이면 바로 만듦
+            addWorld(d, rm, L)
+            dirty.formUnion(meshes.keys)
+        }
+        refreshActive()
         room = rm
         player.enter(rm)
         nextEvent = t + Float.random(in: 3...8)
@@ -433,17 +470,24 @@ final class ExploreSession {
     }
 
     // MARK: 실제 그물(가구·물건) 입히기
+    /// 가까운 그물부터 (방에 들어서면 그 방 가구가 먼저 입혀짐), 동시에 4개까지
     private func buildSome(_ fit: Fit, _ I: SkinInfo) {
         let now = CACurrentMediaTime()
-        var started = 0
+        guard building.count < 4 else { return }
+        var cand: [(UUID, Float)] = []
         for id in dirty where !building.contains(id) {
-            if started >= 2 { break }
-            if let last = builtAt[id], now - last < 1.5 { continue }
             guard let a = meshes[id] else { dirty.remove(id); continue }
+            let fresh = meshEnts[id] == nil
+            if !fresh, let last = builtAt[id], now - last < 1.0 { continue }
+            let p = simd_make_float3(a.originFromAnchorTransform.columns.3)
+            cand.append((id, simd_distance(p.xz, head.xz) - (fresh ? 3 : 0)))     // 아직 한 번도 안 입힌 것 먼저
+        }
+        cand.sort { $0.1 < $1.1 }
+        for (id, _) in cand.prefix(4 - building.count) {
+            guard let a = meshes[id] else { continue }
             dirty.remove(id)
             building.insert(id)
             builtAt[id] = now
-            started += 1
             let copy = MeshCopy(a)
             Task {
                 let groups = await Task.detached(priority: .userInitiated) { Skin.build(copy, I, fit) }.value
@@ -478,14 +522,14 @@ final class ExploreSession {
     private func material(_ room: Int, _ shade: Int) -> UnlitMaterial {
         let key = room * 4 + shade
         if let m = mats[key] { return m }
-        let k: Float = [1.0, 0.8, 0.62][min(2, shade)]
         let m: UnlitMaterial
         if let wld = worlds[room] {
             let st = wld.style
+            let k = wld.shades[min(2, shade)]
             // 가구·물건은 둘레보다 조금 밝게 (부딪히지 않게 눈에 잘 띄도록)
-            m = Tex.unlit(st.prop, tint: st.propTint * wld.tint * k * 1.18)
+            m = Tex.unlit(st.prop, tint: Worlds.safe(st.propTint * wld.tint * k * 1.15, min: 0.4))
         } else {
-            m = UnlitMaterial(color: .gray)
+            return UnlitMaterial(color: .gray)          // 방 세계를 아직 만드는 중: 다음에 다시 만듦
         }
         mats[key] = m
         return m

@@ -119,32 +119,57 @@ struct SeededRNG: RandomNumberGenerator {
     }
 }
 
-/// 앱에 담은 그림(무늬·하늘)을 재질로
+/// 앱에 담은 그림(무늬·하늘)을 재질로. 한 번 읽은 그림은 다시 읽지 않음(모든 방이 같이 씀)
 @MainActor
 enum Tex {
     private static var cache: [String: TextureResource] = [:]
+    private static var missing: Set<String> = []
 
-    static func get(_ name: String, folder: String = "tex") -> TextureResource? {
+    static func get(_ name: String, folder: String = "tex", raw: Bool = false) -> TextureResource? {
         let key = folder + "/" + name
         if let t = cache[key] { return t }
-        guard let url = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: folder),
-              let img = UIImage(contentsOfFile: url.path), let cg = img.cgImage,
-              let t = try? TextureResource.generate(from: cg, options: .init(semantic: .color)) else { return nil }
+        if missing.contains(key) { return nil }
+        let url = Bundle.main.url(forResource: name, withExtension: "jpg", subdirectory: folder)
+            ?? Bundle.main.url(forResource: name, withExtension: "png", subdirectory: folder)
+        guard let url, let img = UIImage(contentsOfFile: url.path), let cg = img.cgImage,
+              let t = try? TextureResource.generate(from: cg, options: .init(semantic: raw ? .raw : .color)) else {
+            missing.insert(key)
+            return nil
+        }
         cache[key] = t
         return t
     }
 
-    /// 반복해서 까는 무늬용 (가장자리에서 되풀이)
-    static let tiling: MaterialParameters.Texture.Sampler = {
+    static func has(_ name: String, folder: String = "tex") -> Bool { cache[folder + "/" + name] != nil }
+
+    /// 미리 읽어 두기: 한 장 읽고 한 프레임 쉬어서 화면이 멈추지 않게 (방에 들어갈 때 기다리지 않도록)
+    static func preload(_ list: [(String, String)]) async {
+        for (name, folder) in list where !has(name, folder: folder) && !missing.contains(folder + "/" + name) {
+            _ = get(name, folder: folder)
+            try? await Task.sleep(for: .milliseconds(12))
+            // 오려 내기 그림이면 가림 그림도 (없으면 그냥 넘어감)
+            if folder == "tex", Bundle.main.url(forResource: name + "_a", withExtension: "png", subdirectory: folder) != nil {
+                _ = get(name + "_a", folder: folder, raw: true)
+                try? await Task.sleep(for: .milliseconds(6))
+            }
+        }
+    }
+
+    private static func sampler(_ s: MTLSamplerAddressMode, _ t: MTLSamplerAddressMode) -> MaterialParameters.Texture.Sampler {
         let d = MTLSamplerDescriptor()
         d.minFilter = .linear
         d.magFilter = .linear
         d.mipFilter = .linear
-        d.sAddressMode = .repeat
-        d.tAddressMode = .repeat
-        d.maxAnisotropy = 4
+        d.sAddressMode = s
+        d.tAddressMode = t
+        d.maxAnisotropy = 8
         return MaterialParameters.Texture.Sampler(d)
-    }()
+    }
+    /// 반복해서 까는 무늬용 (가장자리에서 되풀이)
+    static let tiling = sampler(.repeat, .repeat)
+    /// 가로로만 되풀이 (지평선 띠·담장: 위아래가 이어지면 위 끝에 줄이 생김)
+    static let band = sampler(.repeat, .clampToEdge)
+    static let clamp = sampler(.clampToEdge, .clampToEdge)
 
     static func color(_ v: SIMD3<Float>, alpha: CGFloat = 1) -> UIColor {
         UIColor(red: CGFloat(min(1, max(0, v.x))), green: CGFloat(min(1, max(0, v.y))), blue: CGFloat(min(1, max(0, v.z))), alpha: alpha)
@@ -152,12 +177,30 @@ enum Tex {
 
     /// 빛을 받지 않는(조명 계산 없이 그대로 보이는) 재질. tint로 시간·날씨·그늘을 곱함
     static func unlit(_ name: String, tint: SIMD3<Float>, folder: String = "tex", tiled: Bool = true) -> UnlitMaterial {
+        unlit(name, tint: tint, folder: folder, sampler: tiled ? tiling : band)
+    }
+
+    static func unlit(_ name: String, tint: SIMD3<Float>, folder: String, sampler: MaterialParameters.Texture.Sampler) -> UnlitMaterial {
         var m = UnlitMaterial(color: color(tint))
         if let t = get(name, folder: folder) {
             var p = MaterialParameters.Texture(t)
-            if tiled { p.sampler = tiling }
+            p.sampler = sampler
             m.color = .init(tint: color(tint), texture: p)
         }
+        return m
+    }
+
+    /// 투명한 곳을 오려 내는 재질 (나무·담장·지평선 띠): 반투명 겹침 순서 문제 없이 윤곽만 남김
+    static func cutout(_ name: String, tint: SIMD3<Float>, sampler: MaterialParameters.Texture.Sampler = band) -> UnlitMaterial {
+        var m = unlit(name, tint: tint, folder: "tex", sampler: sampler)
+        if let mask = get(name + "_a", folder: "tex", raw: true) {
+            var p = MaterialParameters.Texture(mask)
+            p.sampler = sampler
+            m.blending = .transparent(opacity: .init(scale: 1, texture: p))
+        } else {
+            m.blending = .transparent(opacity: .init(floatLiteral: 1))
+        }
+        m.opacityThreshold = 0.5
         return m
     }
 }

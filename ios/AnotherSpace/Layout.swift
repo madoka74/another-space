@@ -197,6 +197,29 @@ struct Layout: Sendable {
         return best
     }
 
+    /// 서로 맞닿거나(문·통로 포함) 벽 하나(30cm 안)를 사이에 둔 방들
+    func neighbors() -> [Int: Set<Int>] {
+        var out: [Int: Set<Int>] = [:]
+        let gap = 6                                            // 30cm
+        for v in 0..<H {
+            for u in 0..<W where walk[v * W + u] != 0 {
+                let a = Int(owner[v * W + u])
+                for (du, dv) in [(1, 0), (0, 1)] {
+                    for k in 1...gap {
+                        let uu = u + du * k, vv = v + dv * k
+                        guard uu < W, vv < H else { break }
+                        let j = vv * W + uu
+                        if walk[j] == 0 { continue }
+                        let b = Int(owner[j])
+                        if b != a && b != 0 && a != 0 { out[a, default: []].insert(b); out[b, default: []].insert(a) }
+                        break
+                    }
+                }
+            }
+        }
+        return out
+    }
+
     /// 방 r이 차지하는 칸(문·통로 포함)을 직사각형들로 (평면 좌표 m)
     func rects(_ room: Int) -> [(SIMD2<Float>, SIMD2<Float>)] {
         var used = [Bool](repeating: false, count: W * H)

@@ -240,7 +240,7 @@ final class ScanSession {
         }
     }
 
-    /// 안내판: 내 앞 조금 아래, 몸을 크게 돌릴 때만 느슨하게 따라옴
+    /// 안내판: 정면을 가리지 않게 오른쪽 옆(약 50°)에 두고, 고개·몸을 돌리면 부드럽게 따라옴. 늘 나를 바라봄
     private func placeHud(_ dt: Float) {
         guard let hud else { return }
         var f = SIMD3<Float>(fwd.x, 0, fwd.z)
@@ -250,11 +250,13 @@ final class ScanSession {
         var dy = yaw - hudYaw
         while dy > .pi { dy -= 2 * .pi }
         while dy < -.pi { dy += 2 * .pi }
-        if !hudPlaced { hudYaw = yaw; hudPlaced = true } else if abs(dy) > 0.5 { hudYaw += dy * min(1, dt * 2.5) }
-        let q = simd_quatf(angle: hudYaw, axis: [0, 1, 0])
-        let target = head + q.act(SIMD3<Float>(0, -0.32, -0.95))
+        if !hudPlaced { hudYaw = yaw; hudPlaced = true } else { hudYaw += dy * min(1, dt * 2.2) }
+        let side = hudYaw - 0.87                                  // 오른쪽으로 50°
+        let dir = SIMD3<Float>(-sin(side), 0, -cos(side))
+        let target = head + dir * 0.85 + SIMD3<Float>(0, -0.18, 0)
         hud.position = hud.position + (target - hud.position) * min(1, dt * 4)
-        hud.orientation = q
+        let to = head - hud.position
+        hud.orientation = simd_quatf(angle: atan2(to.x, to.z), axis: [0, 1, 0])
     }
 
     func cancel() {

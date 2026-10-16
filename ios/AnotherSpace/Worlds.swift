@@ -9,18 +9,19 @@ struct AxisItem: Hashable {
 
 /// 장소마다 어떻게 보일지
 struct WorldStyle {
-    enum Skyline { case pines, trees, cliffs, sea, hills, city, lowCity, none }
-    let floor: String               // 바닥 무늬 (Resources/tex)
-    let wall: String                // 벽 무늬
-    let prop: String                // 가구·물건 무늬
-    let floorTint: SIMD3<Float>
-    let wallTint: SIMD3<Float>
-    let propTint: SIMD3<Float>
+    let floor: String               // 방 바닥 무늬 (tex)
     let floorTile: Float            // 무늬 한 장이 덮는 길이(m)
+    let wall: String                // 실내 장소의 벽 무늬 (바깥 장소는 벽이 트인 풍경 + 울타리)
     let wallTile: Float
+    let prop: String                // 가구·물건 무늬
     let propTile: Float
-    let ground: SIMD3<Float>        // 창 너머·지평선 아래 땅 색
-    let skyline: Skyline            // 벽 너머로 보이는 것 (천장·창으로)
+    let propTint: SIMD3<Float>
+    let open: Bool                  // 바깥 장소: 벽 자리에 울타리·덤불·바위를 세우고 그 너머 풍경이 보임
+    let barrier: String             // 울타리 그림 (open일 때)
+    let barrierH: Float             // 울타리 높이(m)
+    let ground: String              // 바깥 땅 무늬 (창·벽 너머)
+    let groundTile: Float
+    let groundFar: SIMD3<Float>     // 멀리 땅 색
     let skylight: Bool              // 실내 장소: 천장에 유리 지붕 틀
 }
 
@@ -97,91 +98,142 @@ enum Worlds {
         let w: SIMD3<Float> = [1, 1, 1]
         switch place {
         case "camp":
-            return WorldStyle(floor: "grass", wall: "forest", prop: "bark", floorTint: w, wallTint: w, propTint: w,
-                              floorTile: 1.6, wallTile: 2.4, propTile: 0.8, ground: [0.18, 0.27, 0.13], skyline: .pines, skylight: false)
+            return WorldStyle(floor: "grass", floorTile: 1.8, wall: "", wallTile: 1, prop: "bark", propTile: 0.8, propTint: w,
+                              open: true, barrier: "barrier_camp", barrierH: 1.3, ground: "grass", groundTile: 2.2,
+                              groundFar: [0.20, 0.30, 0.14], skylight: false)
         case "forest":
-            return WorldStyle(floor: "moss", wall: "forest", prop: "rock", floorTint: w, wallTint: [0.9, 1, 0.9], propTint: [0.75, 0.9, 0.7],
-                              floorTile: 1.4, wallTile: 2.0, propTile: 0.9, ground: [0.14, 0.24, 0.11], skyline: .trees, skylight: false)
+            return WorldStyle(floor: "moss", floorTile: 1.6, wall: "", wallTile: 1, prop: "mossrock", propTile: 0.9, propTint: w,
+                              open: true, barrier: "barrier_forest", barrierH: 1.7, ground: "moss", groundTile: 2.0,
+                              groundFar: [0.13, 0.20, 0.10], skylight: false)
         case "valley":
-            return WorldStyle(floor: "pebble", wall: "cliff", prop: "rock", floorTint: w, wallTint: w, propTint: [0.95, 0.92, 0.88],
-                              floorTile: 1.2, wallTile: 3.0, propTile: 0.9, ground: [0.34, 0.31, 0.27], skyline: .cliffs, skylight: false)
+            return WorldStyle(floor: "pebble", floorTile: 1.4, wall: "", wallTile: 1, prop: "rock", propTile: 0.9, propTint: w,
+                              open: true, barrier: "barrier_valley", barrierH: 3.2, ground: "pebble", groundTile: 1.8,
+                              groundFar: [0.40, 0.37, 0.32], skylight: false)
         case "sea":
-            return WorldStyle(floor: "sand", wall: "basalt", prop: "rock", floorTint: w, wallTint: w, propTint: [0.92, 0.9, 0.84],
-                              floorTile: 1.8, wallTile: 2.2, propTile: 0.9, ground: [0.10, 0.22, 0.32], skyline: .sea, skylight: false)
+            return WorldStyle(floor: "sand", floorTile: 2.0, wall: "", wallTile: 1, prop: "driftwood", propTile: 0.9, propTint: w,
+                              open: true, barrier: "barrier_sea", barrierH: 1.1, ground: "sand", groundTile: 2.4,
+                              groundFar: [0.12, 0.30, 0.40], skylight: false)
         case "village":
-            return WorldStyle(floor: "dirt", wall: "stonewall", prop: "hay", floorTint: w, wallTint: w, propTint: w,
-                              floorTile: 1.6, wallTile: 1.6, propTile: 0.8, ground: [0.28, 0.34, 0.18], skyline: .hills, skylight: false)
+            return WorldStyle(floor: "dirt", floorTile: 1.8, wall: "", wallTile: 1, prop: "hay", propTile: 0.8, propTint: w,
+                              open: true, barrier: "barrier_village", barrierH: 1.5, ground: "grass", groundTile: 2.2,
+                              groundFar: [0.30, 0.38, 0.18], skylight: false)
         case "city":
-            return WorldStyle(floor: "asphalt", wall: time == "night" || time == "dawn" ? "facade_night" : "facade", prop: "concrete",
-                              floorTint: w, wallTint: w, propTint: w,
-                              floorTile: 2.0, wallTile: 2.4, propTile: 1.0, ground: [0.22, 0.22, 0.24], skyline: .city, skylight: false)
+            return WorldStyle(floor: "roof", floorTile: 2.4, wall: "", wallTile: 1, prop: "concrete", propTile: 1.0, propTint: w,
+                              open: true, barrier: "barrier_city", barrierH: 1.15, ground: "roof", groundTile: 2.4,
+                              groundFar: [0.16, 0.16, 0.18], skylight: false)
         case "cafe":
-            return WorldStyle(floor: "planks", wall: "brick", prop: "planks", floorTint: w, wallTint: w, propTint: [0.85, 0.8, 0.75],
-                              floorTile: 1.6, wallTile: 1.4, propTile: 0.8, ground: [0.22, 0.22, 0.24], skyline: .lowCity, skylight: true)
+            return WorldStyle(floor: "planks_dark", floorTile: 1.6, wall: "brick", wallTile: 1.6, prop: "planks", propTile: 0.8,
+                              propTint: [0.9, 0.82, 0.74], open: false, barrier: "", barrierH: 0, ground: "roof", groundTile: 2.4,
+                              groundFar: [0.20, 0.20, 0.22], skylight: true)
         case "gallery":
-            return WorldStyle(floor: "marble", wall: "plaster", prop: "marble", floorTint: w, wallTint: w, propTint: w,
-                              floorTile: 2.0, wallTile: 2.0, propTile: 1.0, ground: [0.28, 0.30, 0.26], skyline: .none, skylight: true)
+            return WorldStyle(floor: "marble", floorTile: 2.0, wall: "plaster", wallTile: 2.0, prop: "marble", propTile: 1.0, propTint: w,
+                              open: false, barrier: "", barrierH: 0, ground: "grass", groundTile: 2.2,
+                              groundFar: [0.26, 0.32, 0.20], skylight: true)
         default:   // home: 숲속 통나무집
-            return WorldStyle(floor: "planks", wall: "timber", prop: "bark", floorTint: [0.95, 0.9, 0.85], wallTint: w, propTint: w,
-                              floorTile: 1.6, wallTile: 1.8, propTile: 0.8, ground: [0.16, 0.26, 0.12], skyline: .trees, skylight: true)
+            return WorldStyle(floor: "planks", floorTile: 1.6, wall: "timber", wallTile: 1.8, prop: "bark", propTile: 0.8, propTint: w,
+                              open: false, barrier: "", barrierH: 0, ground: "moss", groundTile: 2.0,
+                              groundFar: [0.14, 0.22, 0.11], skylight: true)
         }
     }
 
-    /// 시간에 따른 밝기·색 (실내 장소는 밤·새벽·해질녘에 따뜻한 등불 빛)
+    /// 시간에 따른 빛 색·밝기 — 새벽은 푸르스름한 보랏빛, 아침은 금빛, 해질녘은 짙은 주황, 밤은 달빛(바깥)·등불(실내)
     static func timeTint(_ time: String, indoor: Bool) -> SIMD3<Float> {
         switch time {
-        case "dawn": return indoor ? [0.62, 0.55, 0.5] : [0.6, 0.6, 0.8]
-        case "morning": return [1.0, 0.95, 0.87]
-        case "dusk": return indoor ? [0.92, 0.72, 0.55] : [0.95, 0.70, 0.55]
-        case "night": return indoor ? [0.58, 0.46, 0.34] : [0.36, 0.39, 0.56]
-        default: return [1, 1, 1]
+        case "dawn": return indoor ? [0.66, 0.58, 0.58] : [0.58, 0.55, 0.80]
+        case "morning": return [1.06, 0.94, 0.78]
+        case "dusk": return indoor ? [1.0, 0.70, 0.50] : [1.06, 0.62, 0.40]
+        case "night": return indoor ? [0.66, 0.50, 0.34] : [0.30, 0.37, 0.62]
+        default: return [1.02, 1.0, 0.96]
         }
+    }
+
+    /// 먼 풍경이 물드는 지평선 빛 (하늘 그림의 지평선 색과 맞춤). 비·눈·흐림이면 잿빛으로
+    static func haze(_ time: String, weather: String) -> SIMD3<Float> {
+        var h: SIMD3<Float>
+        switch time {
+        case "dawn": h = [0.95, 0.70, 0.66]
+        case "morning": h = [1.0, 0.92, 0.80]
+        case "dusk": h = [1.0, 0.56, 0.32]
+        case "night": h = [0.16, 0.22, 0.38]
+        default: h = [0.80, 0.88, 0.98]
+        }
+        let gray: Float
+        switch weather {
+        case "cloudy": gray = 0.3
+        case "drizzle", "snow": gray = 0.6
+        case "rain", "heavysnow": gray = 0.75
+        case "storm": gray = 0.9
+        default: gray = 0
+        }
+        let lum = (h.x + h.y + h.z) / 3
+        let g = SIMD3<Float>(repeating: lum * 0.85) * (weather == "storm" ? 0.6 : 1)
+        return h * (1 - gray) + g * gray
+    }
+
+    /// 해를 받는 정도별 밝기 (해 쪽, 옆, 그늘). 해가 낮은 새벽·해질녘은 대비가 크고, 밤·흐린 날은 작음
+    static func contrast(_ time: String, weather: String) -> [Float] {
+        var lv: [Float]
+        switch time {
+        case "dawn", "dusk": lv = [1.0, 0.70, 0.48]
+        case "morning": lv = [1.0, 0.80, 0.60]
+        case "night": lv = [1.0, 0.90, 0.80]
+        default: lv = [1.0, 0.84, 0.68]
+        }
+        if !["clear", "wind"].contains(weather) { lv = lv.map { 1 - (1 - $0) * 0.45 } }
+        return lv
+    }
+
+    /// 안전: 밤·폭우라도 바닥·울타리·가구는 알아볼 만큼 밝게
+    static func safe(_ c: SIMD3<Float>, min m: Float = 0.34) -> SIMD3<Float> {
+        let l = max(c.x, max(c.y, c.z))
+        return l >= m ? c : c * (m / max(l, 0.01))
     }
 
     static func weatherDim(_ w: String) -> Float {
         switch w {
         case "wind": return 0.97
-        case "cloudy": return 0.85
-        case "drizzle": return 0.8
-        case "rain": return 0.72
-        case "storm": return 0.56
+        case "cloudy": return 0.86
+        case "drizzle": return 0.78
+        case "rain": return 0.7
+        case "storm": return 0.52
         case "snow": return 0.92
-        case "heavysnow": return 0.86
+        case "heavysnow": return 0.84
         default: return 1
         }
     }
 
-    /// 하늘 그림 이름 (Resources/sky)
+    /// 하늘 그림 이름 (sky/)
     static func skyName(time: String, weather: String) -> String {
         let cond: String
         switch weather {
         case "clear", "wind": cond = "clear"
+        case "cloudy": cond = "cloudy"
         case "storm": cond = "storm"
         default: cond = "overcast"
         }
         return "sky_\(time)_\(cond)"
     }
 
-    /// 하늘에 띄울 구름 수
+    /// 하늘을 흐르는 구름 조각 수 (하늘 그림에 구름이 이미 있어서 움직임만 더함)
     static func cloudCount(_ w: String) -> Int {
         switch w {
-        case "clear": return 2
-        case "wind": return 6
-        case "cloudy": return 12
-        case "storm": return 14
-        default: return 9
+        case "clear": return 0
+        case "wind": return 4
+        case "cloudy": return 6
+        case "storm": return 6
+        default: return 4
         }
     }
 
-    /// 하늘 그림의 해·달 방향 (tools/make_assets.py 와 같음: 방위 135°) — 면 밝기(그늘)에 씀
+    /// 하늘 그림의 해·달 방향 (tools/make_assets.py 와 같음: 방위 135°, 고도도 같게) — 면 밝기(그늘)에 씀
     static func sunDir(_ time: String) -> SIMD3<Float> {
         let el: Float
         switch time {
-        case "dawn": el = 10
-        case "morning": el = 24
+        case "dawn": el = 4
+        case "morning": el = 20
         case "afternoon": el = 58
-        case "dusk": el = 8
-        default: el = 38
+        case "dusk": el = 5
+        default: el = 34
         }
         let az: Float = 135 * .pi / 180, e = el * .pi / 180
         return simd_normalize(SIMD3<Float>(cos(e) * cos(az), sin(e), cos(e) * sin(az)))

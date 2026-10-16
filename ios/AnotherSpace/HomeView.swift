@@ -230,7 +230,7 @@ private struct SafetySheet: View {
                 Label("바닥에 걸려 넘어질 물건(가방·전선·장난감)을 치워 주세요. 낮고 작은 물건은 잘 안 보일 수 있어요.", systemImage: "shippingbox")
                 Label("집에 혼자 있을 때 써 주세요. 움직이는 사람·반려동물은 다른 세계에 가려 안 보일 수 있어요.", systemImage: "person.2.slash")
                 Label("천천히 걸어 주세요. 빠르게 움직이거나 스캔하지 않은 곳에 들어가면 현실이 다시 보여요.", systemImage: "figure.walk")
-                Label("벽은 언제나 지나갈 수 없는 모양(숲·절벽·건물)으로 보여요. 열린 길처럼 보이는 곳만 걸어요.", systemImage: "rectangle.portrait.on.rectangle.portrait")
+                Label("벽 자리에는 언제나 울타리·덤불·바위·난간이나 실내 벽이 서 있어요. 그 너머 풍경은 바라보기만 하고, 울타리 안쪽만 걸어요.", systemImage: "rectangle.portrait.on.rectangle.portrait")
                 Label("아래를 내려다보면 나가기 버튼이 있어요. 디지털 크라운을 눌러도 바로 나와요.", systemImage: "arrow.down.circle")
             }
             .font(.title3)
