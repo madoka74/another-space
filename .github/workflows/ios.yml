@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['ios/**', 'version.json', '.github/workflows/ios.yml']
+    paths: ['ios/**', 'tools/**', 'version.json', '.github/workflows/ios.yml']
 concurrency: { group: ios, cancel-in-progress: true }
 jobs:
   vision:
@@ -41,6 +41,14 @@ jobs:
         run: |
           npm install -g wrangler@4 > /dev/null 2>&1
           python3 tools/fetch_sounds.py
+      - name: 그림 재료 만들기 (하늘·풍경·울타리·나무·바닥 무늬)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q numpy pillow
+          rm -rf ios/AnotherSpace/Resources/tex ios/AnotherSpace/Resources/sky
+          "$RUNNER_TEMP/venv/bin/python" tools/make_assets.py
+          echo "tex: $(ls ios/AnotherSpace/Resources/tex | wc -l)개, sky: $(ls ios/AnotherSpace/Resources/sky | wc -l)개"
+          du -sh ios/AnotherSpace/Resources/*
       - name: XcodeGen으로 프로젝트 만들기
         run: |
           brew install xcodegen
