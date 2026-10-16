@@ -295,9 +295,9 @@ final class AmbientPlayer {
 
     private func resource(_ u: URL, loop: Bool) -> AudioFileResource? {
         if let r = res[u] { return r }
-        let r = try? AudioFileResource.load(contentsOf: u, withName: nil,
-                                            inputMode: loop ? .nonSpatial : .spatial,
-                                            loadingStrategy: loop ? .stream : .preload, shouldLoop: loop)
+        // 머리에 붙은 소리인지(ChannelAudioComponent) 그 자리 소리인지(SpatialAudioComponent)는 재생하는 엔티티 쪽에서 정함
+        let cfg = AudioFileResource.Configuration(loadingStrategy: loop ? .stream : .preload, shouldLoop: loop)
+        let r = try? AudioFileResource.load(contentsOf: u, withName: nil, configuration: cfg)
         if let r { res[u] = r }
         return r
     }
