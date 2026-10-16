@@ -1,0 +1,76 @@
+# 비전프로 앱 빌드 → TestFlight 업로드
+# ios/ 파일이나 version.json 을 GitHub에 올리면 자동으로 돌고, Actions 탭에서 'Run workflow'로 직접 돌릴 수도 있음.
+# 필요한 저장소 Secrets: APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8, SIGN_P12, SIGN_P12_PASSWORD (다른 앱과 같은 값)
+name: visionOS TestFlight
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['ios/**', 'version.json', '.github/workflows/ios.yml']
+concurrency: { group: ios, cancel-in-progress: true }
+jobs:
+  vision:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: latest-stable }
+      - name: 비전프로(visionOS) 빌드 도구 확인
+        run: |
+          if xcodebuild -showsdks | grep -q xros; then echo "visionOS SDK 있음"; else xcodebuild -downloadPlatform visionOS; fi
+      - name: XcodeGen으로 프로젝트 만들기
+        run: |
+          brew install xcodegen
+          cd ios && xcodegen generate
+      - name: App Store Connect API 키 준비
+        env: { ASC_KEY_P8: '${{ secrets.ASC_KEY_P8 }}' }
+        run: |
+          mkdir -p "$RUNNER_TEMP/keys"
+          printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/keys/AuthKey.p8"
+      - name: 고정 서명 인증서 넣기 (SIGN_P12가 있을 때만)
+        env:
+          P12: ${{ secrets.SIGN_P12 }}
+          PW: ${{ secrets.SIGN_P12_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "SIGN_P12 없음: 빌드마다 새 개발 인증서가 만들어집니다"; exit 0; fi
+          KC="$RUNNER_TEMP/sign.keychain-db"
+          security create-keychain -p tmp "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p tmp "$KC"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/sign.p12"
+          security import "$RUNNER_TEMP/sign.p12" -k "$KC" -P "$PW" -A -t cert -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -k tmp "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$KC"
+      - name: 비전프로 빌드(아카이브)
+        env:
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          KID: ${{ secrets.ASC_KEY_ID }}
+          ISS: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          VER=$(python3 -c "import json;print(json.load(open('version.json'))['version'])")
+          BUILD=$(( ${{ github.run_number }} + 100 ))
+          xcodebuild -project ios/AnotherSpace.xcodeproj -scheme AnotherSpace -configuration Release \
+            -destination 'generic/platform=visionOS' -archivePath "$RUNNER_TEMP/AnotherSpace.xcarchive" archive \
+            DEVELOPMENT_TEAM="$TEAM" MARKETING_VERSION="$VER" CURRENT_PROJECT_VERSION="$BUILD" \
+            -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KID" -authenticationKeyIssuerID "$ISS" 2>&1 | tee "$RUNNER_TEMP/build.log" | tail -n 60
+          test -d "$RUNNER_TEMP/AnotherSpace.xcarchive"
+      - name: 실패하면 오류 줄만 모아 보기
+        if: failure()
+        run: |
+          echo "===== 오류 (error:) ====="
+          grep -n -E "error:|ARCHIVE FAILED|Code Signing|requires a provisioning profile" "$RUNNER_TEMP/build.log" | grep -v "warning:" | head -60 || true
+      - name: TestFlight로 올리기
+        env:
+          TEAM: ${{ secrets.APPLE_TEAM_ID }}
+          KID: ${{ secrets.ASC_KEY_ID }}
+          ISS: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          sed "s/TEAM_ID/$TEAM/" ios/ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/AnotherSpace.xcarchive" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/out" \
+            -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+            -authenticationKeyID "$KID" -authenticationKeyIssuerID "$ISS"
