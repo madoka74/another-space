@@ -269,9 +269,6 @@ final class ExploreSession {
     @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var openProg: [Int: Float] = [:]             // 여는 움직임 진행 (0~1)
     @ObservationIgnored private var animRoom: [Int: Int] = [:]               // 열기 시작한 쪽 방
-    @ObservationIgnored private var lockedAnim: Set<Int> = []                // 실제 문이 닫혀 있어 안 열리는 움직임 중
-    @ObservationIgnored private var notice: String?                          // 잠깐 보이는 안내
-    @ObservationIgnored private var noticeUntil: Float = 0
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -636,8 +633,7 @@ final class ExploreSession {
         }
         if fit != nil {
             let total = data?.rec.rooms.count ?? 0
-            if notice != nil && t > noticeUntil { notice = nil }
-            let msg = ready ? (why ?? notice ?? player.status) : "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
+            let msg = ready ? (why ?? player.status) : "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
             if msg != message { message = msg }
         }
 
@@ -723,27 +719,28 @@ final class ExploreSession {
                     }
                 }
             }
-            // 열쇠 움직임: 열림(1.1초) / 실제 문이 닫혀 있어 안 열림(1.6초)
-            let locked = lockedAnim.contains(i)
+            // 열쇠 움직임 (1.1초): 열쇠가 구멍으로 → 돌고 → 문짝이 양옆 벽 속으로.
+            // 실제 문이 닫혀 있으면 마법 문이 열린 뒤 그 자리에 실제 닫힌 문(손잡이 문)이 보이고, 실제 문을 열면 저쪽 공간이 보임
             var prog = openProg[i]
             if var pr = prog {
-                pr += dt / (locked ? 1.6 : 1.1)
+                pr += dt / 1.1
                 if pr >= 1 {
                     openProg[i] = nil
                     prog = nil
-                    lockedAnim.remove(i)
-                    if !locked { doorOpen.insert(i); doorShow[i] = 0 }
+                    doorOpen.insert(i)
+                    doorShow[i] = 0
                 } else {
                     openProg[i] = pr
                     prog = pr
                 }
             }
             // 문 자리가 '이 방의 벽'으로 막혀 있는지 (같은 세계면 늘 열림)
-            let closed = !same && !doorOpen.contains(i) && (locked || (prog ?? 0) < 0.4)
+            let closed = !same && !doorOpen.contains(i) && (prog ?? 0) < 0.4
             for rid in [ds.roomA, ds.roomB] {
                 for e in worlds[rid]?.doorPanels[i] ?? [] where e.isEnabled != closed { e.isEnabled = closed }
             }
-            // 실제 문짝: 실제 문이 닫혀 있고, 1m 안이고, 문 자리가 뚫려 있을 때만 (멀리선 안 보임)
+            // 실제 닫힌 문(손잡이 문): 실제 문이 닫혀 있고, 1m 안이고, 문 자리가 '이 방의 벽'으로 막혀 있지 않을 때만.
+            // 같은 세계면 1m 안에서 바로, 다른 세계면 열쇠로 연 뒤에. 멀리선 안 보임(같은 세계는 저쪽 공간이 보임)
             if let leaf = worlds[ds.roomA]?.doorLeaf[i] {
                 let on = realClosed.contains(i) && near && !closed
                 if leaf.isEnabled != on { leaf.isEnabled = on }
@@ -764,13 +761,13 @@ final class ExploreSession {
                 v.root.components.set(OpacityComponent(opacity: o))
                 if glowMat == nil { glowMat = RoomWorld.gold(rough: 0.22, glow: 0.2 + 2.2 * breath) }
                 if let gm = glowMat { for e in v.parts { e.model?.materials = [gm] } }
-                Self.pose(v, prog: rid == showRoom ? prog : nil, locked: locked, t: t)
+                Self.pose(v, prog: rid == showRoom ? prog : nil, t: t)
             }
         }
     }
 
-    /// 문 모양 맞추기: prog nil = 닫혀서 열쇠가 떠 있음, 0~1 = 열쇠 움직이는 중 (locked: 실제 문이 닫혀 있어 안 열림)
-    static func pose(_ v: DoorView, prog: Float?, locked: Bool, t: Float) {
+    /// 문 모양 맞추기: prog nil = 닫혀서 열쇠가 떠 있음, 0~1 = 열쇠로 여는 중
+    static func pose(_ v: DoorView, prog: Float?, t: Float) {
         func ease(_ x: Float) -> Float { let c = min(1, max(0, x)); return c * c * (3 - 2 * c) }
         v.left.position = [-v.hl, 0, 0]; v.right.position = [v.hl, 0, 0]
         guard let p = prog else {
@@ -786,21 +783,6 @@ final class ExploreSession {
         v.key.position = .zero
         v.key.orientation = simd_quatf(angle: 0, axis: [0, 1, 0])
         let insertZ: Float = 0.045 + 0.075                                     // 열쇠 끝이 구멍에 닿는 곳
-        if locked {
-            // 0~0.2 구멍으로 / 0.2~0.35 돌리려다 걸림 / 0.35~0.6 문짝이 덜컹 / 0.6~1 열쇠가 빠져나와 다시 떠 있음
-            let a = ease(p / 0.2) * (1 - ease((p - 0.6) / 0.4))
-            let tw = Float.pi / 7 * sin(min(1, max(0, (p - 0.2) / 0.15)) * .pi)
-            v.keyRoot.position = [0, DoorView.keyY, DoorView.keyZ + (insertZ - DoorView.keyZ) * a]
-            v.keyRoot.orientation = simd_quatf(angle: tw, axis: [0, 0, 1]) * simd_quatf(angle: .pi / 2 * a, axis: [0, 1, 0])
-            if p > 0.35 && p < 0.6 {
-                let j = 0.004 * sin(t * 70) * (1 - (p - 0.35) / 0.25)
-                v.left.position = [-v.hl + j, 0, 0]; v.right.position = [v.hl - j, 0, 0]
-            }
-            v.left.scale = [1, 1, 1]; v.right.scale = [1, 1, 1]
-            v.keyRoot.components.set(OpacityComponent(opacity: 1))
-            v.lock.components.set(OpacityComponent(opacity: 1))
-            return
-        }
         // 0~0.25: 열쇠가 문 쪽으로 돌아서며 구멍으로 / 0.25~0.4: 한 바퀴 돌림 / 0.4~1: 문짝이 양옆 벽 속으로, 열쇠·구멍은 사라짐
         let a = ease(p / 0.25), b = ease((p - 0.25) / 0.15), c = ease((p - 0.4) / 0.6)
         v.keyRoot.position = [0, DoorView.keyY, DoorView.keyZ + (insertZ - DoorView.keyZ) * a]
@@ -854,12 +836,6 @@ final class ExploreSession {
                         doorSide[i] = side
                         animRoom[i] = side >= 0 ? ds.roomA : ds.roomB
                         openProg[i] = 0                                 // 열쇠가 들어가고 문이 열리는 움직임 시작
-                        if realClosed.contains(i) {
-                            // 실제 문이 닫혀 있으면 안 열림: 열쇠가 걸리고 문짝이 덜컹 + 안내
-                            lockedAnim.insert(i)
-                            notice = "실제 문이 닫혀 있어요. 손으로 문을 연 뒤 다시 열쇠를 눌러 주세요."
-                            noticeUntil = t + 4
-                        }
                     }
                 }
                 return
