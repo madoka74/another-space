@@ -1,0 +1,590 @@
+[
+{
+"id": "aic100191",
+"a": "Claude Monet",
+"t": "Stack of Wheat (Thaw, Sunset)",
+"img": "https://www.artic.edu/iiif/2/8bd40b36-43ea-8b02-d76a-b325962b86db/full/843,/0/default.jpg"
+},
+{
+"id": "aic103139",
+"a": "Claude Monet",
+"t": "Waterloo Bridge, Gray Weather",
+"img": "https://www.artic.edu/iiif/2/6f61a6fc-dcd8-e801-0ad8-5f7e561d91b6/full/843,/0/default.jpg"
+},
+{
+"id": "met437104",
+"a": "Claude Monet",
+"t": "Dr. Leclenché",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d2/Dr._Leclench%C3%A9_MET_DT1900.jpg/960px-Dr._Leclench%C3%A9_MET_DT1900.jpg"
+},
+{
+"id": "met437107",
+"a": "Claude Monet",
+"t": "Landscape: The Parc Monceau",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b7/Claude_Monet_-_Landscape%2C_The_Parc_Monceau.jpg/960px-Claude_Monet_-_Landscape%2C_The_Parc_Monceau.jpg"
+},
+{
+"id": "met437109",
+"a": "Claude Monet",
+"t": "The Seine at Vétheuil",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/78/The_Seine_at_V%C3%A9theuil_MET_DT1886.jpg/960px-The_Seine_at_V%C3%A9theuil_MET_DT1886.jpg"
+},
+{
+"id": "aic109314",
+"a": "Vincent van Gogh",
+"t": "Fishing in Spring, the Pont de Clichy (Asnières)",
+"img": "https://www.artic.edu/iiif/2/5512cee9-6d00-d01b-b0be-ac7843cc8f76/full/843,/0/default.jpg"
+},
+{
+"id": "aic14586",
+"a": "Vincent van Gogh",
+"t": "The Poet's Garden",
+"img": "https://www.artic.edu/iiif/2/d4bc1723-7cbc-d36d-a9cb-f84553f2a6f6/full/843,/0/default.jpg"
+},
+{
+"id": "met436524",
+"a": "Vincent van Gogh",
+"t": "Sunflowers",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8d/Two_sunflowers.jpg/960px-Two_sunflowers.jpg"
+},
+{
+"id": "met436525",
+"a": "Vincent van Gogh",
+"t": "Bouquet of Flowers in a Vase",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Vincent_van_Gogh_-_Boeket_bloemen_in_een_vaas.jpg/960px-Vincent_van_Gogh_-_Boeket_bloemen_in_een_vaas.jpg"
+},
+{
+"id": "met436526",
+"a": "Vincent van Gogh",
+"t": "First Steps, after Millet",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/38/Vincent_van_Gogh_-_First_Steps%2C_after_Millet.jpg/960px-Vincent_van_Gogh_-_First_Steps%2C_after_Millet.jpg"
+},
+{
+"id": "aic100026",
+"a": "Pierre-Auguste Renoir",
+"t": "Studies of Pierre Renoir; His Mother, Aline Charigot; Nudes; and Landscape",
+"img": "https://www.artic.edu/iiif/2/bda9058b-5be6-37d0-e5a6-926584540757/full/843,/0/default.jpg"
+},
+{
+"id": "aic110798",
+"a": "Pierre-Auguste Renoir",
+"t": "Seated Bather",
+"img": "https://www.artic.edu/iiif/2/c867cf86-9ad4-d720-8360-4064c317ab3c/full/843,/0/default.jpg"
+},
+{
+"id": "met437424",
+"a": "Pierre-Auguste Renoir",
+"t": "Madame Édouard Bernier (Marie-Octavie-Stéphanie Laurens, 1838–1920)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Pierre-Auguste_Renoir_-_Madame_%C3%89douard_Bernier.jpg/960px-Pierre-Auguste_Renoir_-_Madame_%C3%89douard_Bernier.jpg"
+},
+{
+"id": "met437425",
+"a": "Pierre-Auguste Renoir",
+"t": "Marguerite-Thérèse (Margot) Berard (1874–1956)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4a/Marguerite-Th%C3%A9r%C3%A8se_%28Margot%29_Berard_%281874%E2%80%931956%29_MET_DT1489.jpg/960px-Marguerite-Th%C3%A9r%C3%A8se_%28Margot%29_Berard_%281874%E2%80%931956%29_MET_DT1489.jpg"
+},
+{
+"id": "met437426",
+"a": "Pierre-Auguste Renoir",
+"t": "View of the Seacoast near Wargemont in Normandy",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/aa/View_of_the_Seacoast_near_Wargemont_in_Normandy_MET_DP136266.jpg/960px-View_of_the_Seacoast_near_Wargemont_in_Normandy_MET_DP136266.jpg"
+},
+{
+"id": "aic95998",
+"a": "Rembrandt",
+"t": "Old Man with a Gold Chain",
+"img": "https://www.artic.edu/iiif/2/3eaab3a3-2b47-9fdd-121c-050f6b8d9ccb/full/843,/0/default.jpg"
+},
+{
+"id": "cma122348",
+"a": "Rembrandt",
+"t": "A Young Man with a Chain",
+"img": "https://openaccess-cdn.clevelandart.org/1942.644/1942.644_web.jpg"
+},
+{
+"id": "met437385",
+"a": "Rembrandt",
+"t": "Man in Oriental Costume (\"The Noble Slav\" or \"Man in a Turban\")",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ed/Man_in_Oriental_Costume%2C_by_Rembrandt_van_Rijn.jpg/960px-Man_in_Oriental_Costume%2C_by_Rembrandt_van_Rijn.jpg"
+},
+{
+"id": "met437386",
+"a": "Rembrandt",
+"t": "Portrait of a Man, probably a Member of the Van Beresteyn Family",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/Rembrandt_-_Portrait_of_a_Man%2C_probably_a_Member_of_the_Van_Beresteyn_Family.jpg/960px-Rembrandt_-_Portrait_of_a_Man%2C_probably_a_Member_of_the_Van_Beresteyn_Family.jpg"
+},
+{
+"id": "met437389",
+"a": "Rembrandt",
+"t": "Bellona",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Bellona%2C_by_Rembrandt_van_Rijn.jpg/960px-Bellona%2C_by_Rembrandt_van_Rijn.jpg"
+},
+{
+"id": "aic23983",
+"a": "Katsushika Hokusai",
+"t": "Monk Selling Ceremonial Tea Whisks",
+"img": "https://www.artic.edu/iiif/2/3a019062-00ff-4efa-d433-5b93257fc31a/full/843,/0/default.jpg"
+},
+{
+"id": "aic33296",
+"a": "Katsushika Hokusai",
+"t": "An Illustrated New Edition of the Water Margin (Shinpen Suikogaden)",
+"img": "https://www.artic.edu/iiif/2/fc890674-a623-68c8-262e-1fc2eb00c44e/full/843,/0/default.jpg"
+},
+{
+"id": "met57261",
+"a": "Katsushika Hokusai",
+"t": "Portrait of the Poet Matsuo Bashō (?)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Katsushika_Hokusai_-_Portrait_of_the_Poet_Matsuo_Bash%C5%8D_%28%5E%29_-_56.121.11_-_Metropolitan_Museum_of_Art.jpg/960px-Katsushika_Hokusai_-_Portrait_of_the_Poet_Matsuo_Bash%C5%8D_%28%5E%29_-_56.121.11_-_Metropolitan_Museum_of_Art.jpg"
+},
+{
+"id": "met57277",
+"a": "Katsushika Hokusai",
+"t": "Daruma (Buddhist Saint)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3d/Katsushika_Hokusai_-_Daruma_%28Buddhist_Saint%29_-_56.121.27_-_Metropolitan_Museum_of_Art.jpg/960px-Katsushika_Hokusai_-_Daruma_%28Buddhist_Saint%29_-_56.121.27_-_Metropolitan_Museum_of_Art.jpg"
+},
+{
+"id": "met57282",
+"a": "Katsushika Hokusai",
+"t": "Benten (Goddess of Love)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1c/Katsushika_Hokusai_-_Benten_%28Goddess_of_Love%29_-_56.121.32_-_Metropolitan_Museum_of_Art.jpg/960px-Katsushika_Hokusai_-_Benten_%28Goddess_of_Love%29_-_56.121.32_-_Metropolitan_Museum_of_Art.jpg"
+},
+{
+"id": "aic109418",
+"a": "Paul Cezanne",
+"t": "Bathers",
+"img": "https://www.artic.edu/iiif/2/5ec2faea-0636-15d9-9c95-2fd89f85196c/full/843,/0/default.jpg"
+},
+{
+"id": "aic111436",
+"a": "Paul Cezanne",
+"t": "The Basket of Apples",
+"img": "https://www.artic.edu/iiif/2/52ac8996-3460-cf71-cb42-5c4d0aa29b74/full/843,/0/default.jpg"
+},
+{
+"id": "met435866",
+"a": "Paul Cezanne",
+"t": "Apples",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fe/Paul_C%C3%A9zanne_-_Apples.jpg/960px-Paul_C%C3%A9zanne_-_Apples.jpg"
+},
+{
+"id": "met435867",
+"a": "Paul Cezanne",
+"t": "Baigneuses (Bathers)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2e/Baigneuses%2C_par_Paul_C%C3%A9zanne%2C_Metropolitan_Museum_of_Art.jpg/960px-Baigneuses%2C_par_Paul_C%C3%A9zanne%2C_Metropolitan_Museum_of_Art.jpg"
+},
+{
+"id": "met435868",
+"a": "Paul Cezanne",
+"t": "The Card Players",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4d/Cezanne_The_Card_Players_Metmuseum.jpg/960px-Cezanne_The_Card_Players_Metmuseum.jpg"
+},
+{
+"id": "cma135238",
+"a": "Edgar Degas",
+"t": "Paul Lafond and Alphonse Cherfils Examining a Painting",
+"img": "https://openaccess-cdn.clevelandart.org/1958.25/1958.25_web.jpg"
+},
+{
+"id": "cma135265",
+"a": "Edgar Degas",
+"t": "Stefanina Primicile Carafa, Marchioness of Cicerale and Duchess of Montejasi",
+"img": "https://openaccess-cdn.clevelandart.org/1958.28/1958.28_web.jpg"
+},
+{
+"id": "met436120",
+"a": "Edgar Degas",
+"t": "The Old Italian Woman",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/68/Edgar_Degas_-_La_vieille_femme_italienne.jpg/960px-Edgar_Degas_-_La_vieille_femme_italienne.jpg"
+},
+{
+"id": "met436121",
+"a": "Edgar Degas",
+"t": "A Woman Seated beside a Vase of Flowers",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/77/Degas%2C_A_Woman_Seated_beside_a_Vase_of_Flowers_%28Madame_Paul_Valpin%C3%A7on%29.jpg/960px-Degas%2C_A_Woman_Seated_beside_a_Vase_of_Flowers_%28Madame_Paul_Valpin%C3%A7on%29.jpg"
+},
+{
+"id": "met436141",
+"a": "Edgar Degas",
+"t": "The Dancing Class",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/16/The_Dancing_Class_-_MET_29.100.184.jpg/960px-The_Dancing_Class_-_MET_29.100.184.jpg"
+},
+{
+"id": "aic20199",
+"a": "Georges Seurat",
+"t": "Final Study for \"Bathers at Asnières\"",
+"img": "https://www.artic.edu/iiif/2/1db67905-d421-95bf-1e91-4b60dd776886/full/843,/0/default.jpg"
+},
+{
+"id": "aic27992",
+"a": "Georges Seurat",
+"t": "A Sunday on La Grande Jatte — 1884",
+"img": "https://www.artic.edu/iiif/2/2d484387-2509-5e8e-2c43-22f9981972eb/full/843,/0/default.jpg"
+},
+{
+"id": "met437654",
+"a": "Georges Seurat",
+"t": "The Circus Parade",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Georges_Seurat_066.jpg/960px-Georges_Seurat_066.jpg"
+},
+{
+"id": "met437655",
+"a": "Georges Seurat",
+"t": "The Forest at Pontaubert",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/14/Georges_Seurat_063.jpg/960px-Georges_Seurat_063.jpg"
+},
+{
+"id": "met437657",
+"a": "Georges Seurat",
+"t": "Landscape at Saint-Ouen",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Landscape_at_Saint-Ouen_MET_DT9036.jpg/960px-Landscape_at_Saint-Ouen_MET_DT9036.jpg"
+},
+{
+"id": "aic16633",
+"a": "Alfred Sisley",
+"t": "The Seine at Port-Marly, Piles of Sand",
+"img": "https://www.artic.edu/iiif/2/c4425cb6-d8b5-6390-603d-7f802406d05d/full/843,/0/default.jpg"
+},
+{
+"id": "aic37741",
+"a": "Alfred Sisley",
+"t": "Watering Place at Marly",
+"img": "https://www.artic.edu/iiif/2/ed7aa098-e5c9-04dd-b09c-3416d1c56854/full/843,/0/default.jpg"
+},
+{
+"id": "met437680",
+"a": "Alfred Sisley",
+"t": "The Bridge at Villeneuve-la-Garenne",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Alfred_Sisley_008.jpg/960px-Alfred_Sisley_008.jpg"
+},
+{
+"id": "met437683",
+"a": "Alfred Sisley",
+"t": "Sahurs Meadows in Morning Sun",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/72/Sahurs_Meadows_in_Morning_Sun_MET_DT1870.jpg/960px-Sahurs_Meadows_in_Morning_Sun_MET_DT1870.jpg"
+},
+{
+"id": "aic110541",
+"a": "Camille Pissarro",
+"t": "The Crystal Palace",
+"img": "https://www.artic.edu/iiif/2/4eb368b5-3b66-ae2c-bd4a-2643015e05fc/full/843,/0/default.jpg"
+},
+{
+"id": "aic11312",
+"a": "Camille Pissarro",
+"t": "Woman Mending",
+"img": "https://www.artic.edu/iiif/2/132b782d-54e6-70e1-18f9-211468c09099/full/843,/0/default.jpg"
+},
+{
+"id": "met437299",
+"a": "Camille Pissarro",
+"t": "Jalais Hill, Pontoise",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/91/Jalais_Hill%2C_Pontoise.jpg/960px-Jalais_Hill%2C_Pontoise.jpg"
+},
+{
+"id": "met437300",
+"a": "Camille Pissarro",
+"t": "A Cowherd at Valhermeil, Auvers-sur-Oise",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/Camille_Pissarro_A_Cowherd_at_Valhermeil%2C_Auvers-sur-Oise_The_Metropolitan_Museum_of_Art.jpg/960px-Camille_Pissarro_A_Cowherd_at_Valhermeil%2C_Auvers-sur-Oise_The_Metropolitan_Museum_of_Art.jpg"
+},
+{
+"id": "met437303",
+"a": "Camille Pissarro",
+"t": "Washerwoman, Study",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Camille_Pissarro_Washerwoman%2C_Study_The_Metropolitan_Museum_of_Art.jpg/960px-Camille_Pissarro_Washerwoman%2C_Study_The_Metropolitan_Museum_of_Art.jpg"
+},
+{
+"id": "aic11723",
+"a": "Berthe Morisot",
+"t": "Woman at Her Toilette",
+"img": "https://www.artic.edu/iiif/2/78c80988-6524-cec7-c661-a4c0a706d06f/full/843,/0/default.jpg"
+},
+{
+"id": "aic153798",
+"a": "Berthe Morisot",
+"t": "Woman in a Garden",
+"img": "https://www.artic.edu/iiif/2/5edb357d-2e8f-8673-d9e8-4b1150af3895/full/843,/0/default.jpg"
+},
+{
+"id": "met437160",
+"a": "Berthe Morisot",
+"t": "Young Woman Seated on a Sofa",
+"img": "https://upload.wikimedia.org/wikipedia/commons/1/1a/Morisot_-_Young_Woman_Seated_on_a_Sofa%2C_ca._1879.jpg"
+},
+{
+"id": "met438009",
+"a": "Berthe Morisot",
+"t": "The Pink Dress (Albertie-Marguerite Carré, later Madame Ferdinand-Henri Himmes, 1854–1935)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/The_Pink_Dress_%28Albertie-Marguerite_Carr%C3%A9%2C_later_Madame_Ferdinand-Henri_Himmes%2C_1854%E2%80%931935%29_MET_DT1927.jpg/960px-The_Pink_Dress_%28Albertie-Marguerite_Carr%C3%A9%2C_later_Madame_Ferdinand-Henri_Himmes%2C_1854%E2%80%931935%29_MET_DT1927.jpg"
+},
+{
+"id": "aic111442",
+"a": "Mary Cassatt",
+"t": "The Child's Bath",
+"img": "https://www.artic.edu/iiif/2/3b885ae0-4d46-5fe4-d70a-00474827f02c/full/843,/0/default.jpg"
+},
+{
+"id": "aic26650",
+"a": "Mary Cassatt",
+"t": "On a Balcony",
+"img": "https://www.artic.edu/iiif/2/f0150d21-33ab-f6ea-0d4d-32d459f091fe/full/843,/0/default.jpg"
+},
+{
+"id": "met10391",
+"a": "Mary Cassatt",
+"t": "Lady at the Tea Table",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Lady_at_the_Tea_Table_MET_DT516.jpg/960px-Lady_at_the_Tea_Table_MET_DT516.jpg"
+},
+{
+"id": "met10393",
+"a": "Mary Cassatt",
+"t": "Lydia Crocheting in the Garden at Marly",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/54/Lydia_Crocheting_in_the_Garden_at_Marly_MET_DP165250.jpg/960px-Lydia_Crocheting_in_the_Garden_at_Marly_MET_DP165250.jpg"
+},
+{
+"id": "met10409",
+"a": "Mary Cassatt",
+"t": "Portrait of the Artist",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Mary_Cassatt_-_Portrait_of_the_Artist_-_MMA_1975.319.1.jpg/960px-Mary_Cassatt_-_Portrait_of_the_Artist_-_MMA_1975.319.1.jpg"
+},
+{
+"id": "aic111062",
+"a": "Paul Gauguin",
+"t": "Te raau rahi (The Big Tree)",
+"img": "https://www.artic.edu/iiif/2/916405d1-1407-d90e-1be8-f8c77f26f546/full/843,/0/default.jpg"
+},
+{
+"id": "aic153797",
+"a": "Paul Gauguin",
+"t": "Still Life: Wood Tankard and Metal Pitcher",
+"img": "https://www.artic.edu/iiif/2/9964135a-b3df-8af6-5af9-9e6eac7a041d/full/843,/0/default.jpg"
+},
+{
+"id": "met436446",
+"a": "Paul Gauguin",
+"t": "Two Tahitian Women",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Paul_Gauguin_-_Deux_Tahitiennes.jpg/960px-Paul_Gauguin_-_Deux_Tahitiennes.jpg"
+},
+{
+"id": "met436449",
+"a": "Paul Gauguin",
+"t": "The Siesta",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cc/Paul_Gauguin_044.jpg/960px-Paul_Gauguin_044.jpg"
+},
+{
+"id": "met436451",
+"a": "Paul Gauguin",
+"t": "Tahitian Landscape",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/fb/Paul_Gauguin_-_Tahitian_Landscape.jpg/960px-Paul_Gauguin_-_Tahitian_Landscape.jpg"
+},
+{
+"id": "aic14591",
+"a": "Édouard Manet",
+"t": "Woman Reading",
+"img": "https://www.artic.edu/iiif/2/fd991fea-0c13-8444-7879-aba467f1d9db/full/843,/0/default.jpg"
+},
+{
+"id": "aic14594",
+"a": "Édouard Manet",
+"t": "Portrait of a Woman with a Black Fichu",
+"img": "https://www.artic.edu/iiif/2/23c6c5c9-b8bf-8664-f547-4ddc932733f8/full/843,/0/default.jpg"
+},
+{
+"id": "met436944",
+"a": "Édouard Manet",
+"t": "The Spanish Singer",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/15/The_Spanish_Singer_MET_dp130799.jpg/960px-The_Spanish_Singer_MET_dp130799.jpg"
+},
+{
+"id": "met436945",
+"a": "Édouard Manet",
+"t": "Mademoiselle V. . . in the Costume of an Espada",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Mademoiselle_V._._._in_the_Costume_of_an_Espada_MET_DT859.jpg/960px-Mademoiselle_V._._._in_the_Costume_of_an_Espada_MET_DT859.jpg"
+},
+{
+"id": "met436946",
+"a": "Édouard Manet",
+"t": "The Brioche",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/%C3%89douard_Manet_-_Brioche.jpg/960px-%C3%89douard_Manet_-_Brioche.jpg"
+},
+{
+"id": "aic153993",
+"a": "Gustave Courbet",
+"t": "Cliffs on the Sea Coast: Small Beach, Sunrise (Falaise au bord de la mer, vu Petite Plage, soleil levant)",
+"img": "https://www.artic.edu/iiif/2/29d3c6bc-7b53-d13f-a625-0490141c6f10/full/843,/0/default.jpg"
+},
+{
+"id": "aic16490",
+"a": "Gustave Courbet",
+"t": "The Brook of Les Puits-Noir",
+"img": "https://www.artic.edu/iiif/2/6575c354-8a4f-60d3-ad6f-06fa8d7f9ded/full/843,/0/default.jpg"
+},
+{
+"id": "met436000",
+"a": "Gustave Courbet",
+"t": "Madame Frederic Breyer",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/09/Madame_de_Brayer_MET_DT1974.jpg/960px-Madame_de_Brayer_MET_DT1974.jpg"
+},
+{
+"id": "met436001",
+"a": "Gustave Courbet",
+"t": "Jo, the beautiful Irish Girl",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Gustave_Courbet_-_Jo%2C_la_belle_Irlandaise_%28MET-Museum%29.jpg/960px-Gustave_Courbet_-_Jo%2C_la_belle_Irlandaise_%28MET-Museum%29.jpg"
+},
+{
+"id": "met436002",
+"a": "Gustave Courbet",
+"t": "Woman with a Parrot",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e2/Woman_with_a_Parrot_MET_DT43.jpg/960px-Woman_with_a_Parrot_MET_DT43.jpg"
+},
+{
+"id": "aic25806",
+"a": "Jean-Baptiste Camille Corot",
+"t": "View of Genoa",
+"img": "https://www.artic.edu/iiif/2/bd8432e6-65f7-a32a-4e1a-85593633fa8f/full/843,/0/default.jpg"
+},
+{
+"id": "aic35149",
+"a": "Jean-Baptiste Camille Corot",
+"t": "Nymphs Leaving the Bath",
+"img": "https://www.artic.edu/iiif/2/a2ba1c19-f7fe-eda0-bcfc-123cb8368207/full/843,/0/default.jpg"
+},
+{
+"id": "met435961",
+"a": "Jean-Baptiste Camille Corot",
+"t": "Toussaint Lemaistre (1807/8–1888)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Jean-Baptiste-Camille_Corot_-_Toussaint_Lemaistre.jpg/960px-Jean-Baptiste-Camille_Corot_-_Toussaint_Lemaistre.jpg"
+},
+{
+"id": "met435962",
+"a": "Jean-Baptiste Camille Corot",
+"t": "Hagar in the Wilderness",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/31/1835_Corot_Hagar_in_der_Wildnis_anagoria.JPG/960px-1835_Corot_Hagar_in_der_Wildnis_anagoria.JPG"
+},
+{
+"id": "met435963",
+"a": "Jean-Baptiste Camille Corot",
+"t": "Bacchante by the Sea",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e7/Camille_Corot_-_Bacchante_by_the_Sea_-_1865.jpg/960px-Camille_Corot_-_Bacchante_by_the_Sea_-_1865.jpg"
+},
+{
+"id": "aic111646",
+"a": "Jean-François Millet",
+"t": "Woman Feeding Chickens",
+"img": "https://www.artic.edu/iiif/2/82224b5e-42bd-cb6e-67c6-ff42e858cac9/full/843,/0/default.jpg"
+},
+{
+"id": "aic111648",
+"a": "Jean-François Millet",
+"t": "Peasants Bringing Home a Calf Born in the Fields",
+"img": "https://www.artic.edu/iiif/2/7b0ea6ca-9424-050e-7e0e-3b67d2289480/full/843,/0/default.jpg"
+},
+{
+"id": "met437094",
+"a": "Jean-François Millet",
+"t": "Autumn Landscape with a Flock of Turkeys",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Autumn_Landscape_with_a_Flock_of_Turkeys_MET_DT1982.jpg/960px-Autumn_Landscape_with_a_Flock_of_Turkeys_MET_DT1982.jpg"
+},
+{
+"id": "met437097",
+"a": "Jean-François Millet",
+"t": "Haystacks: Autumn",
+"img": "https://upload.wikimedia.org/wikipedia/commons/7/7c/Haystacks_Autumn_1873_Jean-Francois_Millet.jpg"
+},
+{
+"id": "wdQ18573907",
+"a": "Jean-François Millet",
+"t": "Madame Frigot",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/Madame_Frigot_%28Jean-Fran%C3%A7ois_Millet%29_-_Nationalmuseum_-_18770.tif/lossy-page1-960px-Madame_Frigot_%28Jean-Fran%C3%A7ois_Millet%29_-_Nationalmuseum_-_18770.tif.jpg"
+},
+{
+"id": "aic110761",
+"a": "John Singer Sargent",
+"t": "Venetian Glass Workers",
+"img": "https://www.artic.edu/iiif/2/8cdc812d-5db0-63a1-8579-eb64fc6884ca/full/843,/0/default.jpg"
+},
+{
+"id": "aic110879",
+"a": "John Singer Sargent",
+"t": "Mrs. Charles Gifford Dyer (Mary Anthony)",
+"img": "https://www.artic.edu/iiif/2/59221fa2-45f9-5674-4fbd-9da3eb648d68/full/843,/0/default.jpg"
+},
+{
+"id": "aic25865",
+"a": "Winslow Homer",
+"t": "The Herring Net",
+"img": "https://www.artic.edu/iiif/2/5dca7347-c6dc-24dd-d073-d705b9cdc575/full/843,/0/default.jpg"
+},
+{
+"id": "aic44018",
+"a": "Winslow Homer",
+"t": "Croquet Scene",
+"img": "https://www.artic.edu/iiif/2/f7b2db45-f393-653c-07ef-84319b0cdb92/full/843,/0/default.jpg"
+},
+{
+"id": "met11116",
+"a": "Winslow Homer",
+"t": "Dressing for the Carnival",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/07/Winslow_Homer_-_Dressing_for_the_Carnival.jpg/960px-Winslow_Homer_-_Dressing_for_the_Carnival.jpg"
+},
+{
+"id": "met11117",
+"a": "Winslow Homer",
+"t": "Eagle Head, Manchester, Massachusetts (High Tide)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2e/Winslow_Homer_-_Eagle_Head%2C_Manchester%2C_Massachusetts_%28High_Tide%29.jpg/960px-Winslow_Homer_-_Eagle_Head%2C_Manchester%2C_Massachusetts_%28High_Tide%29.jpg"
+},
+{
+"id": "met11122",
+"a": "Winslow Homer",
+"t": "The Gulf Stream",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/bf/Winslow_Homer_-_The_Gulf_Stream_-_Metropolitan_Museum_of_Art.jpg/960px-Winslow_Homer_-_The_Gulf_Stream_-_Metropolitan_Museum_of_Art.jpg"
+},
+{
+"id": "aic14664",
+"a": "Henri de Toulouse-Lautrec",
+"t": "Moulin de la Galette",
+"img": "https://www.artic.edu/iiif/2/156aaed6-fe3c-a13c-f39e-55f381205929/full/843,/0/default.jpg"
+},
+{
+"id": "aic16146",
+"a": "Henri de Toulouse-Lautrec",
+"t": "Equestrienne (At the Cirque Fernando)",
+"img": "https://www.artic.edu/iiif/2/65db9e21-83c3-1cc6-7240-1e1996d87f52/full/843,/0/default.jpg"
+},
+{
+"id": "met437834",
+"a": "Henri de Toulouse-Lautrec",
+"t": "Mademoiselle Nys",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1f/Mademoiselle_Nys_MET_ep1974.356.36.R.jpg/960px-Mademoiselle_Nys_MET_ep1974.356.36.R.jpg"
+},
+{
+"id": "met437836",
+"a": "Henri de Toulouse-Lautrec",
+"t": "Albert (René) Grenier (1858–1925)",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a8/Albert_%28Ren%C3%A9%29_Grenier_%281858%E2%80%931925%29_MET_DT2167.jpg/960px-Albert_%28Ren%C3%A9%29_Grenier_%281858%E2%80%931925%29_MET_DT2167.jpg"
+},
+{
+"id": "aic193926",
+"a": "Théodore Rousseau",
+"t": "View of Saleve, near Geneva",
+"img": "https://www.artic.edu/iiif/2/b7e9650f-fe31-1206-ec54-8b2f019b8621/full/843,/0/default.jpg"
+},
+{
+"id": "aic49661",
+"a": "Théodore Rousseau",
+"t": "Landscape",
+"img": "https://www.artic.edu/iiif/2/10c31086-2515-1348-2c37-ed41aaa7dc88/full/843,/0/default.jpg"
+},
+{
+"id": "met437514",
+"a": "Théodore Rousseau",
+"t": "The Edge of the Woods at Monts-Girard, Fontainebleau Forest",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/The_Edge_of_the_Woods_at_Monts-Girard%2C_Fontainebleau_Forest_MET_DT4574.jpg/960px-The_Edge_of_the_Woods_at_Monts-Girard%2C_Fontainebleau_Forest_MET_DT4574.jpg"
+},
+{
+"id": "met437515",
+"a": "Théodore Rousseau",
+"t": "A Meadow Bordered by Trees",
+"img": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/A_Meadow_Bordered_by_Trees_MET_ep11.45.5.R.jpg/960px-A_Meadow_Bordered_by_Trees_MET_ep11.45.5.R.jpg"
+}
+]

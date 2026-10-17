@@ -619,6 +619,19 @@ final class RoomWorld {
                 world.addChild(e)
                 water = e
             }
+            // 수평선 안개 띠: 먼 바다의 잔물결 무늬가 자글자글해지는 곳과 하늘이 만나는 선을 부드럽게 덮음
+            var hz = Geo()
+            hz.ring(center: SIMD3<Float>(center.x, floorY - 2, center.z), radius: 230, y0: 0, y1: 16, repeats: 1, segments: 96)
+            var hm = UnlitMaterial(color: Tex.color(Worlds.haze(room.time, weather: room.weather)))
+            if let mask = Tex.get("haze_a", folder: "tex", raw: true) {
+                var p = MaterialParameters.Texture(mask)
+                p.sampler = Tex.band
+                hm.blending = .transparent(opacity: .init(scale: 1, texture: p))
+                if let e = hz.entity("seaHaze", hm) {
+                    layer(e, 3)
+                    world.addChild(e)
+                }
+            }
         }
     }
 
@@ -758,66 +771,86 @@ final class RoomWorld {
         }
     }
 
-    /// 전시관: 창이 아닌 벽 중 '평평하게 비어 있는 곳'에만 그림을 걺.
-    /// 벽 앞 12~60cm, 눈높이(0.8~2.2m)에 스캔에서 무언가(가구·문틀·선반 등)가 있는 곳과 문 자리 30cm 안은 피하고,
-    /// 남은 빈 구간마다 구간 길이에 맞는 크기로 (구간이 길면 두 점)
+    /// 앱에 담긴 명화 (빌드할 때 tools/fetch_art.py 가 받은 저작권 끝난 유명 화가 그림, 앱 안 art/)
+    static let artNames: [String] = {
+        let urls = Bundle.main.urls(forResourcesWithExtension: "jpg", subdirectory: "art") ?? []
+        return urls.map { $0.deletingPathExtension().lastPathComponent }.sorted()
+    }()
+
+    /// 전시관: 창이 아닌 벽 중 '평평하게 비어 있는 곳'마다 명화를 무작위로 걺.
+    /// 벽 앞 15~45cm, 눈높이(0.8~2.2m)에 스캔에서 물건(가구·문틀·선반 등)이 있는 곳과 문 자리 30cm 안은 피하고,
+    /// 남은 빈 구간을 1.4m 안팎마다 나눠 한 점씩 — 그림 비율 그대로, 구간에 맞는 크기(최대 1.3×1.25m)
     private func addPaintings(_ segs: [WallSeg], _ L: Layout, floorY: Float) {
-        var arts = Array(repeating: Geo(), count: 6)
+        var g = SeededRNG(seed: UInt64.random(in: 1...UInt64.max))          // 들어갈 때마다 다른 그림
+        var names = Self.artNames.shuffled(using: &g)
+        let useArt = !names.isEmpty
+        if !useArt { names = (0..<6).map { "art_\($0)" } }
+        var next = 0
+        var arts: [String: Geo] = [:]
         var frames = Geo()
-        var k = room.id
         var doorEnds: [SIMD2<Float>] = []
         for ds in L.doors where ds.roomA == room.id || ds.roomB == room.id {
             let (ea, eb, _) = ds.edge(for: room.id)
             doorEnds += [ea, eb]
         }
+        let top = room.ceil
         for s in segs where !s.window {
             let len = simd_distance(s.a, s.b)
-            guard len >= 0.7 else { continue }
+            guard len >= 0.8 else { continue }
             let dir = (s.b - s.a) / len
-            // 5cm마다 그 자리 벽 앞이 비었는지
             let step: Float = 0.05
             let n = Int(len / step)
             var free = [Bool](repeating: true, count: n)
             for i in 0..<n {
                 let q = s.a + dir * ((Float(i) + 0.5) * step)
                 if doorEnds.contains(where: { simd_distance($0, q) < 0.3 }) { free[i] = false; continue }
-                var off: Float = 0.12
-                while off <= 0.6 {
+                var off: Float = 0.15
+                while off <= 0.45 {
                     if clutter.contains(Self.clutterKey(q + s.n * off)) { free[i] = false; break }
-                    off += 0.08
+                    off += 0.1
                 }
             }
-            // 빈 구간들 (양끝 15cm 여유)
             var i = 0
             while i < n {
                 guard free[i] else { i += 1; continue }
                 var j = i
                 while j < n && free[j] { j += 1 }
-                let t0 = Float(i) * step + 0.15, t1 = Float(j) * step - 0.15
+                let t0 = Float(i) * step + 0.12, t1 = Float(j) * step - 0.12
                 i = j
                 let span = t1 - t0
-                guard span >= 0.45 else { continue }
-                let count = span >= 3.2 ? 2 : 1
+                guard span >= 0.5 else { continue }
+                let count = max(1, Int((span + 0.3) / 1.4))
+                let slot = span / Float(count)
                 for c in 0..<count {
-                    let w = min(1.1, span / Float(count) * 0.62), h = w * 1.25
-                    let mid2 = L.flat(s.a + dir * (t0 + span * (Float(c) + 0.5) / Float(count)))
+                    let name = names[next % names.count]
+                    next += 1
+                    var ar: Float = 0.8
+                    if useArt, let t = Tex.get(name, folder: "art") { ar = Float(t.width) / Float(max(1, t.height)) }
+                    let maxW = min(1.3, slot * 0.72) * Float.random(in: 0.82...1.0, using: &g)
+                    let maxH = min(1.25, top - 1.2)
+                    var w = maxW, h = w / ar
+                    if h > maxH { h = maxH; w = h * ar }
+                    guard w >= 0.3, h >= 0.3 else { continue }
+                    let mid2 = L.flat(s.a + dir * (t0 + slot * (Float(c) + 0.5)))
                     let n2 = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))
                     let nn = SIMD3<Float>(n2.x, 0, n2.y)
                     let right = simd_cross(-nn, SIMD3<Float>(0, 1, 0))
-                    let ctr = SIMD3<Float>(mid2.x, floorY + max(1.5, 0.9 + h / 2), mid2.y)      // 아래 끝은 0.9m 위로
+                    let cy = min(max(1.5, 0.95 + h / 2), top - 0.15 - h / 2)        // 아래 끝 0.95m 위, 위 끝은 천장 15cm 아래
+                    let ctr = SIMD3<Float>(mid2.x, floorY + cy, mid2.y)
                     let pp = ctr + nn * 0.035, ff = ctr + nn * 0.025
                     let hw = right * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
-                    arts[k % 6].quad(pp - hw - hh, pp + hw - hh, pp + hw + hh, pp - hw + hh,
-                                     SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
-                    let fw = right * (w / 2 + 0.06), fh = SIMD3<Float>(0, h / 2 + 0.06, 0)
+                    var geo = arts[name] ?? Geo()
+                    geo.quad(pp - hw - hh, pp + hw - hh, pp + hw + hh, pp - hw + hh,
+                             SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+                    arts[name] = geo
+                    let fw = right * (w / 2 + 0.05), fh = SIMD3<Float>(0, h / 2 + 0.05, 0)
                     frames.quad(ff - fw - fh, ff + fw - fh, ff + fw + fh, ff - fw + fh, .zero, .zero, .zero, .zero)
-                    k += 1
                 }
             }
         }
         let lit = Worlds.safe(tint, min: 0.55)
-        for i in 0..<6 {
-            if let e = arts[i].entity("art\(i)", Tex.unlit("art_\(i)", tint: lit, folder: "tex", sampler: Tex.clamp)) { local.addChild(e) }
+        for (name, geo) in arts {
+            if let e = geo.entity("art_\(name)", Tex.unlit(name, tint: lit, folder: useArt ? "art" : "tex", sampler: Tex.clamp)) { local.addChild(e) }
         }
         if let e = frames.entity("frames", UnlitMaterial(color: Tex.color(SIMD3<Float>(0.3, 0.22, 0.14) * lit))) { local.addChild(e) }
     }

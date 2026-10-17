@@ -24,6 +24,11 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+      # 전시관 명화 (빌드할 때 tools/fetch_art.py 가 받음 → 앱 안 art/)
+      - path: AnotherSpace/Resources/art
+        type: folder
+        buildPhase: resources
+        optional: true
       # 효과음 (빌드할 때 tools/make_assets.py 가 만듦 → 앱 안 sfx/)
       - path: AnotherSpace/Resources/sfx
         type: folder

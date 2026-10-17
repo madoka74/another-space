@@ -72,16 +72,6 @@ struct MapEditView: View {
             // 고르면 조정 창을 띄우고(이미 떠 있으면 그 창), 아무것도 안 고르면 닫음
             if s.isEmpty { dismissWindow(id: "inspector", value: spaceId) } else { openWindow(id: "inspector", value: spaceId) }
         }
-        .toolbar {
-            // 탐험 시작은 오른쪽 위 (뒤로 가기 버튼과 멀리)
-            ToolbarItem(placement: .topBarTrailing) {
-                Button { safety = true } label: {
-                    Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
-            }
-        }
         .sheet(isPresented: $safety) {
             SafetySheet {
                 safety = false
@@ -155,6 +145,15 @@ struct MapEditView: View {
                 Button { setZoom(zoom / 1.4) } label: { Image(systemName: "minus.magnifyingglass") }
                 Button { setZoom(zoom * 1.4) } label: { Image(systemName: "plus.magnifyingglass") }
             }
+            .padding(14)
+        }
+        .overlay(alignment: .topTrailing) {
+            // 탐험 시작: 지도 오른쪽 위
+            Button { safety = true } label: {
+                Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
             .padding(14)
         }
         .overlay(alignment: .top) {

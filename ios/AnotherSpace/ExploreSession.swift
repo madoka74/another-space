@@ -301,6 +301,9 @@ final class ExploreSession {
     @ObservationIgnored private var peekLook: Float = 0       // 닫힌 실제 문을 바라본 시간
     @ObservationIgnored private var peekDoor: Int?            // 현실 창을 연 문 (그 문이 열리거나 멀어지거나 한참 딴 곳을 보면 닫힘)
     @ObservationIgnored private var peekAway: Float = 0       // 현실 창을 연 뒤 문에서 눈을 돌린 시간
+    @ObservationIgnored private var peekGone: Float = 0       // 손잡이 문이 잠깐 안 보인 시간 (잠깐 끊겨도 바로 닫지 않음)
+    @ObservationIgnored private var peekAim: SIMD3<Float>?    // 현실 창이 겨누는 곳: 문 가운데 줄의 손잡이 높이(1m), 내 쪽에 가장 가까운 곳 (지금 좌표)
+    @ObservationIgnored private var roomClear: Float = 1      // 머리에서 가장 가까운 벽·문까지 (안내판이 벽·문 뒤로 숨지 않게)
     @ObservationIgnored private var peekAmt: Float = 0
     @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var openProg: [Int: Float] = [:]             // 여는 움직임 진행 (0~1)
@@ -676,7 +679,8 @@ final class ExploreSession {
             while t * 3 + 2 < pts.count {
                 defer { t += 1 }
                 let c = t < cls.count ? cls[t] : 0
-                if c == MeshClass.floor || c == MeshClass.ceiling { continue }
+                // 벽 자체는 빼고 (구성한 벽선이 실제 벽과 조금 어긋나 있어도 벽 전체가 '물건'으로 잡히지 않게) 물건·문틀·창만
+                if c == MeshClass.floor || c == MeshClass.ceiling || c == MeshClass.wall { continue }
                 let ctr = (pts[t * 3] + pts[t * 3 + 1] + pts[t * 3 + 2]) / 3
                 let h = ctr.y - L.floorY
                 guard h > 0.8 && h < 2.2 else { continue }
@@ -769,23 +773,26 @@ final class ExploreSession {
     }
 
     // MARK: 현실 창 (닫힌 실제 문을 열 수 있게)
-    /// 손잡이 문을 바라보면 열리는 현실 창: 시야 가운데보다 조금 아래(손잡이 높이 쪽), 55cm 앞, 황금 테두리
+    /// 손잡이 문을 바라보면 열리는 현실 창: 눈에서 문 손잡이 높이(1m)를 향한 선 위에 떠서 그쪽 현실을 보여 줌.
+    /// 문에 다가가면 원도 눈 쪽으로 당겨져(문 앞 가상 문짝보다 늘 앞) 가려지지 않고, 크기는 거리에 맞춰 보이는 크기가 같게
     private func placePeek(_ dt: Float) {
         let target: Float = peekDoor != nil ? 1 : 0
         peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 5 : 8))
         let on = peekAmt > 0.01
         if peek.isEnabled != on { peek.isEnabled = on }
         guard on else { return }
-        var f = SIMD3<Float>(fwd.x, 0, fwd.z)
-        f = simd_length(f) > 0.1 ? simd_normalize(f) : SIMD3<Float>(0, 0, -1)
-        // 앞을 보는 방향(위아래 기울기 포함)을 반쯤 따르고 15cm 아래로 → 고개를 숙여 손잡이를 봐도 따라옴
-        let look = simd_normalize(simd_length(fwd) > 0.1 ? fwd : f)
-        let goal = head + simd_normalize(f * 0.5 + look * 0.5) * 0.55 + SIMD3<Float>(0, -0.15, 0)
-        peek.position = peekAmt < 0.05 ? goal : peek.position + (goal - peek.position) * min(1, dt * 6)
+        let aim = peekAim ?? (head + SIMD3<Float>(fwd.x, 0, fwd.z) * 0.6 + SIMD3<Float>(0, -0.6, 0))
+        let v = aim - head
+        let dTarget = simd_length(v)
+        guard dTarget > 0.05 else { return }
+        let dir = v / dTarget
+        let d = min(0.45, max(0.18, dTarget * 0.55))
+        let goal = head + dir * d
+        peek.position = peekAmt < 0.05 ? goal : peek.position + (goal - peek.position) * min(1, dt * 8)
         let toHead = head - peek.position
         if simd_length(toHead) > 0.01 { peek.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: simd_normalize(toHead)) }
         let e = peekAmt * peekAmt * (3 - 2 * peekAmt)
-        let r = 0.17 * max(0.001, e)
+        let r = d * 0.5 * max(0.001, e)                    // 보이는 크기 약 53°(반지름 26°)
         peek.scale = SIMD3<Float>(r, 1, r)
     }
 
@@ -932,15 +939,22 @@ final class ExploreSession {
         var glowMat: PhysicallyBasedMaterial?
         var urgent = false, lookingAt: Int? = nil
         var leafOn = Set<Int>(), away = Set<Int>()
+        var aims: [Int: SIMD3<Float>] = [:]
+        var clear = L.at(x: hs.x, z: hs.z).wall
         defer {
             doorUrgent = urgent
             // 현실 창: 손잡이 문을 1.5초 바라보면 열고, 그 문이 보이는 동안(실제 문이 닫혀 있고 1m 안) 그대로 둠 —
             // 손을 뻗거나 손잡이를 내려다봐도 닫히지 않게. 실제 문이 열리거나, 멀어지거나, 2초 넘게 딴 곳을 보면 닫음
+            roomClear = clear
             if let pd = peekDoor {
-                if !leafOn.contains(pd) { peekDoor = nil; peekAway = 0 }
-                else {
+                if leafOn.contains(pd) {
+                    peekGone = 0
+                    peekAim = aims[pd] ?? peekAim
                     peekAway = away.contains(pd) ? peekAway + dt : 0
-                    if peekAway > 2 { peekDoor = nil; peekAway = 0 }
+                    if peekAway > 2.5 { peekDoor = nil; peekAway = 0 }
+                } else {
+                    peekGone += dt
+                    if peekGone > 0.8 { peekDoor = nil; peekAway = 0; peekGone = 0 }     // 실제 문이 열렸거나 1m 밖으로 멀어짐
                 }
             } else {
                 peekLook = lookingAt != nil ? peekLook + dt : 0
@@ -954,6 +968,7 @@ final class ExploreSession {
             }
             let dist = ds.dist(p)
             let near = dist < Self.doorReach
+            clear = min(clear, dist)
             let inside = ds.inside(p)
             let side = ds.side(p)                                              // + 면 방 A 쪽
             let here = side >= 0 ? ds.roomA : ds.roomB
@@ -1015,7 +1030,13 @@ final class ExploreSession {
                     let to = ds.mid - p
                     let dd = simd_length(to) > 0.05 ? simd_dot(simd_normalize(to), look) : 1
                     if dd > 0.8 { lookingAt = i }
-                    if dd < 0.2 { away.insert(i) }
+                    if dd < 0.2 && look != .zero { away.insert(i) }          // 손잡이를 내려다볼 땐 방향을 모르니 딴 곳으로 치지 않음
+                    // 겨눌 곳: 문 가운데 줄 위, 내가 선 쪽으로 가장 가까운 곳(양끝 15cm 안쪽), 바닥에서 1m
+                    let sMid = ds.alongU ? p.y : p.x
+                    let sc = min(max(sMid, ds.s0 + 0.15), ds.s1 - 0.15)
+                    let cm = (ds.pA + ds.pB) / 2
+                    let q2 = L.flat(ds.alongU ? SIMD2<Float>(cm, sc) : SIMD2<Float>(sc, cm))
+                    if let f = fit { aims[i] = f.toCurrent(SIMD3<Float>(q2.x, L.floorY + 1.0, q2.y)) }
                 }
             }
             // 방금 지나온 문: 1m 밖으로 멀어지거나, 돌아서서 문 쪽을 바라보면 다시 열쇠 문이 보임
@@ -1222,7 +1243,10 @@ final class ExploreSession {
             if !hudPlaced { hudYaw = yaw; hudPlaced = true } else if abs(dy) > follow { hudYaw += dy * min(1, dt * 2.5) }
         }
         let q = simd_quatf(angle: hudYaw, axis: [0, 1, 0])
-        let target = head + q.act(themeOpen ? SIMD3<Float>(0, -0.4, -0.6) : SIMD3<Float>(0, -0.55, -0.5))
+        // 벽·문에 바짝 다가서면 안내판을 당겨 오고 그만큼 작게 (벽·문 뒤로 숨어 안 보이지 않게, 보이는 크기는 그대로)
+        let k = min(1, max(0.5, (roomClear - 0.08) / 0.5))
+        hud.scale = SIMD3<Float>(repeating: k)
+        let target = head + q.act((themeOpen ? SIMD3<Float>(0, -0.4, -0.6) : SIMD3<Float>(0, -0.55, -0.5)) * k)
         hud.position = hud.position + (target - hud.position) * min(1, dt * 5)
         hud.orientation = q * simd_quatf(angle: themeOpen ? -0.3 : -0.5, axis: [1, 0, 0])
         let want: Float = (message != nil || themeOpen || fwd.y < -0.45) ? 1 : 0

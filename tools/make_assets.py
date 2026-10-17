@@ -150,6 +150,17 @@ CONDS = ('clear', 'cloudy', 'overcast', 'storm')
 SW, SH = 2048, 512
 
 
+_BLUR = {}
+
+
+def _cloud_blur(tex):
+    k = id(tex)
+    if k not in _BLUR:
+        im = Image.fromarray((np.clip(tex, 0, 1) * 255).astype(np.uint8))
+        _BLUR[k] = np.asarray(im.filter(ImageFilter.GaussianBlur(5))).astype(np.float32) / 255
+    return _BLUR[k]
+
+
 def sky(time, cond, cloud_tex):
     P = SKY[time]
     yy, xx = np.mgrid[0:SH, 0:SW].astype(np.float32)
@@ -189,14 +200,17 @@ def sky(time, cond, cloud_tex):
     if cov > 0:
         t = np.tan(np.radians(np.maximum(el, 0.6)))
         dist = 1.0 / t
-        dist = np.minimum(dist, 30)
+        dist = np.minimum(dist, 40)                      # (지평선 몇 줄은 같은 값이 되므로 아래에서 옅게 지움)
         px = dist * np.cos(np.radians(az)) * 0.11
         pz = dist * np.sin(np.radians(az)) * 0.11
-        n = bilinear(cloud_tex, px, pz)
+        # 먼 구름(지평선 쪽)은 흐린 무늬로 읽어 자글자글한 점무늬가 안 생기게 (거리에 따라 섞음)
+        blur = _cloud_blur(cloud_tex)
+        far = np.clip((dist - 3.0) / 12.0, 0, 1)
+        n = bilinear(cloud_tex, px, pz) * (1 - far) + bilinear(blur, px, pz) * far
         # 해 쪽으로 조금 옮겨 읽어 그늘 계산 (해 쪽이 밝음)
         sx = np.cos(np.radians(SUN_AZ)) * 0.006
         sz = np.sin(np.radians(SUN_AZ)) * 0.006
-        n2 = bilinear(cloud_tex, px + sx, pz + sz)
+        n2 = bilinear(cloud_tex, px + sx, pz + sz) * (1 - far) + bilinear(blur, px + sx, pz + sz) * far
         thr, soft = {'cloudy': (0.5, 0.16), 'overcast': (0.2, 0.5), 'storm': (0.15, 0.45)}[cond]
         dens = np.clip((n - thr) / soft, 0, 1)
         lightk = np.clip(0.55 + (n - n2) * (14 if cond == 'cloudy' else 6), 0, 1)
@@ -209,12 +223,19 @@ def sky(time, cond, cloud_tex):
         # 해 가까이 구름 가장자리가 빛남
         rim = np.exp(-ang / (P['glow'] * 2.5)) * (1 - dens) * dens * 4
         ccol = ccol + sun[None, None, :] * np.clip(rim, 0, 1)[..., None] * (0.7 if cond == 'cloudy' else 0.25)
-        hz = smooth(0.0, 7.0, el)                            # 지평선 근처는 옅게 (안개)
-        cloud_a = dens * (0.35 + 0.65 * hz)
+        # 지평선 근처는 구름을 지우고 안개로 (아주 납작해진 구름이 세로 줄무늬처럼 늘어나 보이던 것)
+        hz = smooth(1.2, 10.0, el)
+        cloud_a = dens * hz
         if cond in ('overcast', 'storm'):
             base = np.array(P['ocol'], float) * (0.45 if cond == 'storm' else 0.9)
             col = lerp(col, base, 0.82 if cond == 'storm' else 0.62)
         col = lerp(col, ccol, cloud_a)
+    # 지평선 안개: 지평선 가까이(0~6°)는 지평선 색으로 부드럽게 (바다·평원과 하늘이 매끈하게 만나게)
+    hazek = smooth(6.0, 0.0, el) * (0.55 if cond in ('clear', 'cloudy') else 0.75)
+    hcol = hor * 1.05 + (sun * 0.25 if low and cond in ('clear', 'cloudy') else 0)
+    if cond == 'storm':
+        hcol = hcol * 0.55
+    col = lerp(col, np.clip(hcol, 0, 255), hazek)
     # 별 (구름 뒤로 가려짐)
     if P['stars'] > 0 and cond != 'storm':
         r = rng(31)
@@ -972,6 +993,14 @@ def paintings():
     save_jpg('art_5', rgb)
 
 
+def haze():
+    """바다 지평선 안개 띠: 아래(수평선)는 짙고 위로 갈수록 투명"""
+    H = 256
+    y = (np.arange(H) / (H - 1))[:, None] * np.ones((1, 16))
+    a = y ** 2.2
+    save_png('haze', np.ones((H, 16, 3)) * 255, a)
+
+
 def glow():
     S = 128
     yy, xx = np.mgrid[0:S, 0:S]
@@ -1106,6 +1135,16 @@ def scan_grid():
     save_png('scan_grid', rgb, a)
 
 
+def _fetch_art():
+    """전시관 명화 받기 (인터넷이 안 되면 건너뜀 — 그때는 만든 그림 art_0~5를 씀)"""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fetch_art
+        fetch_art.main()
+    except Exception as e:
+        print('명화 받기 건너뜀:', e, flush=True)
+
+
 def main():
     only = sys.argv[1:] if len(sys.argv) > 1 else None
     jobs = {
@@ -1137,8 +1176,9 @@ def main():
             prop_simple('driftwood', [(0, (100, 96, 88)), (0.5, (150, 144, 132)), (1, (196, 190, 176))], 419, aniso=(0.2, 3)),
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
-            facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid()),
+            facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze()),
         'sfx': lambda: sfx(),
+        'art': lambda: _fetch_art(),
     }
     for k, f in jobs.items():
         if only and k not in only:
