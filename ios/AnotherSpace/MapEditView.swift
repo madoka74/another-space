@@ -33,6 +33,7 @@ struct MapEditView: View {
     @State private var spaceName = ""
     @State private var toast: String?
     @State private var unifyRoom: RoomRec?
+    @State private var step: Float = 0.05
 
     enum Tool: Hashable { case select, draw, door }
     enum Guide: Hashable { case u(Float), v(Float) }
@@ -379,13 +380,16 @@ struct MapEditView: View {
         let door = tool == .door
         change { d in
             if let id = d.addShape(a, b, door: door) { sel = [id] }
+            d.tidy(full: false)
         }
         tool = .select
         flash(door ? "문·통로를 만들었어요. 이 자리는 벽이 뚫려 양쪽 방이 이어져요." : "새 방을 만들었어요. 이름과 세계를 정해 주세요.")
     }
 
     private func commitDrag() {
-        guard let before = dragStart, let d = data, d != before else { return }
+        guard let before = dragStart, var d = data, d != before else { return }
+        d.tidy(full: false)                    // 끌기를 마치면 틈·겹침과 문 자리를 저절로 정리
+        data = d
         push(before)
         persist()
     }
@@ -432,6 +436,7 @@ struct MapEditView: View {
                         }
                     }
                     .buttonStyle(.bordered)
+                    fineBox(picked)
                     if rooms.count == 1, let rid = rooms.first, let r = d.rec.room(rid) { roomBox(r, d) }
                 }
 
@@ -464,7 +469,10 @@ struct MapEditView: View {
                         .disabled(d.rec.rooms.isEmpty)
                 }
                 .buttonStyle(.bordered)
-                Button { change { $0.proposeShapes(keepRooms: true) }; sel = []; flash("스캔을 바탕으로 다시 구성했어요") } label: {
+                Button { change { $0.tidy(full: true) }; flash("틈·겹침을 붙이고, 거의 한 줄인 벽을 맞추고, 문을 경계에 맞췄어요") } label: {
+                    Label("이음새 자동 정리", systemImage: "wand.and.stars")
+                }
+                Button { change { $0.proposeShapes(keepRooms: true); $0.tidy(full: true) }; sel = []; flash("스캔을 바탕으로 다시 구성했어요") } label: {
                     Label("스캔에서 다시 구성", systemImage: "arrow.counterclockwise")
                 }
                 Button { doUndo() } label: { Label("되돌리기", systemImage: "arrow.uturn.backward") }
@@ -472,6 +480,69 @@ struct MapEditView: View {
                 if let t = toast { Text(t).font(.callout).foregroundStyle(.secondary) }
             }
             .padding(22)
+        }
+    }
+
+    /// 정밀 조정: 위아래좌우 한 칸씩 옮기기(고른 것 모두), 폭·깊이 숫자 입력(하나 골랐을 때)
+    private func fineBox(_ picked: [ShapeRec]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("정밀 조정").font(.headline)
+                Spacer()
+                Picker("한 번에", selection: $step) {
+                    Text("1cm").tag(Float(0.01)); Text("5cm").tag(Float(0.05)); Text("10cm").tag(Float(0.1))
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 210)
+            }
+            HStack(spacing: 8) {
+                Text("옮기기").frame(width: 56, alignment: .leading)
+                Button { nudge(-step, 0) } label: { Image(systemName: "arrow.left").frame(width: 34, height: 26) }
+                Button { nudge(0, -step) } label: { Image(systemName: "arrow.up").frame(width: 34, height: 26) }
+                Button { nudge(0, step) } label: { Image(systemName: "arrow.down").frame(width: 34, height: 26) }
+                Button { nudge(step, 0) } label: { Image(systemName: "arrow.right").frame(width: 34, height: 26) }
+            }
+            if picked.count == 1, let s = picked.first {
+                sizeRow("폭", Int((s.width * 100).rounded())) { cm in resize(s.id, w: Float(cm) / 100, d: nil) }
+                sizeRow("깊이", Int((s.depth * 100).rounded())) { cm in resize(s.id, w: nil, d: Float(cm) / 100) }
+            }
+        }
+        .buttonStyle(.bordered)
+        .padding(14)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func sizeRow(_ title: String, _ cm: Int, _ set: @escaping (Int) -> Void) -> some View {
+        HStack(spacing: 8) {
+            Text(title).frame(width: 56, alignment: .leading)
+            Button { set(max(20, cm - Int((step * 100).rounded()))) } label: { Image(systemName: "minus").frame(width: 30, height: 26) }
+            TextField("cm", value: Binding(get: { cm }, set: { v in set(max(20, min(3000, v))) }), format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 90)
+                .multilineTextAlignment(.trailing)
+            Text("cm").foregroundStyle(.secondary)
+            Button { set(min(3000, cm + Int((step * 100).rounded()))) } label: { Image(systemName: "plus").frame(width: 30, height: 26) }
+        }
+    }
+
+    private func nudge(_ du: Float, _ dv: Float) {
+        let ids = Set(sel)
+        change { d in
+            for s in d.shapes where ids.contains(s.id) {
+                var t = s
+                t.u0 += du; t.u1 += du; t.v0 += dv; t.v1 += dv
+                d.updateShape(t)
+            }
+        }
+    }
+
+    /// 왼쪽 위 모서리는 그대로 두고 폭·깊이를 바꿈
+    private func resize(_ id: Int, w: Float?, d dd: Float?) {
+        change { d in
+            guard var t = d.shapes.first(where: { $0.id == id }) else { return }
+            if let w { t.u1 = t.u0 + w }
+            if let dd { t.v1 = t.v0 + dd }
+            d.updateShape(t)
         }
     }
 

@@ -100,6 +100,7 @@ struct SkinGroup: Sendable {
 struct SkinResult: Sendable {
     var groups: [SkinGroup] = []
     var cells: Set<Int64> = []     // 이 그물이 덮는 1m 칸 (저장 좌표) — 그 칸의 미리 그린 가구는 숨김
+    var doorHits: [Int: Set<Int>] = [:]   // 문 번호 → 문 자리를 막고 있는 칸 (폭 10cm × 높이 10cm) — 실제 문이 닫혔는지 판단
 }
 
 enum Skin {
@@ -180,10 +181,24 @@ enum Skin {
             let cls: UInt8 = fi < m.c.count ? m.c[fi] : 0
             let ns = fit.dirToSaved(n)
             let hgt = ctr.y - L.floorY
+            // 문 자리: 실제 문짝 그물은 입히지 않고(조각조각 나타나고 사라지지 않게), 막힌 칸만 세어 문이 닫혔는지 판단
+            let pp = L.plane(ctr.x, ctr.z)
+            var inDoor = false
+            for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.15) {
+                inDoor = true
+                if !chunked && hgt > 0.3 && hgt < 1.9 && abs(ns.y) < 0.5 && ds.zone(pp, margin: 0.1) {
+                    let sx = ds.alongU ? pp.y : pp.x
+                    let col = Int((sx - ds.s0) / 0.1), row = Int((hgt - 0.3) / 0.1)
+                    out.doorHits[di, default: []].insert(row * 1000 + col)
+                }
+            }
+            if inDoor && hgt < 2.2 { continue }
             let here = L.at(x: ctr.x, z: ctr.z)
             let r = here.room
             if r == 0 || r >= 256 { continue }                       // 방 밖
             if here.wall < 0.15 { continue }                         // 반듯한 벽이 덮는 곳
+            // 비전프로가 '벽·창·문'으로 알아본 세운 면이 반듯한 벽에서 35cm 안이면 그 벽의 일부(구성이 조금 어긋난 것)로 보고 지움
+            if here.wall < 0.35 && abs(ns.y) < 0.3 && (cls == MeshClass.wall || cls == MeshClass.window || cls == MeshClass.door) { continue }
             if cls == MeshClass.ceiling || hgt > L.ceil[r] - 0.1 { continue }
             if cls == MeshClass.floor || (ns.y > 0.8 && hgt < 0.06) || hgt < -0.05 { continue }
             let l = simd_dot(ns, I.sun[r])
@@ -250,6 +265,8 @@ final class ExploreSession {
     @ObservationIgnored private var doorShow: [Int: Float] = [:]    // 문틀·열쇠 보이는 정도
     @ObservationIgnored private var doorSide: [Int: Float] = [:]    // 문을 열 때 서 있던 쪽 (지나가면 닫음)
     @ObservationIgnored private var lastSide: [Int: Float] = [:]    // 문 밖에서 마지막으로 서 있던 쪽
+    @ObservationIgnored private var realHits: [Int: [UUID: Set<Int>]] = [:]   // 문 → 그물 덩어리마다 막힌 칸
+    @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -514,6 +531,7 @@ final class ExploreSession {
                 dirty.remove(a.id)
                 meshEnts.removeValue(forKey: a.id)?.removeFromParent()
                 setLiveCells(a.id, [])
+                setDoorHits(a.id, [:])
             default:
                 meshes[a.id] = a
                 dirty.insert(a.id)
@@ -700,6 +718,8 @@ final class ExploreSession {
                 if abs(st - target) < 0.01 { st = target }
             }
             doorState[i] = st
+            // 실제 문이 닫혀 있으면 깔끔한 문짝으로 (다른 세계 문짝이 닫혀 있을 땐 그 뒤라 숨김)
+            if let leaf = worlds[ds.roomA]?.doorLeaf[i] { leaf.isEnabled = realClosed.contains(i) && st < 0.5 }
             for rid in [ds.roomA, ds.roomB] {
                 for e in worlds[rid]?.doorPanels[i] ?? [] {
                     e.isEnabled = st > 0.01
@@ -723,6 +743,25 @@ final class ExploreSession {
                 if glowMat == nil { glowMat = RoomWorld.gold(rough: 0.22, glow: 0.2 + 2.2 * breath) }
                 if let gm = glowMat { for e in ui.parts { e.model?.materials = [gm] } }
             }
+        }
+    }
+
+    /// 실제 문이 닫혔는지: 문 자리(폭 × 0.3~1.9m)의 45% 넘게 막히면 닫힘, 30% 밑으로 비면 열림 (그 사이는 그대로 — 깜빡이지 않게)
+    private func setDoorHits(_ id: UUID, _ hits: [Int: Set<Int>]) {
+        guard let L = layout else { return }
+        var touched = Set(hits.keys)
+        for (i, var m) in realHits where m[id] != nil && hits[i] == nil {
+            m[id] = nil
+            realHits[i] = m
+            touched.insert(i)
+        }
+        for (i, h) in hits { realHits[i, default: [:]][id] = h }
+        for i in touched where i < L.doors.count {
+            var all = Set<Int>()
+            for (_, h) in realHits[i] ?? [:] { all.formUnion(h) }
+            let cols = max(1, Int((L.doors[i].width / 0.1).rounded(.down)))
+            let cover = Float(all.count) / Float(cols * 16)
+            if cover > 0.45 { realClosed.insert(i) } else if cover < 0.3 { realClosed.remove(i) }
         }
     }
 
@@ -761,8 +800,9 @@ final class ExploreSession {
         for id in dirty where !building.contains(id) {
             guard let a = meshes[id] else { dirty.remove(id); continue }
             let fresh = meshEnts[id] == nil
-            if !fresh, let last = builtAt[id], now - last < 1.0 { continue }
             let p = simd_make_float3(a.originFromAnchorTransform.columns.3)
+            let wait = simd_distance(p.xz, head.xz) < 3 ? 0.4 : 1.0            // 가까운 곳(문 앞 등)은 더 자주
+            if !fresh, let last = builtAt[id], now - last < wait { continue }
             cand.append((id, simd_distance(p.xz, head.xz) - (fresh ? 3 : 0)))     // 아직 한 번도 안 입힌 것 먼저
         }
         cand.sort { $0.1 < $1.1 }
@@ -778,6 +818,7 @@ final class ExploreSession {
                 guard !ended, meshes[id] != nil else { return }
                 apply(id, res.groups)
                 setLiveCells(id, res.cells)
+                setDoorHits(id, res.doorHits)
             }
         }
     }

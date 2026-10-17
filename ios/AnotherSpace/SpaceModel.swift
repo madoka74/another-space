@@ -223,6 +223,92 @@ struct SpaceData: Equatable {
         f(&rec.rooms[i])
     }
 
+    // MARK: 이음새 자동 정리
+    /// 사각형들을 깔끔하게: ①5cm 단위로 ②서로 다른 사각형 사이 30cm 안의 틈·겹침은 가운데에서 딱 붙임(사이에 벽 한 장만 섬)
+    /// ③(full) 8cm 안으로 거의 한 줄인 변들은 한 줄로 ④문·통로는 두 방 경계에 맞춤 — 붙은 방이면 경계를 가로질러 20cm, 틈이 있으면 그 틈을 꼭 맞게 채움
+    mutating func tidy(full: Bool) {
+        guard var list = rec.shapes, !list.isEmpty else { return }
+        func r5(_ x: Float) -> Float { (x / 0.05).rounded() * 0.05 }
+        for i in list.indices {
+            list[i].u0 = r5(list[i].u0); list[i].u1 = r5(list[i].u1)
+            list[i].v0 = r5(list[i].v0); list[i].v1 = r5(list[i].v1)
+        }
+        func overlap(_ a0: Float, _ a1: Float, _ b0: Float, _ b1: Float) -> Float { min(a1, b1) - max(a0, b0) }
+        let rooms = list.indices.filter { !list[$0].isDoor }
+        // ② 틈·겹침 붙이기 (몇 번 되풀이: 한 변이 여러 이웃과 맞닿을 수 있음)
+        for _ in 0..<3 {
+            for i in rooms {
+                for j in rooms where j != i {
+                    let a = list[i], b = list[j]
+                    if overlap(a.v0, a.v1, b.v0, b.v1) > 0.2, abs(a.u1 - b.u0) <= 0.3, a.u0 < b.u0, a.u1 < b.u1 {
+                        let m = r5((a.u1 + b.u0) / 2)
+                        list[i].u1 = m; list[j].u0 = m
+                    }
+                    if overlap(a.u0, a.u1, b.u0, b.u1) > 0.2, abs(a.v1 - b.v0) <= 0.3, a.v0 < b.v0, a.v1 < b.v1 {
+                        let m = r5((a.v1 + b.v0) / 2)
+                        list[i].v1 = m; list[j].v0 = m
+                    }
+                }
+            }
+        }
+        // ③ 거의 한 줄인 변 맞추기
+        if full {
+            for axisU in [true, false] {
+                var vals: [Float] = []
+                for s in list { vals += axisU ? [s.u0, s.u1] : [s.v0, s.v1] }
+                vals.sort()
+                var groups: [[Float]] = []
+                for x in vals {
+                    if var g = groups.last, let last = g.last, x - last <= 0.08 { g.append(x); groups[groups.count - 1] = g } else { groups.append([x]) }
+                }
+                func target(_ x: Float) -> Float {
+                    for g in groups where g.count > 1 && x >= g[0] - 1e-4 && x <= g[g.count - 1] + 1e-4 {
+                        return r5(g.reduce(0, +) / Float(g.count))
+                    }
+                    return x
+                }
+                for i in list.indices {
+                    if axisU { list[i].u0 = target(list[i].u0); list[i].u1 = target(list[i].u1) }
+                    else { list[i].v0 = target(list[i].v0); list[i].v1 = target(list[i].v1) }
+                }
+            }
+        }
+        // ④ 문·통로 맞추기
+        for di in list.indices where list[di].isDoor {
+            let d = list[di]
+            var best: (Float, ShapeRec)?
+            for i in rooms {
+                for j in rooms where list[i].room != list[j].room {
+                    let a = list[i], b = list[j]
+                    // u 방향으로 a | b
+                    let gu = b.u0 - a.u1
+                    if gu >= -0.01 && gu <= 1.6 && a.u1 >= d.u0 - 0.3 && b.u0 <= d.u1 + 0.3 {
+                        let s0 = max(d.v0, a.v0, b.v0), s1 = min(d.v1, a.v1, b.v1)
+                        if s1 - s0 >= 0.3 {
+                            let t = gu < 0.05 ? ShapeRec(id: d.id, room: 0, u0: a.u1 - 0.1, v0: s0, u1: a.u1 + 0.1, v1: s1)
+                                              : ShapeRec(id: d.id, room: 0, u0: a.u1, v0: s0, u1: b.u0, v1: s1)
+                            let score = overlap(d.u0, d.u1, t.u0 - 0.05, t.u1 + 0.05) + (s1 - s0)
+                            if score > (best?.0 ?? -1) { best = (score, t) }
+                        }
+                    }
+                    // v 방향으로 a / b
+                    let gv = b.v0 - a.v1
+                    if gv >= -0.01 && gv <= 1.6 && a.v1 >= d.v0 - 0.3 && b.v0 <= d.v1 + 0.3 {
+                        let s0 = max(d.u0, a.u0, b.u0), s1 = min(d.u1, a.u1, b.u1)
+                        if s1 - s0 >= 0.3 {
+                            let t = gv < 0.05 ? ShapeRec(id: d.id, room: 0, u0: s0, v0: a.v1 - 0.1, u1: s1, v1: a.v1 + 0.1)
+                                              : ShapeRec(id: d.id, room: 0, u0: s0, v0: a.v1, u1: s1, v1: b.v0)
+                            let score = overlap(d.v0, d.v1, t.v0 - 0.05, t.v1 + 0.05) + (s1 - s0)
+                            if score > (best?.0 ?? -1) { best = (score, t) }
+                        }
+                    }
+                }
+            }
+            if let b = best { list[di] = b.1 }
+        }
+        rec.shapes = list
+    }
+
     /// 세계 바꾸기: '모든 방 같게'면 모든 방을, 아니면 그 방만
     mutating func setTheme(_ id: Int, place: String, weather: String, time: String) {
         if rec.isUnified {

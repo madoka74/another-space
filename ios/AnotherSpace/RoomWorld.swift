@@ -117,6 +117,8 @@ final class RoomWorld {
     private(set) var doorPanels: [Int: [Entity]] = [:]
     /// 문 번호 → 가까이 가면 보이는 문틀·열쇠 구멍·떠 있는 열쇠 (root, 떠다니는 열쇠, 열쇠 조각들 — 숨 쉬는 빛은 조각들의 발광을 바꿈)
     private(set) var doorUI: [Int: (root: Entity, key: Entity, parts: [ModelEntity])] = [:]
+    /// 문 번호 → 실제 문이 닫혀 있을 때 보이는 문짝 (방 A 쪽 세계에만)
+    private(set) var doorLeaf: [Int: Entity] = [:]
 
     var outdoor: Bool { style.open }
     var dark: Bool { room.time == "night" || room.time == "dawn" }
@@ -305,7 +307,8 @@ final class RoomWorld {
             var panel = Geo()
             var list: [Entity] = []
             if style.open {
-                panel.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: 0, y1: top, u0: 0, u1: 1)
+                // 양옆 벽과 3cm씩 겹쳐 틈이 없게
+                panel.wall(SIMD3<Float>(-hl - 0.03, 0, 0), SIMD3<Float>(hl + 0.03, 0, 0), y0: 0, y1: top, u0: 0, u1: 1)
                 if let m = panel.mesh("door\(i)") {
                     let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
                     e.components.set(PortalComponent(target: world))
@@ -328,7 +331,8 @@ final class RoomWorld {
                 let l = simd_dot(zdir, sun)
                 let k = l > 0.25 ? 0 : (l > -0.25 ? 1 : 2)
                 let tile = style.wallTile
-                panel.wall(SIMD3<Float>(-hl, 0, 0), SIMD3<Float>(hl, 0, 0), y0: 0, y1: top, u0: 0, u1: len / tile, v0: 0, v1: top / tile)
+                panel.wall(SIMD3<Float>(-hl - 0.03, 0, 0), SIMD3<Float>(hl + 0.03, 0, 0), y0: 0, y1: top,
+                           u0: 0, u1: (len + 0.06) / tile, v0: 0, v1: top / tile)
                 if let e = panel.entity("door\(i)", Tex.unlit(style.wall, tint: Worlds.safe(tint * shades[k], min: 0.36))) {
                     place(e, 0.012)
                     local.addChild(e)
@@ -376,6 +380,25 @@ final class RoomWorld {
             ui.isEnabled = false
             local.addChild(ui)
             doorUI[i] = (ui, key, parts)
+
+            // 실제 문이 닫혀 있을 때 보일 깔끔한 문짝 (두 입구 줄 가운데, 방 A 쪽 세계가 하나만 만듦)
+            if room.id == ds.roomA {
+                let (pa, pb, _) = ds.edge(for: ds.roomA)
+                let (qa, _, _) = ds.edge(for: ds.roomB)
+                let c2 = L.flat((pa + pb) / 2 + (qa - pa) / 2)
+                let leaf = ModelEntity(mesh: .generateBox(width: len, height: dh, depth: 0.04),
+                                       materials: [Tex.unlit("planks_dark", tint: Worlds.safe(tint, min: 0.45), folder: "tex", sampler: Tex.clamp)])
+                leaf.position = SIMD3<Float>(c2.x, floorY + dh / 2, c2.y)
+                leaf.orientation = q
+                for z: Float in [0.03, -0.03] {
+                    let knob = ModelEntity(mesh: .generateSphere(radius: 0.028), materials: [Self.gold(rough: 0.35)])
+                    knob.position = [hl - min(0.12, hl * 0.3), 1.0 - dh / 2, z]
+                    leaf.addChild(knob)
+                }
+                leaf.isEnabled = false
+                local.addChild(leaf)
+                doorLeaf[i] = leaf
+            }
         }
     }
 

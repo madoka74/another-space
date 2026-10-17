@@ -12,32 +12,37 @@ struct WallSeg: Sendable {
 }
 
 /// 문 하나 = 문·통로 사각형 하나가 두 방을 잇는 곳 (평면 좌표 m).
-/// 문짝은 사각형의 양쪽 끝 변(각 방 쪽 입구)에 하나씩 섬 → 어느 방에서 보든 그 방의 벽 줄에 맞춰 닫힌 문이 보임
+/// 문짝은 각 방의 실제 입구 줄(그 방 칸이 끝나는 곳 = 양옆 벽과 같은 줄)에 하나씩 섬 → 벽과 문짝 사이에 틈이 없음
 struct DoorSeg: Sendable {
-    var lo: SIMD2<Float>            // 문 사각형
-    var hi: SIMD2<Float>
     var roomA: Int
     var roomB: Int
     var alongU: Bool                // true: 방 A→B 가 u 방향으로 건너감
     var nA: SIMD2<Float>            // 방 A 쪽을 향함 (B 쪽은 -nA)
+    var pA: Float                   // 방 A 입구 줄 (건너가는 축 좌표)
+    var pB: Float                   // 방 B 입구 줄
+    var s0: Float                   // 문 폭 (다른 축 좌표)
+    var s1: Float
 
+    var lo: SIMD2<Float> { alongU ? SIMD2<Float>(min(pA, pB), s0) : SIMD2<Float>(s0, min(pA, pB)) }
+    var hi: SIMD2<Float> { alongU ? SIMD2<Float>(max(pA, pB), s1) : SIMD2<Float>(s1, max(pA, pB)) }
     var mid: SIMD2<Float> { (lo + hi) / 2 }
+    var width: Float { s1 - s0 }
     /// 방 r 쪽 입구 변 (a, b, 그 방을 향한 방향)
     func edge(for r: Int) -> (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>) {
         let n = r == roomA ? nA : -nA
-        if alongU {
-            let u = n.x < 0 ? lo.x : hi.x
-            return (SIMD2<Float>(u, lo.y), SIMD2<Float>(u, hi.y), n)
-        } else {
-            let v = n.y < 0 ? lo.y : hi.y
-            return (SIMD2<Float>(lo.x, v), SIMD2<Float>(hi.x, v), n)
-        }
+        let p = r == roomA ? pA : pB
+        return alongU ? (SIMD2<Float>(p, s0), SIMD2<Float>(p, s1), n) : (SIMD2<Float>(s0, p), SIMD2<Float>(s1, p), n)
     }
-    /// 문 사각형까지 거리 (안이면 0)
+    /// 문 자리(두 입구 줄 사이)까지 거리 (안이면 0)
     func dist(_ p: SIMD2<Float>) -> Float { simd_length(simd_max(simd_max(lo - p, p - hi), SIMD2<Float>(0, 0))) }
-    func inside(_ p: SIMD2<Float>) -> Bool { p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y }
+    func inside(_ p: SIMD2<Float>) -> Bool { p.x > lo.x && p.x < hi.x && p.y > lo.y && p.y < hi.y }
     /// + 면 방 A 쪽, - 면 방 B 쪽
     func side(_ p: SIMD2<Float>) -> Float { simd_dot(p - mid, nA) }
+    /// 문 자리 근처 (문짝 앞뒤 margin m, 폭 양옆 5cm) — 실제 문짝 그물은 여기서 따로 다룸
+    func zone(_ p: SIMD2<Float>, margin: Float) -> Bool {
+        let a = alongU ? p.x : p.y, s = alongU ? p.y : p.x
+        return s > s0 - 0.05 && s < s1 + 0.05 && a > min(pA, pB) - margin && a < max(pA, pB) + margin
+    }
 }
 
 /// 사각형들을 5cm 칸으로 그려 둔 탐험용 배치.
@@ -206,10 +211,15 @@ struct Layout: Sendable {
             for c in cur { if let c { segs.append(c) } }
         }
         // 방과 방 사이 벽은 각자 방 쪽으로 1cm 들여 세움 (두 벽이 겹쳐 깜빡이지 않게)
+        // 모든 벽은 양 끝을 3cm씩 늘려 이어지는 곳(모서리·꺾임·문 옆)에 머리카락 같은 틈이 안 생기게
         segs = segs.map { s in
-            guard s.inner else { return s }
             var t = s
-            t.a += s.n * 0.01; t.b += s.n * 0.01
+            if s.inner { t.a += s.n * 0.01; t.b += s.n * 0.01 }
+            let len = simd_distance(t.a, t.b)
+            if len > 0.001 {
+                let d = (t.b - t.a) / len
+                t.a -= d * 0.03; t.b += d * 0.03
+            }
             return t
         }
         // 문: 문·통로 사각형마다, 안쪽과 둘레 10cm의 방 칸을 세어 가장 많이 닿은 두 방을 잇는 문으로.
@@ -234,12 +244,28 @@ struct Layout: Sendable {
             let ra = top[0].key, rb = top[1].key
             let ca = (sum[ra] ?? .zero) / Float(top[0].value), cb = (sum[rb] ?? .zero) / Float(top[1].value)
             let dd = cb - ca
-            let lo = SIMD2<Float>(sh.u0, sh.v0), hi = SIMD2<Float>(sh.u1, sh.v1)
-            if abs(dd.x) >= abs(dd.y) {
-                dl.append(DoorSeg(lo: lo, hi: hi, roomA: ra, roomB: rb, alongU: true, nA: SIMD2<Float>(dd.x > 0 ? -1 : 1, 0)))
-            } else {
-                dl.append(DoorSeg(lo: lo, hi: hi, roomA: ra, roomB: rb, alongU: false, nA: SIMD2<Float>(0, dd.y > 0 ? -1 : 1)))
+            let alongU = abs(dd.x) >= abs(dd.y)
+            let aLow = alongU ? dd.x > 0 : dd.y > 0              // 방 A가 낮은 쪽(왼쪽·위)에 있음
+            // 각 방 칸이 문 폭 안에서 끝나는 줄 = 그 방의 입구 줄 (양옆 벽과 같은 줄)
+            var aMin = Int.max, aMax = Int.min, bMin = Int.max, bMax = Int.min
+            for v in max(0, b0 - 2)..<min(h, b1 + 2) {
+                for u in max(0, a0 - 2)..<min(w, a1 + 2) {
+                    // 문 폭 안의 칸만 (건너가는 축으로는 둘레 10cm까지)
+                    if alongU ? (v < b0 || v >= b1) : (u < a0 || u >= a1) { continue }
+                    let i = v * w + u
+                    guard wk[i] == 1 else { continue }
+                    let c = alongU ? u : v
+                    if Int(ow[i]) == ra { aMin = min(aMin, c); aMax = max(aMax, c) }
+                    if Int(ow[i]) == rb { bMin = min(bMin, c); bMax = max(bMax, c) }
+                }
             }
+            let base = alongU ? bu : bv
+            let lo = alongU ? sh.u0 : sh.v0, hi = alongU ? sh.u1 : sh.v1
+            let pA = aMax >= aMin ? base + Float(aLow ? aMax + 1 : aMin) * r : (aLow ? lo : hi)
+            let pB = bMax >= bMin ? base + Float(aLow ? bMin : bMax + 1) * r : (aLow ? hi : lo)
+            let nA = alongU ? SIMD2<Float>(aLow ? -1 : 1, 0) : SIMD2<Float>(0, aLow ? -1 : 1)
+            dl.append(DoorSeg(roomA: ra, roomB: rb, alongU: alongU, nA: nA, pA: pA, pB: pB,
+                              s0: alongU ? sh.v0 : sh.u0, s1: alongU ? sh.v1 : sh.u1))
         }
         doors = dl
         // 창은 50cm 안 되면 벽으로 (조각난 창 방지)
