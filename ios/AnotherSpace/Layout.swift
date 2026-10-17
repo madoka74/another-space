@@ -210,18 +210,8 @@ struct Layout: Sendable {
             }
             for c in cur { if let c { segs.append(c) } }
         }
-        // 방과 방 사이 벽은 각자 방 쪽으로 1cm 들여 세움 (두 벽이 겹쳐 깜빡이지 않게)
-        // 모든 벽은 양 끝을 3cm씩 늘려 이어지는 곳(모서리·꺾임·문 옆)에 머리카락 같은 틈이 안 생기게
-        segs = segs.map { s in
-            var t = s
-            if s.inner { t.a += s.n * 0.01; t.b += s.n * 0.01 }
-            let len = simd_distance(t.a, t.b)
-            if len > 0.001 {
-                let d = (t.b - t.a) / len
-                t.a -= d * 0.03; t.b += d * 0.03
-            }
-            return t
-        }
+        // 벽은 모두 칸 경계 줄에 정확히 (띄우거나 늘리지 않음). 방과 방 사이는 같은 줄에 두 방이 각자 자기 쪽을 보는
+        // 한쪽 면 벽을 세움 → 반대편에선 안 보이니 겹쳐 깜빡이지 않고, 이어지는 곳의 끝점이 정확히 같아 틈이 없음
         // 문: 문·통로 사각형마다, 안쪽과 둘레 10cm의 방 칸을 세어 가장 많이 닿은 두 방을 잇는 문으로.
         // 두 방이 어느 방향으로 놓였는지(무게중심)로 건너가는 방향과 양쪽 입구 변을 정함
         var dl: [DoorSeg] = []
@@ -264,8 +254,10 @@ struct Layout: Sendable {
             let pA = aMax >= aMin ? base + Float(aLow ? aMax + 1 : aMin) * r : (aLow ? lo : hi)
             let pB = bMax >= bMin ? base + Float(aLow ? bMin : bMax + 1) * r : (aLow ? hi : lo)
             let nA = alongU ? SIMD2<Float>(aLow ? -1 : 1, 0) : SIMD2<Float>(0, aLow ? -1 : 1)
+            // 문 폭도 벽과 같은 칸 줄로 (문짝 끝과 벽 끝이 정확히 맞닿게)
             dl.append(DoorSeg(roomA: ra, roomB: rb, alongU: alongU, nA: nA, pA: pA, pB: pB,
-                              s0: alongU ? sh.v0 : sh.u0, s1: alongU ? sh.v1 : sh.u1))
+                              s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
+                              s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r))
         }
         doors = dl
         // 창은 50cm 안 되면 벽으로 (조각난 창 방지)

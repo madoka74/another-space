@@ -27,6 +27,21 @@ struct Geo {
              SIMD2<Float>(u0, v0), SIMD2<Float>(u1, v0), SIMD2<Float>(u1, v1), SIMD2<Float>(u0, v1))
     }
 
+    /// 한쪽에서만 보이는 세운 판 (앞면이 n 쪽). 반대편에서는 보이지 않음(뒷면은 그리지 않음) →
+    /// 두 방이 맞닿은 같은 줄에 각자 자기 쪽을 보는 벽을 세워도 겹쳐 깜빡이지 않고, 틈을 막으려 띄우거나 늘릴 필요가 없음.
+    /// (RealityKit은 반시계 방향으로 감긴 삼각형이 앞면)
+    mutating func face(_ a: SIMD3<Float>, _ b: SIMD3<Float>, toward n: SIMD3<Float>, y0: Float, y1: Float,
+                       u0: Float, u1: Float, v0: Float = 0, v1: Float = 1) {
+        let d = b - a
+        let front = SIMD3<Float>(-d.z, 0, d.x)                 // (b-a) × 위쪽
+        let lo = SIMD3<Float>(0, y0, 0), hi = SIMD3<Float>(0, y1, 0)
+        if simd_dot(front, n) >= 0 {
+            quad(a + lo, b + lo, b + hi, a + hi, SIMD2<Float>(u0, v0), SIMD2<Float>(u1, v0), SIMD2<Float>(u1, v1), SIMD2<Float>(u0, v1), twoSided: false)
+        } else {
+            quad(b + lo, a + lo, a + hi, b + hi, SIMD2<Float>(u1, v0), SIMD2<Float>(u0, v0), SIMD2<Float>(u0, v1), SIMD2<Float>(u1, v1), twoSided: false)
+        }
+    }
+
     /// 안쪽에서 보는 원기둥 띠 (지평선 둘레). repeats: 한 바퀴에 그림을 몇 번 되풀이할지
     mutating func ring(center c: SIMD3<Float>, radius r: Float, y0: Float, y1: Float, repeats: Float, segments: Int = 96, phase: Float = 0) {
         for i in 0..<segments {

@@ -99,6 +99,7 @@ struct DoorView {
     let keyRoot: Entity         // 누르는 곳 (열쇠가 구멍으로 들어가는 움직임)
     let key: Entity             // 둥실둥실
     let parts: [ModelEntity]    // 열쇠 조각들 (숨 쉬는 빛)
+    let hl: Float               // 문 반폭
     static let keyZ: Float = 0.2
     static let keyY: Float = 1.4
 }
@@ -222,19 +223,28 @@ final class RoomWorld {
     private func openWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         var portal = Geo(), fence = Geo()
         let tileW = style.barrierH * 2                       // 그림 가로:세로 = 2:1
+        // 문 자리 양끝 점: 여기서 끝나는 울타리는 늘리지 않음 (문 자리 너머로 덤불이 삐져나오지 않게)
+        var doorEnds: [SIMD2<Float>] = []
+        for ds in L.doors where ds.roomA == room.id || ds.roomB == room.id {
+            let (ea, eb, _) = ds.edge(for: room.id)
+            doorEnds += [ea, eb]
+        }
+        func nearDoor(_ p: SIMD2<Float>) -> Bool { doorEnds.contains { simd_distance($0, p) < 0.08 } }
         for s in segs {
             let a2 = L.flat(s.a), b2 = L.flat(s.b)
             let a = SIMD3<Float>(a2.x, floorY, a2.y), b = SIMD3<Float>(b2.x, floorY, b2.y)
             let len = simd_distance(a2, b2)
             guard len > 0.01 else { continue }
-            portal.wall(a, b, y0: 0, y1: ceilY - floorY, u0: 0, u1: 1)
             let dir = (b2 - a2) / len
             let n = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))           // 방 안쪽
+            portal.face(a, b, toward: SIMD3<Float>(n.x, 0, n.y), y0: 0, y1: ceilY - floorY, u0: 0, u1: 1)
             let o = -n * 0.22
             let along0 = abs(s.a.x - s.b.x) > abs(s.a.y - s.b.y) ? min(s.a.x, s.b.x) : min(s.a.y, s.b.y)
-            let fa = a2 + o - dir * 0.3, fb = b2 + o + dir * 0.3
+            // 모서리에서 이웃 울타리와 만나게 양끝을 25cm 늘림 (문 자리 쪽 끝은 그대로)
+            let ea: Float = nearDoor(s.a) ? 0 : 0.25, eb: Float = nearDoor(s.b) ? 0 : 0.25
+            let fa = a2 + o - dir * ea, fb = b2 + o + dir * eb
             fence.wall(SIMD3<Float>(fa.x, floorY, fa.y), SIMD3<Float>(fb.x, floorY, fb.y), y0: -0.05, y1: style.barrierH,
-                       u0: (along0 - 0.3) / tileW, u1: (along0 + len + 0.3) / tileW, v0: 0.02, v1: 1)
+                       u0: (along0 - ea) / tileW, u1: (along0 + len + eb) / tileW, v0: 0.02, v1: 1)
         }
         if let m = portal.mesh("walls") {
             let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
@@ -266,15 +276,16 @@ final class RoomWorld {
             let u0 = along0 / tile, u1 = (along0 + len) / tile
             if s.window && top > 1.6 {
                 let w0: Float = 0.85, w1 = min(2.15, top - 0.15)
-                parts[k].wall(a, b, y0: 0, y1: w0, u0: u0, u1: u1, v0: 0, v1: w0 / tile)
-                parts[k].wall(a, b, y0: w1, y1: top, u0: u0, u1: u1, v0: w1 / tile, v1: top / tile)
-                win.wall(a, b, y0: w0, y1: w1, u0: 0, u1: 1)
+                let n3 = SIMD3<Float>(nw.x, 0, nw.y)
+                parts[k].face(a, b, toward: n3, y0: 0, y1: w0, u0: u0, u1: u1, v0: 0, v1: w0 / tile)
+                parts[k].face(a, b, toward: n3, y0: w1, y1: top, u0: u0, u1: u1, v0: w1 / tile, v1: top / tile)
+                win.face(a, b, toward: n3, y0: w0, y1: w1, u0: 0, u1: 1)
                 let inn = SIMD3<Float>(nw.x, 0, nw.y) * 0.02
                 for y in [w0, w1] {
                     frame.wall(a + inn, b + inn, y0: y - 0.03, y1: y + 0.03, u0: 0, u1: 1)
                 }
             } else {
-                parts[k].wall(a, b, y0: 0, y1: top, u0: u0, u1: u1, v0: 0, v1: top / tile)
+                parts[k].face(a, b, toward: SIMD3<Float>(nw.x, 0, nw.y), y0: 0, y1: top, u0: u0, u1: u1, v0: 0, v1: top / tile)
             }
         }
         for k in 0..<3 {
@@ -323,34 +334,27 @@ final class RoomWorld {
             let header = len <= 1.6
             let low: Float = header ? dh : top
             var list: [Entity] = []
+            // 닫혀 있을 때 = 이 방의 벽 (바깥 장소는 풍경으로 열린 벽, 실내는 그 방 벽). 이 방 쪽에서만 보이는 한쪽 면,
+            // 폭은 양옆 벽 끝과 정확히 같게. 문 자리는 실제로 지나갈 수 있는 곳이라 울타리는 세우지 않음
+            let front = SIMD3<Float>(0, 0, 1)
+            let pa = SIMD3<Float>(-hl, 0, 0), pb = SIMD3<Float>(hl, 0, 0)
             if style.open {
-                // 닫혀 있을 때 = 이 방의 벽(풍경으로 열린 벽 + 울타리). 양옆 벽과 3cm씩 겹쳐 틈이 없게
                 var panel = Geo()
-                panel.wall(SIMD3<Float>(-hl - 0.03, 0, 0), SIMD3<Float>(hl + 0.03, 0, 0), y0: 0, y1: low, u0: 0, u1: 1)
+                panel.face(pa, pb, toward: front, y0: 0, y1: low, u0: 0, u1: 1)
                 if let m = panel.mesh("door\(i)") {
                     let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
                     e.components.set(PortalComponent(target: world))
-                    place(e, 0.012)
+                    place(e, 0)
                     local.addChild(e)
-                    list.append(e)
-                }
-                var fence = Geo()
-                let tileW = style.barrierH * 2
-                fence.wall(SIMD3<Float>(-hl - 0.25, 0, 0), SIMD3<Float>(hl + 0.25, 0, 0), y0: -0.05, y1: style.barrierH,
-                           u0: 0, u1: (len + 0.5) / tileW, v0: 0.02, v1: 1)
-                if let e = fence.entity("doorFence\(i)", Tex.cutout(style.barrier, tint: Worlds.safe(tint, min: 0.45))) {
-                    layer(e, 6)
-                    place(e, -0.22)
-                    world.addChild(e)
                     list.append(e)
                 }
                 if header {
                     var hd = Geo()
-                    hd.wall(SIMD3<Float>(-hl - 0.03, 0, 0), SIMD3<Float>(hl + 0.03, 0, 0), y0: dh, y1: top, u0: 0, u1: 1)
+                    hd.face(pa, pb, toward: front, y0: dh, y1: top, u0: 0, u1: 1)
                     if let m = hd.mesh("header\(i)") {
                         let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
                         e.components.set(PortalComponent(target: world))
-                        place(e, 0.012)
+                        place(e, 0)
                         local.addChild(e)
                     }
                 }
@@ -360,19 +364,17 @@ final class RoomWorld {
                 let tile = style.wallTile
                 let mat = Tex.unlit(style.wall, tint: Worlds.safe(tint * shades[k], min: 0.36))
                 var panel = Geo()
-                panel.wall(SIMD3<Float>(-hl - 0.03, 0, 0), SIMD3<Float>(hl + 0.03, 0, 0), y0: 0, y1: low,
-                           u0: 0, u1: (len + 0.06) / tile, v0: 0, v1: low / tile)
+                panel.face(pa, pb, toward: front, y0: 0, y1: low, u0: 0, u1: len / tile, v0: 0, v1: low / tile)
                 if let e = panel.entity("door\(i)", mat) {
-                    place(e, 0.012)
+                    place(e, 0)
                     local.addChild(e)
                     list.append(e)
                 }
                 if header {
                     var hd = Geo()
-                    hd.wall(SIMD3<Float>(-hl - 0.03, 0, 0), SIMD3<Float>(hl + 0.03, 0, 0), y0: dh, y1: top,
-                            u0: 0, u1: (len + 0.06) / tile, v0: dh / tile, v1: top / tile)
+                    hd.face(pa, pb, toward: front, y0: dh, y1: top, u0: 0, u1: len / tile, v0: dh / tile, v1: top / tile)
                     if let e = hd.entity("header\(i)", mat) {
-                        place(e, 0.012)
+                        place(e, 0)
                         local.addChild(e)
                     }
                 }
@@ -397,13 +399,13 @@ final class RoomWorld {
             lintel.position = [0, dh + fw / 2, 0.035]
             ui.addChild(lintel)
             // 문짝 두 장: 바깥 문설주에 붙여 두고(엔티티 원점 = 문설주), 안쪽으로 펼쳐짐
-            let lw = hl - 0.004
+            let lw = hl + 0.012                                           // 가운데에서 서로 겹쳐 틈이 없게
             func leaf(_ sign: Float) -> Entity {
                 let e = Entity()
                 e.position = [sign * hl, 0, 0]
                 let cx = -sign * lw / 2                                       // 문설주에서 안쪽으로
                 let slab = ModelEntity(mesh: .generateBox(width: lw, height: dh - 0.01, depth: 0.035), materials: [woodDark])
-                slab.position = [cx, (dh - 0.01) / 2, 0.02]
+                slab.position = [cx, (dh - 0.01) / 2, sign > 0 ? 0.024 : 0.02]          // 오른쪽 문짝이 4mm 앞 (겹친 곳이 깜빡이지 않게)
                 e.addChild(slab)
                 // 위아래 두 칸 판넬 (도드라진 면) + 금빛 테
                 for (y0, h) in [(Float(0.12), dh * 0.36), (dh * 0.55, dh * 0.36)] {
@@ -450,7 +452,7 @@ final class RoomWorld {
             ui.components.set(OpacityComponent(opacity: 0))
             ui.isEnabled = false
             local.addChild(ui)
-            doorView[i] = DoorView(root: ui, left: left, right: right, lock: lock, keyRoot: keyRoot, key: key, parts: parts)
+            doorView[i] = DoorView(root: ui, left: left, right: right, lock: lock, keyRoot: keyRoot, key: key, parts: parts, hl: hl)
 
             // 실제 문이 닫혀 있을 때(비전프로가 '문'으로 알아본 면이 문 자리를 막을 때)만 보이는 실제 문짝 (방 A 세계가 하나만 만듦)
             if room.id == ds.roomA {
