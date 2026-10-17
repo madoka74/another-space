@@ -143,8 +143,10 @@ enum Tex {
         let key = folder + "/" + name
         if let t = cache[key] { return t }
         if missing.contains(key) { return nil }
-        let url = Bundle.main.url(forResource: name, withExtension: "jpg", subdirectory: folder)
-            ?? Bundle.main.url(forResource: name, withExtension: "png", subdirectory: folder)
+        // folder "file": name 이 기기 안 파일 경로 (포켓 갤러리 보관함 그림 등)
+        let url = folder == "file" ? URL(fileURLWithPath: name)
+            : (Bundle.main.url(forResource: name, withExtension: "jpg", subdirectory: folder)
+               ?? Bundle.main.url(forResource: name, withExtension: "png", subdirectory: folder))
         guard let url, let img = UIImage(contentsOfFile: url.path), let cg = img.cgImage,
               let t = try? TextureResource.generate(from: cg, options: .init(semantic: raw ? .raw : .color)) else {
             missing.insert(key)

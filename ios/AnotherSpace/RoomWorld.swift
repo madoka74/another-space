@@ -772,6 +772,9 @@ final class RoomWorld {
     }
 
     /// 앱에 담긴 명화 (빌드할 때 tools/fetch_art.py 가 받은 저작권 끝난 유명 화가 그림, 앱 안 art/)
+    /// 포켓 갤러리 보관함 그림 파일 (탐험 시작 때 채움) — 전시관에 먼저 걺
+    static var pgArt: [URL] = []
+
     static let artNames: [String] = {
         let urls = Bundle.main.urls(forResourcesWithExtension: "jpg", subdirectory: "art") ?? []
         return urls.map { $0.deletingPathExtension().lastPathComponent }.sorted()
@@ -782,11 +785,13 @@ final class RoomWorld {
     /// 남은 빈 구간을 1.4m 안팎마다 나눠 한 점씩 — 그림 비율 그대로, 구간에 맞는 크기(최대 1.3×1.25m)
     private func addPaintings(_ segs: [WallSeg], _ L: Layout, floorY: Float) {
         var g = SeededRNG(seed: UInt64.random(in: 1...UInt64.max))          // 들어갈 때마다 다른 그림
-        var names = Self.artNames.shuffled(using: &g)
-        let useArt = !names.isEmpty
-        if !useArt { names = (0..<6).map { "art_\($0)" } }
+        // 보관함 그림 먼저(무작위 순서), 이어서 앱에 담긴 명화(무작위). 둘 다 없으면 만든 그림 6장
+        var names: [(String, String)] = Self.pgArt.shuffled(using: &g).map { ($0.path, "file") }
+            + Self.artNames.shuffled(using: &g).map { ($0, "art") }
+        if names.isEmpty { names = (0..<6).map { ("art_\($0)", "tex") } }
         var next = 0
         var arts: [String: Geo] = [:]
+        var folders: [String: String] = [:]
         var frames = Geo()
         var doorEnds: [SIMD2<Float>] = []
         for ds in L.doors where ds.roomA == room.id || ds.roomB == room.id {
@@ -822,10 +827,11 @@ final class RoomWorld {
                 let count = max(1, Int((span + 0.3) / 1.4))
                 let slot = span / Float(count)
                 for c in 0..<count {
-                    let name = names[next % names.count]
+                    let (name, folder) = names[next % names.count]
                     next += 1
                     var ar: Float = 0.8
-                    if useArt, let t = Tex.get(name, folder: "art") { ar = Float(t.width) / Float(max(1, t.height)) }
+                    if folder != "tex", let t = Tex.get(name, folder: folder) { ar = Float(t.width) / Float(max(1, t.height)) }
+                    folders[name] = folder
                     let maxW = min(1.3, slot * 0.72) * Float.random(in: 0.82...1.0, using: &g)
                     let maxH = min(1.25, top - 1.2)
                     var w = maxW, h = w / ar
@@ -850,7 +856,7 @@ final class RoomWorld {
         }
         let lit = Worlds.safe(tint, min: 0.55)
         for (name, geo) in arts {
-            if let e = geo.entity("art_\(name)", Tex.unlit(name, tint: lit, folder: useArt ? "art" : "tex", sampler: Tex.clamp)) { local.addChild(e) }
+            if let e = geo.entity("art", Tex.unlit(name, tint: lit, folder: folders[name] ?? "tex", sampler: Tex.clamp)) { local.addChild(e) }
         }
         if let e = frames.entity("frames", UnlitMaterial(color: Tex.color(SIMD3<Float>(0.3, 0.22, 0.14) * lit))) { local.addChild(e) }
     }

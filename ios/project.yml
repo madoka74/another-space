@@ -39,6 +39,8 @@ targets:
       path: AnotherSpace/AnotherSpace.entitlements
       properties:
         com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
+        # 포켓 갤러리와 같이 쓰는 폴더 (보관함 그림을 전시관에 걺)
+        com.apple.security.application-groups: [group.com.blankishworks.shared]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blankishworks.another-space

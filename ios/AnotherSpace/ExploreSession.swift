@@ -422,6 +422,9 @@ final class ExploreSession {
         }
         Task { await self.watchMeshes(m) }
         Task { await self.watchWorld(w) }
+        // 포켓 갤러리 보관함 그림 (전시관이 있으면 처음 받는 그림을 최대 6초 기다림, 없으면 받아만 둠)
+        let hasGallery = d.rec.rooms.contains { $0.place == "gallery" }
+        RoomWorld.pgArt = await PGLibrary.prepare(wait: hasGallery ? 6 : 0)
         // 미리 그려 둘 가구(저장한 스캔 그물)는 방 세계를 만드는 동안 다른 스레드에서 같이 계산
         savedCompute = computeSaved()
         // 벽 앞에 놓인 것들 (스캔 그물에서, 없으면 스캔 격자의 세운 면) — 전시관 그림을 평평한 벽에만 걸려고
