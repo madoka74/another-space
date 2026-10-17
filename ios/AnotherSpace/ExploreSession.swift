@@ -303,6 +303,10 @@ final class ExploreSession {
     @ObservationIgnored private var peekAway: Float = 0       // 현실 창을 연 뒤 문에서 눈을 돌린 시간
     @ObservationIgnored private var peekGone: Float = 0       // 손잡이 문이 잠깐 안 보인 시간 (잠깐 끊겨도 바로 닫지 않음)
     @ObservationIgnored private var peekAim: SIMD3<Float>?    // 현실 창이 겨누는 곳: 문 가운데 줄의 손잡이 높이(1m), 내 쪽에 가장 가까운 곳 (지금 좌표)
+    @ObservationIgnored private var hands: HandTrackingProvider?
+    @ObservationIgnored private var pinching: [Bool] = [false, false]      // 왼손·오른손 엄지·검지가 맞닿아 있는지
+    @ObservationIgnored private var lastPinch: [Float] = [-9, -9]         // 마지막으로 맞닿은 때
+    @ObservationIgnored private var freePeek = false                       // 더블탭으로 연 현실 창 (시선 앞)
     @ObservationIgnored private var roomClear: Float = 1      // 머리에서 가장 가까운 벽·문까지 (안내판이 벽·문 뒤로 숨지 않게)
     @ObservationIgnored private var peekAmt: Float = 0
     @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
@@ -395,7 +399,7 @@ final class ExploreSession {
         spaceRoot.components.set(OpacityComponent(opacity: 0))
         skinRoot.components.set(OpacityComponent(opacity: 0))
 
-        let auth = await ar.requestAuthorization(for: [.worldSensing])
+        let auth = await ar.requestAuthorization(for: [.worldSensing, .handTracking])
         guard auth[.worldSensing] == .allowed else {
             message = "주변 공간 알아보기를 허락해야 다른 세계를 입힐 수 있어요. 설정 > 개인정보 보호 및 보안에서 켜 주세요."
             return
@@ -403,7 +407,14 @@ final class ExploreSession {
         let w = WorldTrackingProvider()
         let m = SceneReconstructionProvider(modes: [.classification])
         world = w
-        do { try await ar.run([w, m]) } catch {
+        var providers: [any DataProvider] = [w, m]
+        // 손: 손가락 더블탭으로 현실 창 열고 닫기 (허락하지 않으면 이 기능만 빠짐)
+        if auth[.handTracking] == .allowed && HandTrackingProvider.isSupported {
+            let h = HandTrackingProvider()
+            hands = h
+            providers.append(h)
+        }
+        do { try await ar.run(providers) } catch {
             message = "공간 인식을 시작하지 못했어요. 나갔다가 다시 들어와 주세요."
             return
         }
@@ -773,20 +784,48 @@ final class ExploreSession {
     }
 
     // MARK: 현실 창 (닫힌 실제 문을 열 수 있게)
+    /// 손가락 더블탭(엄지·검지를 0.45초 안에 두 번 모음, 어느 손이든) → 시선 앞 현실 창 열기/닫기
+    private func checkDoubleTap() {
+        guard let h = hands, h.state == .running else { return }
+        let (l, r) = h.latestAnchors
+        for (k, a) in [l, r].enumerated() {
+            guard let a, a.isTracked, let sk = a.handSkeleton else { pinching[k] = false; continue }
+            let tj = sk.joint(.thumbTip), ij = sk.joint(.indexFingerTip)
+            guard tj.isTracked, ij.isTracked else { continue }
+            let m = a.originFromAnchorTransform
+            let tp = simd_make_float3(m * tj.anchorFromJointTransform.columns.3)
+            let ip = simd_make_float3(m * ij.anchorFromJointTransform.columns.3)
+            let d = simd_distance(tp, ip)
+            if !pinching[k] && d < 0.015 {
+                pinching[k] = true
+                if t - lastPinch[k] < 0.45 {
+                    lastPinch[k] = -9
+                    freePeek.toggle()
+                } else {
+                    lastPinch[k] = t
+                }
+            } else if pinching[k] && d > 0.035 {
+                pinching[k] = false
+            }
+        }
+    }
+
     /// 손잡이 문을 바라보면 열리는 현실 창: 눈에서 문 손잡이 높이(1m)를 향한 선 위에 떠서 그쪽 현실을 보여 줌.
     /// 문에 다가가면 원도 눈 쪽으로 당겨져(문 앞 가상 문짝보다 늘 앞) 가려지지 않고, 크기는 거리에 맞춰 보이는 크기가 같게
     private func placePeek(_ dt: Float) {
-        let target: Float = peekDoor != nil ? 1 : 0
+        let target: Float = (peekDoor != nil || freePeek) ? 1 : 0
         peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 5 : 8))
         let on = peekAmt > 0.01
         if peek.isEnabled != on { peek.isEnabled = on }
         guard on else { return }
-        let aim = peekAim ?? (head + SIMD3<Float>(fwd.x, 0, fwd.z) * 0.6 + SIMD3<Float>(0, -0.6, 0))
+        // 닫힌 실제 문이면 손잡이 쪽, 아니면(더블탭) 지금 보는 곳 정면 — 시선 높이 그대로
+        let g = simd_length(fwd) > 0.1 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
+        let aim = (peekDoor != nil ? peekAim : nil) ?? (head + g * 0.82)
         let v = aim - head
         let dTarget = simd_length(v)
         guard dTarget > 0.05 else { return }
         let dir = v / dTarget
-        let d = min(0.45, max(0.18, dTarget * 0.55))
+        let d = min(0.45, max(0.15, dTarget * 0.55), max(0.15, roomClear * 0.8))     // 벽·문보다 늘 앞에
         let goal = head + dir * d
         peek.position = peekAmt < 0.05 ? goal : peek.position + (goal - peek.position) * min(1, dt * 8)
         let toHead = head - peek.position
@@ -879,6 +918,7 @@ final class ExploreSession {
             if msg != message { message = msg }
         }
 
+        checkDoubleTap()
         placePeek(dt)
         for (id, wld) in worlds { wld.tick(dt, active: id == current) }
         soundTick(dt)
