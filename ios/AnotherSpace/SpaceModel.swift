@@ -510,7 +510,7 @@ enum Grid {
     }
 }
 
-/// 공간 저장 (Application Support/spaces/<id>/ — space.json, kind.bin, room.bin, win.bin)
+/// 공간 저장 (Application Support/spaces/<id>/ — space.json, kind.bin, room.bin, win.bin, mesh.bin) + iCloud 백업(CloudBackup)
 enum SpaceStore {
     static var dir: URL {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("spaces")
@@ -545,16 +545,21 @@ enum SpaceStore {
         return s
     }
 
-    static func save(_ s: SpaceData) throws {
+    /// 저장 (backup: iCloud에도 같이 — 다시 설치해도 남게)
+    static func save(_ s: SpaceData, backup: Bool = true) throws {
         let f = folder(s.rec.id)
         try FileManager.default.createDirectory(at: f, withIntermediateDirectories: true)
         try Data(s.kind).write(to: f.appendingPathComponent("kind.bin"), options: .atomic)
         try Data(s.room).write(to: f.appendingPathComponent("room.bin"), options: .atomic)
         try Data(s.win).write(to: f.appendingPathComponent("win.bin"), options: .atomic)
         try JSONEncoder().encode(s.rec).write(to: f.appendingPathComponent("space.json"), options: .atomic)
+        if backup { CloudBackup.push(s) }
     }
 
-    static func delete(_ id: String) { try? FileManager.default.removeItem(at: folder(id)) }
+    static func delete(_ id: String) {
+        try? FileManager.default.removeItem(at: folder(id))
+        CloudBackup.remove(id)
+    }
 
     /// 세계 바꿔 저장 (메인 메뉴·탐험 중 테마 바꾸기). '모든 방 같게'면 모든 방이 같이 바뀜
     static func setTheme(_ id: String, room: Int, place: String, weather: String, time: String) {

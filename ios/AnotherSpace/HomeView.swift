@@ -45,6 +45,7 @@ struct HomeView: View {
                 }
             }
             AppModel.shared.closeAction = { await close() }
+            CloudBackup.start()
             model.reload()
             jumpToEdit()
         }
@@ -214,7 +215,7 @@ private struct SpaceCard: View {
 }
 
 /// 탐험 전 안전 확인
-private struct SafetySheet: View {
+struct SafetySheet: View {
     let go: () -> Void
     let cancel: () -> Void
 

@@ -24,6 +24,16 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+      # 효과음 (빌드할 때 tools/make_assets.py 가 만듦 → 앱 안 sfx/)
+      - path: AnotherSpace/Resources/sfx
+        type: folder
+        buildPhase: resources
+        optional: true
+    # iCloud 키-값 저장소: 공간(방 구성·세계)을 같이 저장해 다시 설치해도 남게
+    entitlements:
+      path: AnotherSpace/AnotherSpace.entitlements
+      properties:
+        com.apple.developer.ubiquity-kvstore-identifier: $(TeamIdentifierPrefix)$(CFBundleIdentifier)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.blankishworks.another-space

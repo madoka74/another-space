@@ -2,7 +2,8 @@
 - tex/  : 바닥·벽·물건 무늬(jpg, 반복), 담장·울타리(png, 위가 뚫림), 나무(png), 지평선 띠(png), 물·그림 등
 - sky/  : 하늘 (시간 5 × 날씨 4, 2048×512 jpg — 맨 위 줄 = 하늘 꼭대기, 맨 아래 줄 = 지평선)
           구름은 '하늘 높이의 평면'에 그려 원근이 맞게(지평선 쪽으로 납작하게 모임) 굽고, 해 쪽은 밝게 비춤
-사용: python3 tools/make_assets.py   →  ios/AnotherSpace/Resources/{tex,sky}/"""
+- sfx/  : 효과음 (열쇠 문 나타남·열쇠 돌림·문 열림·탐험 시작 스캔), 48kHz 모노 wav
+사용: python3 tools/make_assets.py   →  ios/AnotherSpace/Resources/{tex,sky,sfx}/"""
 import os, sys, math
 import numpy as np
 from PIL import Image, ImageFilter
@@ -980,6 +981,131 @@ def glow():
     save_png('glow', rgb, a)
 
 
+# ───────────── 효과음 (sfx/, 48kHz 모노 wav) ─────────────
+SR = 48000
+
+
+def save_wav(name, x, peak_db):
+    import wave
+    os.makedirs(os.path.join(OUT, 'sfx'), exist_ok=True)
+    x = np.asarray(x, dtype=float)
+    x = x / (np.max(np.abs(x)) + 1e-9) * (10 ** (peak_db / 20))
+    # 앞뒤 2ms 살짝 열고 닫기 (딸깍 소리 방지)
+    k = int(SR * 0.002)
+    x[:k] *= np.linspace(0, 1, k)
+    x[-k:] *= np.linspace(1, 0, k)
+    with wave.open(os.path.join(OUT, 'sfx', name + '.wav'), 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
+        w.writeframes((np.clip(x, -1, 1) * 32767).astype('<i2').tobytes())
+
+
+def _t(sec):
+    return np.arange(int(SR * sec)) / SR
+
+
+def _bell(f, sec, decay, partials=((1, 1), (2.76, 0.32), (5.4, 0.12), (8.93, 0.05))):
+    t = _t(sec)
+    out = np.zeros_like(t)
+    for m, a in partials:
+        out += a * np.sin(2 * np.pi * f * m * t) * np.exp(-t * decay * (1 + 0.6 * m))
+    return out * (1 - np.exp(-t * 900))
+
+
+def _lowpass(x, cut, order=4):
+    """저역 통과 (주파수 영역에서 부드럽게 깎음: 차단 주파수 위로 옥타브마다 order×6dB)"""
+    X = np.fft.rfft(x)
+    f = np.fft.rfftfreq(len(x), 1 / SR)
+    X *= 1 / np.sqrt(1 + (f / cut) ** (2 * order))
+    return np.fft.irfft(X, len(x))
+
+
+def _place(buf, x, at):
+    i = int(at * SR)
+    n = min(len(x), len(buf) - i)
+    if n > 0:
+        buf[i:i + n] += x[:n]
+
+
+def sfx():
+    r = rng(901)
+    # 열쇠 문이 나타날 때: 유리 같은 작은 종 두 음 + 아주 옅은 바람 (짧고 조용하게)
+    buf = np.zeros(int(SR * 1.8))
+    air = _lowpass(r.standard_normal(int(SR * 0.6)), 1800) * np.sin(np.linspace(0, np.pi, int(SR * 0.6))) ** 2 * 0.08
+    _place(buf, air, 0)
+    _place(buf, _bell(1567.98, 1.5, 3.2), 0.18)
+    _place(buf, _bell(2093.0, 1.4, 3.6) * 0.6, 0.30)
+    save_wav('key_appear', buf, -18)
+
+    # 열쇠를 돌릴 때: 금속 딸깍 두 번 + 낮은 '툭' + 반짝이는 오름 음
+    buf = np.zeros(int(SR * 1.6))
+    def click(sec=0.018, cut=5000):
+        n = r.standard_normal(int(SR * sec))
+        hp = n - _lowpass(n, 1800)
+        return hp * np.exp(-_t(sec) * 260)
+    _place(buf, click(), 0.0)
+    _place(buf, click() * 0.8, 0.22)
+    t = _t(0.25)
+    _place(buf, np.sin(2 * np.pi * 95 * t) * np.exp(-t * 26) * 0.9, 0.22)
+    for i, f in enumerate((1046.5, 1318.5, 1568.0, 2093.0)):
+        _place(buf, _bell(f, 0.9, 4.5) * (0.35 - i * 0.04), 0.32 + i * 0.07)
+    save_wav('key_turn', buf, -12)
+
+    # 문짝이 벽 속으로 밀려 들어갈 때: 묵직한 나무 미끄러짐(낮게 거른 잡음) + 바람 + 끝에 부드러운 '쿵'
+    dur = 1.0
+    buf = np.zeros(int(SR * (dur + 0.4)))
+    n = r.standard_normal(int(SR * dur))
+    env = np.interp(_t(dur), [0, 0.15, 0.55, dur], [0, 1, 0.8, 0])
+    rumble = _lowpass(n, 300) * env
+    grain = _lowpass(n - _lowpass(n, 900), 2500) * env * 0.05 * (1 + 0.5 * np.sin(2 * np.pi * 17 * _t(dur)))
+    _place(buf, rumble + grain, 0)
+    t = _t(0.35)
+    _place(buf, np.sin(2 * np.pi * 62 * t) * np.exp(-t * 14) * 0.7, dur - 0.08)
+    save_wav('door_open', buf, -14)
+
+    # 탐험 시작: 공간을 훑는 스캔 — 낮은 울림으로 시작해 오르는 소리, 점점 빨라지는 디지털 신호, 쓸고 지나가는 바람, 맑은 화음으로 끝
+    dur = 3.6
+    buf = np.zeros(int(SR * dur))
+    t = _t(dur)
+    boom = np.sin(2 * np.pi * 48 * t) * np.exp(-t * 1.6) * 0.9
+    f = 110 * (8 ** np.clip(t / 2.2, 0, 1))                       # 110 → 880Hz
+    ph = 2 * np.pi * np.cumsum(f) / SR
+    rise = (np.sin(ph) + 0.35 * np.sin(2 * ph) + 0.18 * np.sin(3 * ph)) * np.interp(t, [0, 0.3, 2.1, 2.5], [0, 0.35, 0.5, 0])
+    sweep = _lowpass(r.standard_normal(len(t)), 2400)
+    sweep = sweep - _lowpass(sweep, 300)
+    sweep *= np.interp(t, [0, 0.6, 1.6, 2.6], [0, 0.08, 0.3, 0])
+    buf += boom + rise + sweep
+    at = 0.15
+    while at < 2.3:                                              # 디지털 신호: 처음엔 드문드문, 갈수록 촘촘히
+        fq = r.choice([1760, 2093, 2349, 2637, 3136])
+        bt = _t(0.035)
+        _place(buf, np.sign(np.sin(2 * np.pi * fq * bt)) * np.exp(-bt * 90) * 0.12, at)
+        at += max(0.035, 0.22 * (1 - at / 2.4))
+    for fq in (523.25, 783.99, 1046.5, 1567.98):                 # 끝 화음 (C·G·C·G)
+        _place(buf, _bell(fq, 1.4, 2.2) * 0.22, 2.3)
+    save_wav('scan', buf, -8)
+
+
+def scan_grid():
+    """탐험 시작 스캔 격자: 50cm 칸에 밝은 선 + 가는 10cm 보조선 + 군데군데 빛나는 점"""
+    S = 256
+    yy, xx = np.mgrid[0:S, 0:S]
+    def line(c, w):
+        d = np.minimum(c % (S // 1), S - c % S)
+        return np.clip(1 - d / w, 0, 1)
+    main = np.maximum(line(xx, 3.0), line(yy, 3.0))
+    fine = np.maximum(np.clip(1 - np.minimum(xx % (S / 5), S / 5 - xx % (S / 5)) / 1.0, 0, 1),
+                      np.clip(1 - np.minimum(yy % (S / 5), S / 5 - yy % (S / 5)) / 1.0, 0, 1)) * 0.45
+    r = rng(733)
+    dots = np.zeros((S, S))
+    for _ in range(14):
+        cx, cy = r.integers(0, 5) * S // 5, r.integers(0, 5) * S // 5
+        dots = np.maximum(dots, np.clip(1 - np.hypot(xx - cx, yy - cy) / 5, 0, 1))
+    a = np.clip(np.maximum(np.maximum(main, fine), dots), 0, 1)
+    rgb = np.zeros((S, S, 3)) + [120, 255, 170]
+    rgb = rgb * (0.7 + 0.3 * a[..., None])
+    save_png('scan_grid', rgb, a)
+
+
 def main():
     only = sys.argv[1:] if len(sys.argv) > 1 else None
     jobs = {
@@ -1011,7 +1137,8 @@ def main():
             prop_simple('driftwood', [(0, (100, 96, 88)), (0.5, (150, 144, 132)), (1, (196, 190, 176))], 419, aniso=(0.2, 3)),
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
-            facade(), facade(night=True), water(), canvas(), paintings(), glow()),
+            facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid()),
+        'sfx': lambda: sfx(),
     }
     for k, f in jobs.items():
         if only and k not in only:

@@ -120,7 +120,8 @@ final class RoomWorld {
     private var skyMat: UnlitMaterial?
     private var flashMat: UnlitMaterial?
     private var clouds: [(Entity, SIMD3<Float>)] = []
-    private var emitters: [Entity] = []
+    private var emitters: [Entity] = []          // 하늘 세계 쪽 비·눈 (그 방 포털 너머로만 보임)
+    private var roomEmitters: [Entity] = []      // 방 안 비·눈·바람·반딧불 (실제 공간이라 어디서든 보임 → 지금 방만 켬)
     private var flashLeft: Float = 0
     private var water: ModelEntity?
     private var waterOff: Float = 0
@@ -215,7 +216,7 @@ final class RoomWorld {
         if dc.stringLights { addStringLights(segs, L, ceilY: ceilY) }
         addClouds(ceilY: ceilY)
         addWeather(rects, L, floorY: floorY, ceilY: ceilY)
-        setActive(false)
+        setActive(sky: false, room: false)
     }
 
     // MARK: 벽
@@ -830,8 +831,9 @@ final class RoomWorld {
         let w = room.weather
         let wet = ["drizzle", "rain", "storm", "snow", "heavysnow"].contains(w)
         if wet {
-            // 하늘 세계에도 (천장·벽 너머로 내려오는 게 보이게)
-            let e = Self.precip(w, size: SIMD3<Float>(halfSize.x * 2 + 8, 0.1, halfSize.y * 2 + 8), height: 9)
+            // 하늘 세계에도 (천장·벽 너머로 내려오는 게 보이게). 천장 높이에서 사라짐 —
+            // 더 내려오면 포털 앞(옆방 자리)에서도 그려져 옆방에 비가 내리는 것처럼 보임
+            let e = Self.precip(w, size: SIMD3<Float>(halfSize.x * 2 + 8, 0.1, halfSize.y * 2 + 8), height: 7)
             e.position = SIMD3<Float>(center.x, ceilY + 7, center.z)
             e.orientation = simd_quatf(angle: -angle, axis: [0, 1, 0])
             world.addChild(e)
@@ -840,8 +842,9 @@ final class RoomWorld {
         guard outdoor else { return }
         for r in rects.sorted(by: { ($0.1.x - $0.0.x) * ($0.1.y - $0.0.y) > ($1.1.x - $1.0.x) * ($1.1.y - $1.0.y) }).prefix(5) {
             let c = L.flat((r.0 + r.1) / 2)
-            let sx = r.1.x - r.0.x, sz = r.1.y - r.0.y
-            guard sx * sz > 0.4 else { continue }
+            // 벽에서 35cm 안쪽에서만 (눈송이가 흩날려도 벽 너머로 넘어가지 않게)
+            let sx = r.1.x - r.0.x - 0.7, sz = r.1.y - r.0.y - 0.7
+            guard sx > 0.3, sz > 0.3, sx * sz > 0.4 else { continue }
             var list: [Entity] = []
             if wet {
                 let e = Self.precip(w, size: SIMD3<Float>(sx, 0.05, sz), height: room.ceil)
@@ -862,17 +865,20 @@ final class RoomWorld {
             for e in list {
                 e.orientation = simd_quatf(angle: -angle, axis: [0, 1, 0])
                 local.addChild(e)
-                emitters.append(e)
+                roomEmitters.append(e)
             }
         }
     }
 
-    /// 입자를 뿜을지 (지금 방과 이웃 방만 — 문턱을 넘을 때 이미 내리고 있게)
-    func setActive(_ on: Bool) {
-        for e in emitters {
-            if var pe = e.components[ParticleEmitterComponent.self], pe.isEmitting != on {
-                pe.isEmitting = on
-                e.components.set(pe)
+    /// 입자를 뿜을지. sky: 하늘 세계 쪽(지금 방과 이웃 방 — 문 너머로 이미 내리고 있게), room: 방 안(지금 방만)
+    func setActive(sky: Bool, room: Bool) {
+        for (list, on) in [(emitters, sky), (roomEmitters, room)] {
+            for e in list {
+                if var pe = e.components[ParticleEmitterComponent.self], pe.isEmitting != on {
+                    pe.isEmitting = on
+                    e.components.set(pe)
+                }
+                if !on { e.isEnabled = false } else if !e.isEnabled { e.isEnabled = true }
             }
         }
     }

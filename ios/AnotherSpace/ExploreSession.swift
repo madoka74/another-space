@@ -149,6 +149,8 @@ enum Skin {
             let size = max(ext.x, max(ext.y, ext.z))
             if cp.n < 10 || cp.area < 0.03 { continue }                                  // 부스러기
             if cp.lo.y - floorY > 0.3 && cp.area < 0.12 && size < 0.6 { continue }      // 허공에 뜬 작은 조각
+            // 가늘고 긴 조각 (케이블·문틀 끝·스캔이 덜 된 벽 가장자리의 지그재그 띠): 넓이에 비해 길이만 긴 것
+            if cp.area < 0.25 && cp.area < 0.06 * size * size { continue }
             keep[t] = true
         }
         return keep
@@ -203,8 +205,12 @@ enum Skin {
             let r = here.room
             if r == 0 || r >= 256 { continue }                       // 방 밖
             if here.wall < 0.15 { continue }                         // 반듯한 벽이 덮는 곳
-            // 비전프로가 '벽·창·문'으로 알아본 세운 면이 반듯한 벽에서 35cm 안이면 그 벽의 일부(구성이 조금 어긋난 것)로 보고 지움
-            if here.wall < 0.35 && abs(ns.y) < 0.3 && (cls == MeshClass.wall || cls == MeshClass.window || cls == MeshClass.door) { continue }
+            // 벽에 붙은 것(문틀·케이블·콘센트·액자·스캔이 덜 된 벽 조각): 반듯한 벽에서 40cm 안의 세운 면은 분류와 상관없이 지움,
+            // 비전프로가 '벽·창·문'으로 알아본 면은 80cm 안이면 지움(구성이 조금 어긋난 실제 벽)
+            let wallish = cls == MeshClass.wall || cls == MeshClass.window || cls == MeshClass.door
+            if abs(ns.y) < 0.35 && (here.wall < 0.4 || (wallish && here.wall < 0.8)) { continue }
+            // 머리 위(2m 위)는 부딪힐 일이 없으니 입히지 않음 (천장 조명·커튼 레일·문 위 케이블)
+            if hgt > 2.0 { continue }
             if cls == MeshClass.ceiling || hgt > L.ceil[r] - 0.1 { continue }
             if cls == MeshClass.floor || (ns.y > 0.8 && hgt < 0.06) || hgt < -0.05 { continue }
             let l = simd_dot(ns, I.sun[r])
@@ -315,6 +321,12 @@ final class ExploreSession {
     @ObservationIgnored private var nextEvent: Float = 6
     @ObservationIgnored private var nextThunder: Float = 8
     @ObservationIgnored private var ended = false
+    @ObservationIgnored private var intro: ScanIntro?         // 탐험 시작 스캔 연출
+    @ObservationIgnored private var introDone = false
+    @ObservationIgnored private var lastWant: [Int: Float] = [:]   // 열쇠 문이 막 나타났는지 (효과음)
+    @ObservationIgnored private var aligning = false          // 위치 기억이 없을 때 벽 모양으로 맞추는 중
+    @ObservationIgnored private var nextAlign: Float = 8       // 위치 기억을 8초 기다린 뒤부터 3초마다 시도
+    @ObservationIgnored private var alignMap: Align.Map?
     @ObservationIgnored private let player = AmbientPlayer()
 
     init(spaceId: String) {
@@ -338,6 +350,7 @@ final class ExploreSession {
         spaceRoot.addChild(savedRoot)
         root.addChild(skinRoot)
         root.addChild(player.root)
+        Sfx.preload()
         spaceRoot.components.set(OpacityComponent(opacity: 0))
         skinRoot.components.set(OpacityComponent(opacity: 0))
 
@@ -390,7 +403,7 @@ final class ExploreSession {
     /// 비·눈·반딧불은 지금 방과 이웃 방만 (문턱을 넘을 때 이미 내리고 있게)
     private func refreshActive() {
         let on = (neighbors[current] ?? []).union([current])
-        for (id, w) in worlds { w.setActive(on.contains(id)) }
+        for (id, w) in worlds { w.setActive(sky: on.contains(id), room: id == current) }
     }
 
     func stop() {
@@ -590,6 +603,55 @@ final class ExploreSession {
         }
     }
 
+    // MARK: 벽 모양으로 맞추기
+    private func startAlign(_ d: SpaceData) {
+        aligning = true
+        let copies = meshes.values.map { MeshCopy($0) }
+        let fb = head.y - 1.6
+        let cached = alignMap
+        Task {
+            let res = await Task.detached(priority: .userInitiated) { () -> (Align.Map?, Align.Result?) in
+                guard let M = cached ?? Align.map(d) else { return (nil, nil) }
+                return (M, Align.solve(M, Align.live(copies), liveFloorFallback: fb))
+            }.value
+            aligning = false
+            nextAlign = t + 3
+            alignMap = res.0
+            guard !ended, fit == nil, poses.isEmpty, let r = res.1 else { return }
+            applyAligned(r.fit)
+        }
+    }
+
+    /// 맞춘 좌표를 쓰고, 다음부터는 바로 찾도록 그 자리에 새 위치 기억(월드 앵커)을 만들어 저장
+    private func applyAligned(_ f: Fit) {
+        fitTarget = f
+        fit = f
+        skinFit = f
+        spaceRoot.transform = f.transform
+        dirty.formUnion(meshes.keys)
+        message = nil
+        guard let w = world, let d0 = data else { return }
+        let old = d0.rec.anchors
+        Task {
+            var recs: [AnchorRec] = []
+            for r in old {
+                var m = matrix_identity_float4x4
+                let p = f.toCurrent(r.pos)
+                m.columns.3 = SIMD4<Float>(p.x, p.y, p.z, 1)
+                let a = WorldAnchor(originFromAnchorTransform: m)
+                let rec = AnchorRec(a: a.id.uuidString, p: r.p)
+                saved[rec.a] = rec                        // 추가되자마자 들어오는 소식을 이 공간 것으로 알아보게
+                allIds.insert(rec.a)
+                do { try await w.addAnchor(a); recs.append(rec) } catch { saved[rec.a] = nil }
+            }
+            guard !recs.isEmpty, !ended, var d = data else { return }
+            for r in old { saved[r.a] = nil }
+            d.rec.anchors = recs
+            data = d
+            try? SpaceStore.save(d)
+        }
+    }
+
     // MARK: 매 프레임
     func tick(_ dt: Float) {
         t += dt
@@ -600,6 +662,9 @@ final class ExploreSession {
         fwd = -simd_make_float3(m.columns.2)
         if let lh = lastHead, dt > 0 { speed += (simd_distance(lh.xz, head.xz) / dt - speed) * min(1, dt * 4) }
         lastHead = head
+
+        // 위치 기억(월드 앵커)을 못 찾으면(다시 설치해 iCloud에서 되살린 공간 등) 벽 모양으로 맞춤
+        if fit == nil, poses.isEmpty, !aligning, t > nextAlign, let d = data { startAlign(d) }
 
         // 좌표 맞춤이 조금 바뀌면 순간 이동하지 않고 부드럽게 따라감 (크게 틀어졌을 때만 바로)
         if let tg = fitTarget, let cur = fit, tg != cur {
@@ -624,6 +689,25 @@ final class ExploreSession {
             if buildTimer > 0.1 { buildTimer = 0; buildSome(fit, I) }
         }
 
+        // 탐험 시작 스캔 연출: 공간을 찾고 모든 방 세계가 준비되면 한 번
+        if !introDone, intro == nil, ready, let f = fit, let L = layout, let d = data {
+            let hs = f.toSaved(head)
+            let ii = ScanIntro(L, head: L.plane(hs.x, hs.z), floorY: d.rec.floorY, current: current)
+            root.addChild(ii.root)
+            ii.root.transform = spaceRoot.transform
+            intro = ii
+            Sfx.playHead("scan", in: root, gain: -4)
+        }
+        if let ii = intro {
+            ii.root.transform = spaceRoot.transform
+            ii.tick(dt)
+            if ii.done {
+                ii.root.removeFromParent()
+                intro = nil
+                introDone = true
+            }
+        }
+
         // 안전: 공간을 아직 못 찾았거나, 구성한 방 밖이거나, 너무 빠르면 현실이 보이게
         var target: Float = 1
         var why: String?
@@ -631,7 +715,11 @@ final class ExploreSession {
         else if outsideT > 0.6 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
         else if speed > 1.4 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
         let rate: Float = target < fade ? 3 : 1.1
-        fade += (target - fade) * min(1, dt * rate)
+        if let ii = intro {
+            fade = min(target, ii.world)                      // 스캔 연출 중엔 두 번째 파도와 함께 드러남
+        } else {
+            fade += (target - fade) * min(1, dt * rate)
+        }
         if abs(fade - appliedFade) > 0.01 || (target == 1 && fade > 0.99 && appliedFade < 1) {
             let v = fade > 0.99 ? 1 : fade
             spaceRoot.components.set(OpacityComponent(opacity: v))
@@ -733,7 +821,11 @@ final class ExploreSession {
             // 실제 문이 닫혀 있으면 마법 문이 열린 뒤 그 자리에 실제 닫힌 문(손잡이 문)이 보이고, 실제 문을 열면 저쪽 공간이 보임
             var prog = openProg[i]
             if var pr = prog {
+                let before = pr
                 pr += dt / 1.1
+                if before < 0.4 && pr >= 0.4, let v = worlds[animRoom[i] ?? ds.roomA]?.doorView[i], let par = v.root.parent {
+                    Sfx.play("door_open", in: par, at: v.root.position + v.root.orientation.act([0, 1.0, 0.1]), gain: -8)
+                }
                 if pr >= 1 {
                     openProg[i] = nil
                     prog = nil
@@ -769,6 +861,11 @@ final class ExploreSession {
             if prog != nil { sh = 1 }
             doorShow[i] = sh
             let showRoom = prog != nil ? (animRoom[i] ?? here) : here
+            // 열쇠 문이 막 나타날 때: 작은 종소리
+            if want == 1 && (lastWant[i] ?? 0) == 0 && prog == nil, let v = worlds[showRoom]?.doorView[i], let par = v.root.parent {
+                Sfx.play("key_appear", in: par, at: v.root.position + v.root.orientation.act([0, DoorView.keyY, DoorView.keyZ]), gain: -6)
+            }
+            lastWant[i] = want
             for rid in [ds.roomA, ds.roomB] {
                 guard let v = worlds[rid]?.doorView[i] else { continue }
                 let o: Float = rid == showRoom ? sh : 0
@@ -852,6 +949,9 @@ final class ExploreSession {
                         doorSide[i] = side
                         animRoom[i] = side >= 0 ? ds.roomA : ds.roomB
                         openProg[i] = 0                                 // 열쇠가 들어가고 문이 열리는 움직임 시작
+                        if let v = worlds[animRoom[i] ?? ds.roomA]?.doorView[i], let par = v.root.parent {
+                            Sfx.play("key_turn", in: par, at: v.root.position + v.root.orientation.act([0, DoorView.keyY, 0.1]), gain: -4)
+                        }
                     }
                 }
                 return

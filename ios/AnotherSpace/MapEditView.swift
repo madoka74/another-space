@@ -30,6 +30,7 @@ struct MapEditView: View {
     @State private var spaceName = ""
     @State private var unifyRoom: RoomRec?
     @State private var deleting = false
+    @State private var safety = false
     private var m: EditModel { EditModel.shared }
     private var data: SpaceData? { m.data }
     private var sel: [Int] {
@@ -70,6 +71,20 @@ struct MapEditView: View {
         .onChange(of: m.sel) { _, s in
             // 고르면 조정 창을 띄우고(이미 떠 있으면 그 창), 아무것도 안 고르면 닫음
             if s.isEmpty { dismissWindow(id: "inspector", value: spaceId) } else { openWindow(id: "inspector", value: spaceId) }
+        }
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button { safety = true } label: {
+                    Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
+                }
+                .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
+            }
+        }
+        .sheet(isPresented: $safety) {
+            SafetySheet {
+                safety = false
+                AppModel.shared.start(.explore(spaceId))
+            } cancel: { safety = false }
         }
         .sheet(item: $unifyRoom) { r in unifySheet(r) }
         .alert("이 공간을 지울까요?", isPresented: $deleting) {
