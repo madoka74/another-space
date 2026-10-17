@@ -99,7 +99,7 @@ struct SkinGroup: Sendable {
 
 struct SkinResult: Sendable {
     var groups: [SkinGroup] = []
-    var cells: Set<Int64> = []     // 이 그물이 덮는 1m 칸 (저장 좌표) — 그 칸의 미리 그린 가구는 숨김
+    var cellArea: [Int64: Float] = [:]   // 1m 칸마다 그물 넓이 (바닥 10cm~2m 높이) — 실제 그물이 미리 그린 것만큼 채워졌는지 비교
     var doorHits: [Int: Set<Int>] = [:]   // 문 번호 → 문 자리를 막고 있는 칸 (폭 10cm × 높이 10cm) — 실제 문이 닫혔는지 판단
     var doorTouched: Set<Int> = []        // 이 그물이 문 자리를 지나는 문 (문 자리를 새로 본 그물인지)
     var floorY: Float?                    // 이 그물에서 '바닥'으로 알아본 면의 높이 (가운데 값, 지금 좌표)
@@ -178,7 +178,8 @@ enum Skin {
             let a = wv[ia], b = wv[ib], c = wv[ic]
             let ctr = fit.toSaved((a + b + c) / 3)
             let ck = cellKey(ctr.x, ctr.z)
-            if !chunked { out.cells.insert(ck) }
+            let hg0 = ctr.y - L.floorY
+            if hg0 > 0.1 && hg0 < 2.0 { out.cellArea[ck, default: 0] += simd_length(simd_cross(b - a, c - a)) / 2 }
             guard fi < keep.count, keep[fi] else { continue }
             let cr = simd_cross(b - a, c - a)
             let len = simd_length(cr)
@@ -279,8 +280,10 @@ final class ExploreSession {
     @ObservationIgnored private let skinRoot = Entity()       // 실제 그물 (지금 좌표)
     @ObservationIgnored private let savedRoot = Entity()      // 스캔 때 저장한 그물로 미리 그린 가구 (저장 좌표)
     @ObservationIgnored private var savedChunks: [Int64: (ModelEntity, [Int])] = [:]   // 1m 칸 → (엔티티, 재질 키들)
-    @ObservationIgnored private var liveCells: [UUID: Set<Int64>] = [:]
-    @ObservationIgnored private var cellCount: [Int64: Int] = [:]
+    @ObservationIgnored private var liveArea: [UUID: [Int64: Float]] = [:]   // 실제 그물마다 1m 칸별 넓이
+    @ObservationIgnored private var liveSum: [Int64: Float] = [:]            // 칸별 실제 그물 넓이 합
+    @ObservationIgnored private var savedArea: [Int64: Float] = [:]          // 칸별 미리 그린(저장한) 그물 넓이
+    @ObservationIgnored private var savedCompute: Task<SkinResult?, Never>?
     @ObservationIgnored private var savedTask: Task<Void, Never>?
     @ObservationIgnored private var ready = false             // 모든 방 세계를 다 만들었는지
     @ObservationIgnored private var doorOpen: Set<Int> = []   // 손잡이를 눌러 연 문 (다른 세계 사이)
@@ -296,6 +299,8 @@ final class ExploreSession {
     @ObservationIgnored private var fitAt: Float?             // 처음 공간을 찾은 때
     @ObservationIgnored private let peek = ModelEntity()      // 실제 문을 열 수 있게 시야 가운데로 현실을 보여 주는 작은 원
     @ObservationIgnored private var peekLook: Float = 0       // 닫힌 실제 문을 바라본 시간
+    @ObservationIgnored private var peekDoor: Int?            // 현실 창을 연 문 (그 문이 열리거나 멀어지거나 한참 딴 곳을 보면 닫힘)
+    @ObservationIgnored private var peekAway: Float = 0       // 현실 창을 연 뒤 문에서 눈을 돌린 시간
     @ObservationIgnored private var peekAmt: Float = 0
     @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var openProg: [Int: Float] = [:]             // 여는 움직임 진행 (0~1)
@@ -373,6 +378,15 @@ final class ExploreSession {
         Sfx.preload()
         // 현실 창: 가려 주는 재질(OcclusionMaterial)은 그 뒤의 가상 물체를 지워 현실이 보이게 함
         peek.model = ModelComponent(mesh: .generateCylinder(height: 0.002, radius: 1), materials: [OcclusionMaterial()])
+        // 황금 테두리 (현실 창이 열린 걸 확실히 알 수 있게)
+        var ring = Geo()
+        let segs = 64
+        for k in 0..<segs {
+            let a0 = Float(k) / Float(segs) * 2 * .pi, a1 = Float(k + 1) / Float(segs) * 2 * .pi
+            let i0 = SIMD3<Float>(cos(a0), 0.004, sin(a0)), i1 = SIMD3<Float>(cos(a1), 0.004, sin(a1))
+            ring.quad(i0, i0 * SIMD3<Float>(1.1, 1, 1.1), i1 * SIMD3<Float>(1.1, 1, 1.1), i1, .zero, .zero, .zero, .zero)
+        }
+        if let r = ring.entity("peekRing", RoomWorld.gold(rough: 0.25, glow: 1.4)) { peek.addChild(r) }
         peek.isEnabled = false
         root.addChild(peek)
         spaceRoot.components.set(OpacityComponent(opacity: 0))
@@ -392,6 +406,8 @@ final class ExploreSession {
         }
         Task { await self.watchMeshes(m) }
         Task { await self.watchWorld(w) }
+        // 미리 그려 둘 가구(저장한 스캔 그물)는 방 세계를 만드는 동안 다른 스레드에서 같이 계산
+        savedCompute = computeSaved()
         // 벽 앞에 놓인 것들 (스캔 그물에서, 없으면 스캔 격자의 세운 면) — 전시관 그림을 평평한 벽에만 걸려고
         let sid = spaceId
         clutter = await Task.detached(priority: .userInitiated) { Self.findClutter(sid, d, L) }.value
@@ -405,8 +421,10 @@ final class ExploreSession {
             guard let d = data, let L = layout else { return }
             let todo = d.rec.rooms.filter { worlds[$0.id] == nil }
             guard !todo.isEmpty else {
+                // 미리 그린 가구까지 다 만든 뒤에 보여 줌 (들어서자마자 가구가 있게)
+                if let res = await savedCompute?.value, !ended { await makeSaved(res) }
+                savedCompute = nil
                 ready = true
-                buildSaved()
                 return
             }
             let near = neighbors[current] ?? []
@@ -493,63 +511,80 @@ final class ExploreSession {
     // MARK: 미리 그려 두는 가구 (스캔 때 저장한 그물)
     /// 모든 방의 가구를 처음부터 그려 둠. 비전프로가 지금 보고 있는 실제 그물이 그 1m 칸을 덮으면
     /// 미리 그린 것은 숨기고 실제 그물을 씀 → 옮긴 의자도 가까이 가면 제자리에 다시 입혀짐
-    private func buildSaved() {
-        guard let I = info else { return }
+    private func computeSaved() -> Task<SkinResult?, Never>? {
+        guard let I = info else { return nil }
         let id = spaceId
-        savedTask?.cancel()
-        savedTask = Task {
-            let res = await Task.detached(priority: .utility) { () -> SkinResult? in
-                guard let m = SpaceStore.loadMesh(id) else { return nil }
-                return Skin.build(Skin.weld(m.0, m.1), I, Fit(), chunked: true)
-            }.value
-            guard !Task.isCancelled, !ended, let res else { return }
-            for (_, v) in savedChunks { v.0.removeFromParent() }
-            savedChunks = [:]
-            var byCell: [Int64: [SkinGroup]] = [:]
-            for g in res.groups where !g.idx.isEmpty { byCell[g.cell, default: []].append(g) }
-            var n = 0
-            for (cell, list) in byCell {
-                guard !Task.isCancelled, !ended else { return }
-                var descs: [MeshDescriptor] = []
-                var keys: [Int] = []
-                for g in list {
-                    var md = MeshDescriptor(name: "s\(g.room)_\(g.shade)")
-                    md.positions = MeshBuffers.Positions(g.pos)
-                    md.textureCoordinates = MeshBuffers.TextureCoordinates(g.uv)
-                    md.primitives = .triangles(g.idx)
-                    md.materials = .allFaces(UInt32(keys.count))
-                    descs.append(md)
-                    keys.append(g.room * 4 + g.shade)
-                }
-                guard let mesh = try? MeshResource.generate(from: descs) else { continue }
-                let ms: [RealityKit.Material] = keys.map { material($0 / 4, $0 % 4) }
-                let e = ModelEntity(mesh: mesh, materials: ms)
-                e.isEnabled = (cellCount[cell] ?? 0) == 0
-                savedRoot.addChild(e)
-                savedChunks[cell] = (e, keys)
-                n += 1
-                if n % 8 == 0 { await Task.yield() }          // 한꺼번에 만들어 화면이 멈추지 않게
-            }
+        return Task.detached(priority: .userInitiated) { () -> SkinResult? in
+            guard let m = SpaceStore.loadMesh(id) else { return nil }
+            return Skin.build(Skin.weld(m.0, m.1), I, Fit(), chunked: true)
         }
     }
 
-    /// 실제 그물이 덮는 칸이 바뀌면 미리 그린 가구를 숨기거나 다시 보임
-    private func setLiveCells(_ id: UUID, _ cells: Set<Int64>) {
-        let old = liveCells[id] ?? []
-        for c in old.subtracting(cells) {
-            let k = (cellCount[c] ?? 1) - 1
-            if k <= 0 {
-                cellCount[c] = nil
-                if let e = savedChunks[c]?.0 { e.isEnabled = true }
-            } else {
-                cellCount[c] = k
+    /// 테마를 바꾼 뒤 다시 (색·그늘이 바뀜)
+    private func buildSaved() {
+        savedTask?.cancel()
+        let c = computeSaved()
+        savedTask = Task {
+            guard let res = await c?.value, !Task.isCancelled, !ended else { return }
+            await makeSaved(res)
+        }
+    }
+
+    private func makeSaved(_ res: SkinResult) async {
+        var byCell: [Int64: [SkinGroup]] = [:]
+        for g in res.groups where !g.idx.isEmpty { byCell[g.cell, default: []].append(g) }
+        var made: [Int64: (ModelEntity, [Int])] = [:]
+        var n = 0
+        for (cell, list) in byCell {
+            guard !Task.isCancelled, !ended else { return }
+            var descs: [MeshDescriptor] = []
+            var keys: [Int] = []
+            for g in list {
+                var md = MeshDescriptor(name: "s\(g.room)_\(g.shade)")
+                md.positions = MeshBuffers.Positions(g.pos)
+                md.textureCoordinates = MeshBuffers.TextureCoordinates(g.uv)
+                md.primitives = .triangles(g.idx)
+                md.materials = .allFaces(UInt32(keys.count))
+                descs.append(md)
+                keys.append(g.room * 4 + g.shade)
+            }
+            guard let mesh = try? MeshResource.generate(from: descs) else { continue }
+            let ms: [RealityKit.Material] = keys.map { material($0 / 4, $0 % 4) }
+            made[cell] = (ModelEntity(mesh: mesh, materials: ms), keys)
+            n += 1
+            if n % (ready ? 8 : 32) == 0 { await Task.yield() }     // 보이기 전엔 크게 묶어서 빨리
+        }
+        guard !Task.isCancelled, !ended else { return }
+        // 다 만든 뒤 한 번에 바꿔 끼움 (예전 것이 사라졌다 나타나는 틈이 없게)
+        for (_, v) in savedChunks { v.0.removeFromParent() }
+        savedChunks = made
+        savedArea = res.cellArea
+        for (cell, v) in made {
+            v.0.isEnabled = savedVisible(cell)
+            savedRoot.addChild(v.0)
+        }
+    }
+
+    /// 미리 그린 가구를 보일지: 그 칸의 실제 그물이 미리 그린 것의 70%만큼 채워지기 전까지는 미리 그린 것을 보임
+    /// (실제 그물이 막 생기기 시작한 칸에서 가구가 사라졌다 조각조각 다시 나타나지 않게)
+    private func savedVisible(_ c: Int64) -> Bool {
+        let live = liveSum[c] ?? 0
+        let saved = savedArea[c] ?? 0
+        return live < max(0.05, saved * 0.7)
+    }
+
+    /// 실제 그물이 채운 넓이가 바뀌면 미리 그린 가구를 숨기거나 다시 보임
+    private func setLiveCells(_ id: UUID, _ areas: [Int64: Float]) {
+        let old = liveArea[id] ?? [:]
+        for c in Set(old.keys).union(areas.keys) {
+            let v = (liveSum[c] ?? 0) - (old[c] ?? 0) + (areas[c] ?? 0)
+            liveSum[c] = v > 1e-4 ? v : nil
+            if let e = savedChunks[c]?.0 {
+                let on = savedVisible(c)
+                if e.isEnabled != on { e.isEnabled = on }
             }
         }
-        for c in cells.subtracting(old) {
-            cellCount[c, default: 0] += 1
-            if let e = savedChunks[c]?.0 { e.isEnabled = false }
-        }
-        liveCells[id] = cells.isEmpty ? nil : cells
+        liveArea[id] = areas.isEmpty ? nil : areas
     }
 
     // MARK: 비전프로가 알려 주는 것
@@ -579,7 +614,7 @@ final class ExploreSession {
                 meshes[a.id] = nil
                 dirty.remove(a.id)
                 meshEnts.removeValue(forKey: a.id)?.removeFromParent()
-                setLiveCells(a.id, [])
+                setLiveCells(a.id, [:])
                 setDoorHits(a.id, [:], touched: [])
                 floorSamples[a.id] = nil
             default:
@@ -734,16 +769,21 @@ final class ExploreSession {
     }
 
     // MARK: 현실 창 (닫힌 실제 문을 열 수 있게)
-    /// 닫힌 실제 문(손잡이 문)을 2초 넘게 바라보면 시야 가운데에 작은 원으로 현실이 보임. 다른 곳을 보면 닫힘
+    /// 손잡이 문을 바라보면 열리는 현실 창: 시야 가운데보다 조금 아래(손잡이 높이 쪽), 55cm 앞, 황금 테두리
     private func placePeek(_ dt: Float) {
-        let target: Float = peekLook > 2 ? 1 : 0
+        let target: Float = peekDoor != nil ? 1 : 0
         peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 5 : 8))
         let on = peekAmt > 0.01
         if peek.isEnabled != on { peek.isEnabled = on }
         guard on else { return }
-        let f = simd_length(fwd) > 0.1 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-        peek.position = head + f * 0.6
-        peek.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: -f)
+        var f = SIMD3<Float>(fwd.x, 0, fwd.z)
+        f = simd_length(f) > 0.1 ? simd_normalize(f) : SIMD3<Float>(0, 0, -1)
+        // 앞을 보는 방향(위아래 기울기 포함)을 반쯤 따르고 15cm 아래로 → 고개를 숙여 손잡이를 봐도 따라옴
+        let look = simd_normalize(simd_length(fwd) > 0.1 ? fwd : f)
+        let goal = head + simd_normalize(f * 0.5 + look * 0.5) * 0.55 + SIMD3<Float>(0, -0.15, 0)
+        peek.position = peekAmt < 0.05 ? goal : peek.position + (goal - peek.position) * min(1, dt * 6)
+        let toHead = head - peek.position
+        if simd_length(toHead) > 0.01 { peek.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: simd_normalize(toHead)) }
         let e = peekAmt * peekAmt * (3 - 2 * peekAmt)
         let r = 0.17 * max(0.001, e)
         peek.scale = SIMD3<Float>(r, 1, r)
@@ -890,10 +930,22 @@ final class ExploreSession {
         look = simd_length(look) > 0.1 ? simd_normalize(look) : .zero
         let breath = 0.5 + 0.5 * sin(t * 2.4)                                   // 숨 쉬듯
         var glowMat: PhysicallyBasedMaterial?
-        var urgent = false, lookingAtLeaf = false
+        var urgent = false, lookingAt: Int? = nil
+        var leafOn = Set<Int>(), away = Set<Int>()
         defer {
             doorUrgent = urgent
-            peekLook = lookingAtLeaf ? peekLook + dt : 0
+            // 현실 창: 손잡이 문을 1.5초 바라보면 열고, 그 문이 보이는 동안(실제 문이 닫혀 있고 1m 안) 그대로 둠 —
+            // 손을 뻗거나 손잡이를 내려다봐도 닫히지 않게. 실제 문이 열리거나, 멀어지거나, 2초 넘게 딴 곳을 보면 닫음
+            if let pd = peekDoor {
+                if !leafOn.contains(pd) { peekDoor = nil; peekAway = 0 }
+                else {
+                    peekAway = away.contains(pd) ? peekAway + dt : 0
+                    if peekAway > 2 { peekDoor = nil; peekAway = 0 }
+                }
+            } else {
+                peekLook = lookingAt != nil ? peekLook + dt : 0
+                if peekLook > 1.5, let i = lookingAt { peekDoor = i; peekLook = 0; peekAway = 0 }
+            }
         }
         for (i, ds) in L.doors.enumerated() {
             var same = ds.single                                               // 한 방 안의 문은 늘 같은 세계
@@ -959,8 +1011,11 @@ final class ExploreSession {
                 if leaf.isEnabled != on { leaf.isEnabled = on }
                 if on {
                     urgent = true
+                    leafOn.insert(i)
                     let to = ds.mid - p
-                    if simd_length(to) > 0.05 && simd_dot(simd_normalize(to), look) > 0.8 { lookingAtLeaf = true }
+                    let dd = simd_length(to) > 0.05 ? simd_dot(simd_normalize(to), look) : 1
+                    if dd > 0.8 { lookingAt = i }
+                    if dd < 0.2 { away.insert(i) }
                 }
             }
             // 방금 지나온 문: 1m 밖으로 멀어지거나, 돌아서서 문 쪽을 바라보면 다시 열쇠 문이 보임
@@ -1108,7 +1163,7 @@ final class ExploreSession {
                 building.remove(id)
                 guard !ended, meshes[id] != nil else { return }
                 apply(id, res.groups)
-                setLiveCells(id, res.cells)
+                setLiveCells(id, res.cellArea)
                 setDoorHits(id, res.doorHits, touched: res.doorTouched)
                 if let fy = res.floorY { floorSamples[id] = (fy, res.floorN) } else { floorSamples[id] = nil }
             }

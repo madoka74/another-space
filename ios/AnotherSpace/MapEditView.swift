@@ -73,16 +73,13 @@ struct MapEditView: View {
             if s.isEmpty { dismissWindow(id: "inspector", value: spaceId) } else { openWindow(id: "inspector", value: spaceId) }
         }
         .toolbar {
-            // 공간 이름 오른쪽에 탐험 시작 (뒤로 가기 버튼과 떨어지게)
-            ToolbarItem(placement: .principal) {
-                HStack(spacing: 16) {
-                    Text(spaceName.isEmpty ? "방 구성" : spaceName).font(.headline)
-                    Button { safety = true } label: {
-                        Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
+            // 탐험 시작은 오른쪽 위 (뒤로 가기 버튼과 멀리)
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { safety = true } label: {
+                    Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
             }
         }
         .sheet(isPresented: $safety) {
