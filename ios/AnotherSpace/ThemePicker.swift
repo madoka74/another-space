@@ -1,5 +1,14 @@
 import SwiftUI
 
+extension View {
+    /// 직접 그린 둥근 사각 버튼: 누르는 자리와 바라볼 때 빛나는 모양을 그 둥근 사각 그대로 (기본은 원·캡슐 모양으로 빛남)
+    func tileHover(_ radius: CGFloat) -> some View {
+        self.contentShape(.interaction, RoundedRectangle(cornerRadius: radius))
+            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: radius))
+            .hoverEffect(.highlight)
+    }
+}
+
 /// 방의 세계(장소·날씨·시간)를 칩 한 번 누르기로 바꾸는 판. 메인 메뉴·편집·탐험 중 안내판에서 같이 씀
 struct ThemePicker: View {
     let room: RoomRec
@@ -39,10 +48,9 @@ struct ThemePicker: View {
                             .frame(width: compact ? 60 : 68, height: compact ? 54 : 60)
                             .background(on ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.08),
                                         in: RoundedRectangle(cornerRadius: 14))
-                            .contentShape(RoundedRectangle(cornerRadius: 14))
+                            .tileHover(14)
                         }
                         .buttonStyle(.plain)
-                        .hoverEffect(.highlight)
                     }
                 }
                 .padding(.vertical, 2)

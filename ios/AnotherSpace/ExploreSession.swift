@@ -340,6 +340,7 @@ final class ExploreSession {
     @ObservationIgnored private var nextEvent: Float = 6
     @ObservationIgnored private var nextThunder: Float = 8
     @ObservationIgnored private var ended = false
+    @ObservationIgnored private var clutter: Set<Int64> = []   // 벽 앞 눈높이에 무언가 있는 칸 (전시관 그림 자리 고르기)
     @ObservationIgnored private var intro: ScanIntro?         // 탐험 시작 스캔 연출
     @ObservationIgnored private var introDone = false
     @ObservationIgnored private var lastWant: [Int: Float] = [:]   // 열쇠 문이 막 나타났는지 (효과음)
@@ -391,6 +392,9 @@ final class ExploreSession {
         }
         Task { await self.watchMeshes(m) }
         Task { await self.watchWorld(w) }
+        // 벽 앞에 놓인 것들 (스캔 그물에서, 없으면 스캔 격자의 세운 면) — 전시관 그림을 평평한 벽에만 걸려고
+        let sid = spaceId
+        clutter = await Task.detached(priority: .userInitiated) { Self.findClutter(sid, d, L) }.value
         // 공간을 알아보는 동안 방 세계를 하나씩 미리 만듦 (그림도 미리 읽어 둠) → 문턱을 넘을 때 기다리지 않음
         await buildWorlds()
     }
@@ -417,7 +421,7 @@ final class ExploreSession {
     }
 
     private func addWorld(_ d: SpaceData, _ r: RoomRec, _ L: Layout) {
-        let w = RoomWorld(d, r, layout: L)
+        let w = RoomWorld(d, r, layout: L, clutter: clutter)
         spaceRoot.addChild(w.world)
         spaceRoot.addChild(w.local)
         worlds[r.id] = w
@@ -629,6 +633,29 @@ final class ExploreSession {
         }
     }
 
+    nonisolated static func findClutter(_ id: String, _ d: SpaceData, _ L: Layout) -> Set<Int64> {
+        var out = Set<Int64>()
+        if let mesh = SpaceStore.loadMesh(id) {
+            let pts = mesh.0, cls = mesh.1
+            var t = 0
+            while t * 3 + 2 < pts.count {
+                defer { t += 1 }
+                let c = t < cls.count ? cls[t] : 0
+                if c == MeshClass.floor || c == MeshClass.ceiling { continue }
+                let ctr = (pts[t * 3] + pts[t * 3 + 1] + pts[t * 3 + 2]) / 3
+                let h = ctr.y - L.floorY
+                guard h > 0.8 && h < 2.2 else { continue }
+                out.insert(RoomWorld.clutterKey(L.plane(ctr.x, ctr.z)))
+            }
+        } else {
+            let cell = d.rec.cell
+            for v in 0..<d.rec.h { for u in 0..<d.rec.w where d.kind[v * d.rec.w + u] == RoomSegment.WALL {
+                out.insert(RoomWorld.clutterKey(SIMD2<Float>((Float(u) + 0.5) * cell, (Float(v) + 0.5) * cell)))
+            } }
+        }
+        return out
+    }
+
     // MARK: 벽 모양으로 맞추기
     private func startAlign(_ d: SpaceData) {
         aligning = true
@@ -800,7 +827,7 @@ final class ExploreSession {
         }
         if fit != nil {
             let total = data?.rec.rooms.count ?? 0
-            let msg = !ready ? "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
+            let msg: String? = !ready ? "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
                 : (!floorOK ? "바닥 높이를 맞추는 중이에요. 발밑을 한 번 내려다봐 주세요." : (why ?? player.status))
             if msg != message { message = msg }
         }

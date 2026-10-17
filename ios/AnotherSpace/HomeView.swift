@@ -192,8 +192,7 @@ private struct SpaceCard: View {
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 14))
-                        .hoverEffect(.highlight)
+                        .tileHover(14)
                     }
                     .buttonStyle(.plain)
                     .buttonBorderShape(.roundedRectangle(radius: 14))

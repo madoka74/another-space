@@ -141,7 +141,15 @@ final class RoomWorld {
 
     typealias PRect = (SIMD2<Float>, SIMD2<Float>)
 
-    init(_ d: SpaceData, _ r: RoomRec, layout: Layout) {
+    /// 벽 앞(눈높이)에 무언가 있는 10cm 칸 (평면 좌표) — 그림은 이런 곳을 피해 평평한 벽에만 걺
+    private let clutter: Set<Int64>
+
+    nonisolated static func clutterKey(_ p: SIMD2<Float>) -> Int64 {
+        (Int64((p.x / 0.1).rounded(.down)) + 100_000) << 20 | (Int64((p.y / 0.1).rounded(.down)) + 100_000)
+    }
+
+    init(_ d: SpaceData, _ r: RoomRec, layout: Layout, clutter: Set<Int64> = []) {
+        self.clutter = clutter
         room = r
         style = Worlds.style(r.place, time: r.time)
         angle = d.rec.angle
@@ -750,31 +758,61 @@ final class RoomWorld {
         }
     }
 
-    /// 전시관: 창이 아닌 벽에 그림을 걺 (벽 1.3m마다 한 점, 눈높이)
+    /// 전시관: 창이 아닌 벽 중 '평평하게 비어 있는 곳'에만 그림을 걺.
+    /// 벽 앞 12~60cm, 눈높이(0.8~2.2m)에 스캔에서 무언가(가구·문틀·선반 등)가 있는 곳과 문 자리 30cm 안은 피하고,
+    /// 남은 빈 구간마다 구간 길이에 맞는 크기로 (구간이 길면 두 점)
     private func addPaintings(_ segs: [WallSeg], _ L: Layout, floorY: Float) {
         var arts = Array(repeating: Geo(), count: 6)
         var frames = Geo()
         var k = room.id
+        var doorEnds: [SIMD2<Float>] = []
+        for ds in L.doors where ds.roomA == room.id || ds.roomB == room.id {
+            let (ea, eb, _) = ds.edge(for: room.id)
+            doorEnds += [ea, eb]
+        }
         for s in segs where !s.window {
-            let a2 = L.flat(s.a), b2 = L.flat(s.b)
-            let len = simd_distance(a2, b2)
-            guard len >= 1.3 else { continue }
-            let dir = (b2 - a2) / len
-            let n2 = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))
-            let n = SIMD3<Float>(n2.x, 0, n2.y)
-            let right = simd_cross(-n, SIMD3<Float>(0, 1, 0))
-            let count = len >= 3.4 ? 2 : 1
-            for i in 0..<count {
-                let c2 = a2 + dir * (len * (Float(i) + 0.5) / Float(count))
-                let w = min(1.1, len / Float(count) * 0.55), h = w * 1.25
-                let c = SIMD3<Float>(c2.x, floorY + 1.5, c2.y)
-                let p = c + n * 0.035, f = c + n * 0.025
-                let hw = right * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
-                arts[k % 6].quad(p - hw - hh, p + hw - hh, p + hw + hh, p - hw + hh,
-                                 SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
-                let fw = right * (w / 2 + 0.06), fh = SIMD3<Float>(0, h / 2 + 0.06, 0)
-                frames.quad(f - fw - fh, f + fw - fh, f + fw + fh, f - fw + fh, .zero, .zero, .zero, .zero)
-                k += 1
+            let len = simd_distance(s.a, s.b)
+            guard len >= 0.7 else { continue }
+            let dir = (s.b - s.a) / len
+            // 5cm마다 그 자리 벽 앞이 비었는지
+            let step: Float = 0.05
+            let n = Int(len / step)
+            var free = [Bool](repeating: true, count: n)
+            for i in 0..<n {
+                let q = s.a + dir * ((Float(i) + 0.5) * step)
+                if doorEnds.contains(where: { simd_distance($0, q) < 0.3 }) { free[i] = false; continue }
+                var off: Float = 0.12
+                while off <= 0.6 {
+                    if clutter.contains(Self.clutterKey(q + s.n * off)) { free[i] = false; break }
+                    off += 0.08
+                }
+            }
+            // 빈 구간들 (양끝 15cm 여유)
+            var i = 0
+            while i < n {
+                guard free[i] else { i += 1; continue }
+                var j = i
+                while j < n && free[j] { j += 1 }
+                let t0 = Float(i) * step + 0.15, t1 = Float(j) * step - 0.15
+                i = j
+                let span = t1 - t0
+                guard span >= 0.45 else { continue }
+                let count = span >= 3.2 ? 2 : 1
+                for c in 0..<count {
+                    let w = min(1.1, span / Float(count) * 0.62), h = w * 1.25
+                    let mid2 = L.flat(s.a + dir * (t0 + span * (Float(c) + 0.5) / Float(count)))
+                    let n2 = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))
+                    let nn = SIMD3<Float>(n2.x, 0, n2.y)
+                    let right = simd_cross(-nn, SIMD3<Float>(0, 1, 0))
+                    let ctr = SIMD3<Float>(mid2.x, floorY + max(1.5, 0.9 + h / 2), mid2.y)      // 아래 끝은 0.9m 위로
+                    let pp = ctr + nn * 0.035, ff = ctr + nn * 0.025
+                    let hw = right * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
+                    arts[k % 6].quad(pp - hw - hh, pp + hw - hh, pp + hw + hh, pp - hw + hh,
+                                     SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+                    let fw = right * (w / 2 + 0.06), fh = SIMD3<Float>(0, h / 2 + 0.06, 0)
+                    frames.quad(ff - fw - fh, ff + fw - fh, ff + fw + fh, ff - fw + fh, .zero, .zero, .zero, .zero)
+                    k += 1
+                }
             }
         }
         let lit = Worlds.safe(tint, min: 0.55)
