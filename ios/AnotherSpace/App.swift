@@ -10,6 +10,18 @@ struct AnotherSpaceApp: App {
         }
         .defaultSize(width: 1180, height: 780)
 
+        // 공간설정에서 고른 방·문 조정 창 (옮길 수 있는 따로 된 창, 처음엔 메인 창 오른쪽)
+        WindowGroup(id: "inspector", for: String.self) { _ in
+            ShapeInspector()
+        }
+        .defaultSize(width: 520, height: 760)
+        .defaultWindowPlacement { _, context in
+            if let main = context.windows.first(where: { $0.id == "main" }) {
+                return WindowPlacement(.trailing(main))
+            }
+            return WindowPlacement()
+        }
+
         // 현실 위에 다른 세계를 덮는 공간. 걸어 다녀야 하므로 '섞인 모드'로 열고(완전 몰입은 1.5m를 못 벗어남),
         // 현실이 보일 틈은 앱이 직접 바닥·벽·하늘로 덮음. 스캔하지 않은 곳·그물이 없는 곳은 현실이 그대로 보임(안전)
         ImmersiveSpace(id: "space") {

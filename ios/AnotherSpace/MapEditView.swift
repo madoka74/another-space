@@ -2,18 +2,18 @@ import SwiftUI
 import CoreGraphics
 
 /// 방 구성 편집: 위에서 본 스캔 지도 위에 사각형을 놓아 집을 구성함.
-/// - 사각형 그리기: 누른 곳에 점이 바로 보이고, 끌거나 두 번째 점을 누르면 사각형. 다른 사각형·스캔 벽 가까이에서는 착 붙음
+/// - 그리기: 지도 오른쪽 아래 + 에서 방·문을 고른 뒤, 누른 곳에 점이 보이고 끌거나 두 번째 점을 누르면 사각형. 다른 사각형·스캔 벽 가까이에서는 착 붙음
 /// - 고르기: 누르면 고름(여러 개 고르기 켜면 계속 더함), 모서리 점 4개를 끌어 크기 조절, 몸통을 끌어 옮기기
-/// - 결합: 고른 사각형들을 한 방으로 / 분리: 고른 사각형을 하나씩 다른 방으로
-/// - 다른 방끼리 맞닿은 곳에는 벽이 섬. 문 그리기로 그 경계에 걸쳐 그린 문·통로 사각형 자리만 뚫림 (틈이 있으면 틈도 메움)
+/// - 고른 것의 조정(결합·분리·정밀 조정·세계)은 따로 뜨는 조정 창에서
+/// - 다른 방끼리 맞닿은 곳에는 벽이 섬. 문·통로 사각형 자리만 뚫림 (틈이 있으면 틈도 메움)
 /// - 바라보는 사각형·모서리 점은 빛나서 무엇을 잡을지 미리 보임
 /// 바꿀 때마다 바로 저장됨
 struct MapEditView: View {
     let spaceId: String
-    @State private var data: SpaceData?
-    @State private var sel: [Int] = []
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.dismiss) private var dismiss
     @State private var tool: Tool = .select
-    @State private var multi = false
     @State private var zoom: CGFloat = 1
     @State private var zoomBase: CGFloat = 1
     @State private var pan: CGSize = .zero
@@ -24,16 +24,18 @@ struct MapEditView: View {
     @State private var cursor: SIMD2<Float>?
     @State private var preview: ShapeRec?
     @State private var guides: [Guide] = []
-    @State private var undo: [SpaceData] = []
     @State private var bg: CGImage?
     @State private var scanU: [Float] = []
     @State private var scanV: [Float] = []
-    @State private var renaming = false
-    @State private var nameText = ""
     @State private var spaceName = ""
-    @State private var toast: String?
     @State private var unifyRoom: RoomRec?
-    @State private var step: Float = 0.05
+    @State private var deleting = false
+    private var m: EditModel { EditModel.shared }
+    private var data: SpaceData? { m.data }
+    private var sel: [Int] {
+        get { m.sel }
+        nonmutating set { m.sel = newValue }
+    }
 
     enum Tool: Hashable { case select, draw, door }
     enum Guide: Hashable { case u(Float), v(Float) }
@@ -59,12 +61,26 @@ struct MapEditView: View {
             }
         }
         .navigationTitle(spaceName.isEmpty ? "방 구성" : spaceName)
+        .navigationBarTitleDisplayMode(.inline)
         .onAppear(perform: load)
+        .onDisappear {
+            dismissWindow(id: "inspector", value: spaceId)
+            m.close()
+        }
+        .onChange(of: m.sel) { _, s in
+            // 고르면 조정 창을 띄우고(이미 떠 있으면 그 창), 아무것도 안 고르면 닫음
+            if s.isEmpty { dismissWindow(id: "inspector", value: spaceId) } else { openWindow(id: "inspector", value: spaceId) }
+        }
         .sheet(item: $unifyRoom) { r in unifySheet(r) }
-        .alert("방 이름", isPresented: $renaming) {
-            TextField("이름", text: $nameText)
-            Button("이대로") { rename(nameText) }
+        .alert("이 공간을 지울까요?", isPresented: $deleting) {
+            Button("지우기", role: .destructive) {
+                SpaceStore.delete(spaceId)
+                AppModel.shared.reload()
+                dismiss()
+            }
             Button("취소", role: .cancel) {}
+        } message: {
+            Text("스캔한 모양과 방 구성, 방마다 정한 세계가 모두 지워져요.")
         }
     }
 
@@ -112,11 +128,34 @@ struct MapEditView: View {
                 )
             HStack(spacing: 8) {
                 Button { setZoom(zoom / 1.4) } label: { Image(systemName: "minus.magnifyingglass") }
-                Button { setZoom(1); pan = .zero } label: { Image(systemName: "arrow.up.left.and.down.right.magnifyingglass") }
                 Button { setZoom(zoom * 1.4) } label: { Image(systemName: "plus.magnifyingglass") }
+                if tool == .select {
+                    Menu {
+                        Button { startDraw(.draw) } label: { Label("방", systemImage: "rectangle.dashed") }
+                        Button { startDraw(.door) } label: { Label("문·통로", systemImage: "door.left.hand.open") }
+                    } label: { Image(systemName: "plus") }
+                } else {
+                    Button { startDraw(.select) } label: { Image(systemName: "xmark") }
+                }
             }
             .padding(14)
         }
+        .overlay(alignment: .top) {
+            if tool != .select {
+                Label(tool == .door ? "문: 두 방 경계를 가로질러 그리기" : "방: 모서리 두 곳 누르기",
+                      systemImage: tool == .door ? "door.left.hand.open" : "rectangle.dashed")
+                    .font(.callout.weight(.semibold))
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(.regularMaterial, in: Capsule())
+                    .padding(.top, 14)
+            }
+        }
+    }
+
+    private func startDraw(_ t: Tool) {
+        tool = t
+        pin = nil; cursor = nil
+        if t != .select { sel = [] }
     }
 
     private func setZoom(_ z: CGFloat) { zoom = min(8, max(0.5, z)); zoomBase = zoom }
@@ -309,7 +348,7 @@ struct MapEditView: View {
             if t.width < 0.2 { if q.x < opp.x { t.u0 = opp.x - 0.2 } else { t.u1 = opp.x + 0.2 } }
             if t.depth < 0.2 { if q.y < opp.y { t.v0 = opp.y - 0.2 } else { t.v1 = opp.y + 0.2 } }
             guides = gs
-            data?.updateShape(t)
+            m.data?.updateShape(t)
         case .create(let a, let hadPin)?:
             let (q, gs) = snap(p, V, excluding: nil)
             cursor = q
@@ -324,7 +363,7 @@ struct MapEditView: View {
             let (u, gs) = snapMove(t, V)
             guides = gs
             if !sel.contains(id) { sel = [id] }
-            data?.updateShape(u)
+            m.data?.updateShape(u)
         case .pan(let p0)?:
             pan = CGSize(width: p0.width + v.translation.width, height: p0.height + v.translation.height)
         default:
@@ -374,7 +413,7 @@ struct MapEditView: View {
     }
 
     private func tapShape(_ id: Int) {
-        if multi {
+        if m.multi {
             if let i = sel.firstIndex(of: id) { sel.remove(at: i) } else { sel.append(id) }
         } else {
             sel = sel == [id] ? [] : [id]
@@ -383,184 +422,134 @@ struct MapEditView: View {
 
     private func create(_ a: SIMD2<Float>, _ b: SIMD2<Float>) {
         let door = tool == .door
-        change { d in
-            if let id = d.addShape(a, b, door: door) { sel = [id] }
+        var made: Int?
+        m.change { d in
+            made = d.addShape(a, b, door: door)
             d.tidy(full: false)
         }
         tool = .select
-        flash(door ? "문·통로를 만들었어요. 이 자리는 벽이 뚫려 양쪽 방이 이어져요." : "새 방을 만들었어요. 이름과 세계를 정해 주세요.")
+        if let made { sel = [made] }
     }
 
     private func commitDrag() {
-        guard let before = dragStart, var d = data, d != before else { return }
+        guard let before = dragStart, var d = m.data, d != before else { return }
         d.tidy(full: false)                    // 끌기를 마치면 틈·겹침과 문 자리를 저절로 정리
-        data = d
-        push(before)
-        persist()
+        m.data = d
+        m.push(before)
+        m.persist()
     }
 
     // MARK: 오른쪽 판
     private func panel(_ d: SpaceData) -> some View {
-        let picked = d.shapes.filter { sel.contains($0.id) }
-        let rooms = Set(picked.filter { !$0.isDoor }.map(\.room))
+        let picked = Set(sel)
+        let bad = Self.issues(d)
         return ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                TextField("공간 이름 (예: 우리 집)", text: $spaceName)
+            VStack(alignment: .leading, spacing: 22) {
+                TextField("공간 이름", text: $spaceName)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { saveName() }
-                Picker("도구", selection: $tool) {
-                    Label("고르기", systemImage: "hand.point.up.left").tag(Tool.select)
-                    Label("방 그리기", systemImage: "rectangle.dashed").tag(Tool.draw)
-                    Label("문 그리기", systemImage: "door.left.hand.open").tag(Tool.door)
-                }
-                .pickerStyle(.segmented)
-                .onChange(of: tool) { _, t in pin = nil; cursor = nil; if t != .select { sel = [] } }
-                Toggle("여러 개 고르기", isOn: $multi)
-                let bad = Self.issues(d)
                 if !bad.isEmpty {
                     HStack(spacing: 10) {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
-                        Text("틈·겹침이 애매하거나 문이 경계에 안 맞는 사각형 \(bad.count)개 (노란 점선) — 탐험 때 틈이 보일 수 있어요")
-                            .font(.callout).fixedSize(horizontal: false, vertical: true)
-                        Button("정리") { change { $0.tidy(full: false) }; flash("붙이고 문을 경계에 맞췄어요") }
+                        Text("어긋난 곳 \(bad.count)").font(.callout)
+                        Spacer()
+                        Button("정리") { m.change { $0.tidy(full: false) } }
                             .buttonStyle(.borderedProminent)
                     }
                     .padding(12)
                     .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
                 }
-                guide
-                Text(hint(d)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
-                if !picked.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("사각형 \(picked.count)개 고름").font(.headline)
-                        HStack(spacing: 8) {
-                            Button { change { $0.combine(sel) }; flash("한 방으로 합쳤어요") } label: { Label("결합", systemImage: "rectangle.3.group") }
-                                .disabled(rooms.count < 2)
-                            Button { change { $0.separate(sel) }; flash("각각 다른 방으로 나눴어요") } label: { Label("분리", systemImage: "rectangle.split.2x1") }
-                                .disabled(!canSeparate(d, picked))
-                        }
-                        HStack(spacing: 8) {
-                            if picked.allSatisfy(\.isDoor) {
-                                Button { change { $0.setDoor(sel, false) } } label: { Label("방으로", systemImage: "square") }
-                            } else {
-                                Button { change { $0.setDoor(sel, true) }; flash("문·통로가 덮은 자리는 벽이 뚫려 양쪽 방을 이어 줘요") } label: {
-                                    Label("문·통로로", systemImage: "door.left.hand.open")
+                section("방") {
+                    Toggle(isOn: Binding(get: { m.multi }, set: { m.multi = $0 })) {
+                        Image(systemName: "checklist")
+                    }
+                    .toggleStyle(.button)
+                    .help("여러 개 고르기")
+                } content: {
+                    ForEach(d.rec.rooms) { r in
+                        let ids = d.shapes.filter { $0.room == r.id }.map(\.id)
+                        let on = !ids.isEmpty && Set(ids).isSubset(of: picked)
+                        Button {
+                            sel = ids
+                        } label: {
+                            HStack(spacing: 10) {
+                                Circle().fill(RoomColor.of(r.id)).frame(width: 12, height: 12)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(r.name).font(.headline)
+                                    Text(r.title).font(.caption).foregroundStyle(.secondary)
                                 }
+                                Spacer()
+                                Text(String(format: "%.1f㎡", d.area(of: r.id))).font(.caption).foregroundStyle(.secondary)
                             }
-                            Button(role: .destructive) { let ids = Set(sel); change { $0.deleteShapes(ids) }; sel = [] } label: {
-                                Label("지우기", systemImage: "trash")
-                            }
+                            .padding(.horizontal, 10).padding(.vertical, 6)
+                            .background(on ? Color.white.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 12))
+                            .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 12))
+                            .hoverEffect(.highlight)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                section("세계") {
+                    Label(d.rec.isUnified ? "모두 같음" : "방마다", systemImage: d.rec.isUnified ? "square.on.square" : "square.grid.2x2")
+                        .font(.caption).foregroundStyle(.secondary)
+                } content: {
+                    HStack(spacing: 8) {
+                        Button { m.change { $0.shuffleAll() } } label: { Label("방마다 무작위", systemImage: "shuffle").frame(maxWidth: .infinity) }
+                        Button { unifyRoom = d.rec.rooms.first } label: { Label("모든 방 같게", systemImage: "square.on.square").frame(maxWidth: .infinity) }
+                            .disabled(d.rec.rooms.isEmpty)
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                section("구성") {
+                    EmptyView()
+                } content: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button { m.change { $0.tidy(full: true) }; m.flash("이음새를 정리했어요") } label: {
+                            Label("이음새 자동 정리", systemImage: "wand.and.stars").frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        Button { m.change { $0.proposeShapes(keepRooms: true); $0.tidy(full: true) }; sel = []; m.flash("스캔으로 다시 구성했어요") } label: {
+                            Label("스캔에서 다시 구성", systemImage: "arrow.counterclockwise").frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        Button { m.doUndo() } label: {
+                            Label("되돌리기", systemImage: "arrow.uturn.backward").frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .disabled(m.undo.isEmpty)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if let t = m.toast { Text(t).font(.callout).foregroundStyle(.secondary) }
+
+                section("공간") {
+                    EmptyView()
+                } content: {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button { AppModel.shared.start(.scan(replace: spaceId)) } label: {
+                            Label("다시 스캔", systemImage: "viewfinder").frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .disabled(!AppModel.supported)
+                        Button(role: .destructive) { deleting = true } label: {
+                            Label("공간 지우기", systemImage: "trash").frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
                     .buttonStyle(.bordered)
-                    fineBox(picked)
-                    if rooms.count == 1, let rid = rooms.first, let r = d.rec.room(rid) { roomBox(r, d) }
                 }
-
-                Divider()
-                Text("방 목록").font(.headline)
-                ForEach(d.rec.rooms) { r in
-                    Button {
-                        sel = d.shapes.filter { $0.room == r.id }.map(\.id)
-                    } label: {
-                        HStack(spacing: 10) {
-                            Circle().fill(RoomColor.of(r.id)).frame(width: 12, height: 12)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(r.name).font(.headline)
-                                Text(r.title).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Text(String(format: "%.1f㎡", d.area(of: r.id))).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-                Divider()
-                Text("세계 정하는 방식").font(.headline)
-                Text(d.rec.isUnified ? "지금: 모든 방이 같은 세계 (탐험 중에 바꿔도 모든 방이 같이 바뀜)"
-                                     : "지금: 방마다 다른 세계 (탐험 중에 바꾸면 그 방만 바뀜)")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 8) {
-                    Button { change { $0.shuffleAll() }; flash("방마다 다른 세계로 새로 섞었어요") } label: { Label("방마다 무작위", systemImage: "shuffle") }
-                    Button { unifyRoom = d.rec.rooms.first } label: { Label("모든 방 같게", systemImage: "square.on.square") }
-                        .disabled(d.rec.rooms.isEmpty)
-                }
-                .buttonStyle(.bordered)
-                Button { change { $0.tidy(full: true) }; flash("틈·겹침을 붙이고, 거의 한 줄인 벽을 맞추고, 문을 경계에 맞췄어요") } label: {
-                    Label("이음새 자동 정리", systemImage: "wand.and.stars")
-                }
-                Button { change { $0.proposeShapes(keepRooms: true); $0.tidy(full: true) }; sel = []; flash("스캔을 바탕으로 다시 구성했어요") } label: {
-                    Label("스캔에서 다시 구성", systemImage: "arrow.counterclockwise")
-                }
-                Button { doUndo() } label: { Label("되돌리기", systemImage: "arrow.uturn.backward") }
-                    .disabled(undo.isEmpty)
-                if let t = toast { Text(t).font(.callout).foregroundStyle(.secondary) }
             }
-            .padding(22)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
         }
     }
 
-    /// 정밀 조정: 위아래좌우 한 칸씩 옮기기(고른 것 모두), 폭·깊이 숫자 입력(하나 골랐을 때)
-    private func fineBox(_ picked: [ShapeRec]) -> some View {
+    private func section<T: View, C: View>(_ title: String, @ViewBuilder trailing: () -> T, @ViewBuilder content: () -> C) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("정밀 조정").font(.headline)
+                Text(title).font(.headline)
                 Spacer()
-                Picker("한 번에", selection: $step) {
-                    Text("1cm").tag(Float(0.01)); Text("5cm").tag(Float(0.05)); Text("10cm").tag(Float(0.1))
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 210)
+                trailing()
             }
-            HStack(spacing: 8) {
-                Text("옮기기").frame(width: 56, alignment: .leading)
-                Button { nudge(-step, 0) } label: { Image(systemName: "arrow.left").frame(width: 34, height: 26) }
-                Button { nudge(0, -step) } label: { Image(systemName: "arrow.up").frame(width: 34, height: 26) }
-                Button { nudge(0, step) } label: { Image(systemName: "arrow.down").frame(width: 34, height: 26) }
-                Button { nudge(step, 0) } label: { Image(systemName: "arrow.right").frame(width: 34, height: 26) }
-            }
-            if picked.count == 1, let s = picked.first {
-                sizeRow("폭", Int((s.width * 100).rounded())) { cm in resize(s.id, w: Float(cm) / 100, d: nil) }
-                sizeRow("깊이", Int((s.depth * 100).rounded())) { cm in resize(s.id, w: nil, d: Float(cm) / 100) }
-            }
-        }
-        .buttonStyle(.bordered)
-        .padding(14)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private func sizeRow(_ title: String, _ cm: Int, _ set: @escaping (Int) -> Void) -> some View {
-        HStack(spacing: 8) {
-            Text(title).frame(width: 56, alignment: .leading)
-            Button { set(max(20, cm - Int((step * 100).rounded()))) } label: { Image(systemName: "minus").frame(width: 30, height: 26) }
-            TextField("cm", value: Binding(get: { cm }, set: { v in set(max(20, min(3000, v))) }), format: .number)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 90)
-                .multilineTextAlignment(.trailing)
-            Text("cm").foregroundStyle(.secondary)
-            Button { set(min(3000, cm + Int((step * 100).rounded()))) } label: { Image(systemName: "plus").frame(width: 30, height: 26) }
-        }
-    }
-
-    private func nudge(_ du: Float, _ dv: Float) {
-        let ids = Set(sel)
-        change { d in
-            for s in d.shapes where ids.contains(s.id) {
-                var t = s
-                t.u0 += du; t.u1 += du; t.v0 += dv; t.v1 += dv
-                d.updateShape(t)
-            }
-        }
-    }
-
-    /// 왼쪽 위 모서리는 그대로 두고 폭·깊이를 바꿈
-    private func resize(_ id: Int, w: Float?, d dd: Float?) {
-        change { d in
-            guard var t = d.shapes.first(where: { $0.id == id }) else { return }
-            if let w { t.u1 = t.u0 + w }
-            if let dd { t.v1 = t.v0 + dd }
-            d.updateShape(t)
+            content()
         }
     }
 
@@ -576,59 +565,6 @@ struct MapEditView: View {
         return out
     }
 
-    /// 방·문 구성 원칙 (편집 화면 안내)
-    private var guide: some View {
-        DisclosureGroup("방·문 구성 원칙") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("① 방 사각형 = 실제로 걸을 수 있는 바닥. 가구가 놓인 곳도 포함하고, 벽 속까지 넓히지 마세요.")
-                Text("② 옆방과는 '딱 붙이기'가 기본이에요(실제 벽 두께의 가운데 선). 붙은 곳엔 벽이 한 장 서요. 2~25cm쯤 애매하게 떨어지거나 겹치면 노란 점선으로 알려 드려요.")
-                Text("③ 한 방을 여러 사각형으로 만들 땐 서로 딱 붙이거나 겹치게 하고 '결합'으로 같은 방으로.")
-                Text("④ 문은 실제 문이 있는 곳에만, 폭은 실제 문 폭(문틀 안쪽)과 같게, 두 방 경계를 가로질러 그리세요. 앞뒤 깊이는 아무렇게나 그려도 경계에 맞춰져요. 문은 그 두 방 사이만 뚫어요(옆의 다른 방 벽에 살짝 걸쳐도 그 벽은 그대로).")
-                Text("④-1 방을 나누지 않은 곳의 실제 문(예: 드레스룸 안 화장실 문)도 같은 방 안에 문 사각형을 문 자리에 맞춰 그리면 돼요. 평소엔 통로처럼 보이고, 실제 문이 닫혀 있으면 1m 안에서 닫힌 문으로 보여요.")
-                Text("⑤ 벽 없이 트인 곳(거실-주방 등)은 같은 방으로 결합하거나, 트인 길이 전체에 통로를 그리세요.")
-                Text("⑥ 다 그린 뒤 '이음새 자동 정리'를 한 번 누르면 틈·겹침을 붙이고 거의 한 줄인 벽을 맞추고 문을 경계에 맞춰요.")
-                Text("⑦ 탐험 중 다른 세계와 이어진 문은 멀리선 지금 방의 벽(숲이면 덤불, 바다면 난간)으로 보이고, 1m 안에서 문과 열쇠가 나타나요.")
-            }
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.top, 6)
-        }
-    }
-
-    private func canSeparate(_ d: SpaceData, _ picked: [ShapeRec]) -> Bool {
-        picked.contains { s in !s.isDoor && d.shapes.contains { $0.room == s.room && $0.id != s.id } }
-    }
-
-    private func roomBox(_ r: RoomRec, _ d: SpaceData) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Circle().fill(RoomColor.of(r.id)).frame(width: 12, height: 12)
-                Text(r.name).font(.title3.weight(.semibold))
-                Spacer()
-                Menu("이름") {
-                    ForEach(["거실", "주방", "거실·주방", "안방", "침실", "작은방", "서재", "화장실", "욕실", "드레스룸", "베란다", "현관", "복도"], id: \.self) { n in
-                        Button(n) { rename(n) }
-                    }
-                    Button("직접 입력…") { nameText = r.name; renaming = true }
-                }
-            }
-            Text(r.title).font(.headline)
-            if d.rec.isUnified {
-                Text("모든 방 같은 세계예요 — 여기서 바꾸면 모든 방이 같이 바뀌어요.").font(.caption).foregroundStyle(.secondary)
-            }
-            ThemePicker(room: r) { p, w, t in
-                change { d in d.setTheme(r.id, place: p, weather: w, time: t) }
-            }
-            Stepper(value: Binding(get: { Double(r.ceil) }, set: { v in change { d in d.updateRoom(r.id) { rr in rr.ceil = Float(v) } } }),
-                    in: 2.0...3.6, step: 0.05) {
-                Text(String(format: "천장 높이 %.2fm", r.ceil))
-            }
-        }
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18))
-    }
-
     /// '모든 방 같게': 세계 하나를 골라 모든 방에 적용
     private func unifySheet(_ r: RoomRec) -> some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -639,7 +575,7 @@ struct MapEditView: View {
             }
             Text(r.title).font(.title3)
             ThemePicker(room: r) { p, w, t in
-                change { $0.setAll(place: p, weather: w, time: t) }
+                m.change { $0.setAll(place: p, weather: w, time: t) }
                 var nr = r
                 nr.place = p; nr.weather = w; nr.time = t
                 unifyRoom = nr
@@ -649,27 +585,14 @@ struct MapEditView: View {
         .frame(width: 720)
         .onAppear {
             // 시트를 열자마자 지금 세계로 모든 방을 맞춤
-            change { $0.setAll(place: r.place, weather: r.weather, time: r.time) }
+            m.change { $0.setAll(place: r.place, weather: r.weather, time: r.time) }
         }
     }
 
-    private func hint(_ d: SpaceData) -> String {
-        if tool == .door {
-            return "실제 문이 있는 자리에, 두 방의 경계를 가로지르도록 사각형을 그리세요(방끼리 떨어져 있으면 틈을 덮게). 그 자리만 벽이 뚫려 이어져요. 바라보는 모서리 점이 빛나요."
-        }
-        if tool == .draw {
-            return pin == nil ? "새 사각형의 한 모서리를 누르세요(점이 보여요). 그대로 끌거나, 맞은편 모서리를 한 번 더 누르면 만들어져요. 다른 사각형 변이나 스캔 벽(흰 선) 가까이에서는 착 붙어요."
-                : "맞은편 모서리를 누르세요. 다른 곳을 고르려면 도구를 '고르기'로 바꾸세요."
-        }
-        if sel.isEmpty { return "바라보는 사각형이 빛나요. 누르면 골라지고, 모서리의 흰 점을 끌면 크기가, 사각형을 끌면 위치가 바뀌어요. 다른 방끼리 붙이면 사이에 벽이 서고, 문 그리기로 문 자리만 뚫을 수 있어요." }
-        return multi ? "계속 눌러 더 고르세요. 여러 방을 고르고 '결합'하면 한 방이, '분리'하면 각각 다른 방이 돼요."
-            : "'여러 개 고르기'를 켜면 사각형 여러 개를 한 번에 결합·분리할 수 있어요."
-    }
-
-    // MARK: 저장·되돌리기
+    // MARK: 불러오기·저장
     private func load() {
-        guard let d = SpaceStore.load(spaceId) else { return }
-        data = d
+        m.load(spaceId)
+        guard let d = m.data else { return }
         spaceName = d.rec.name
         bg = Self.background(d)
         let lines = Self.wallLines(d)
@@ -677,54 +600,11 @@ struct MapEditView: View {
         scanV = lines.1
     }
 
-    private func rename(_ n: String) {
-        let t = n.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty, let d = data, let rid = Set(d.shapes.filter { sel.contains($0.id) && !$0.isDoor }.map(\.room)).first else { return }
-        change { d in d.updateRoom(rid) { rr in rr.name = t } }
-    }
-
-    private func change(_ f: (inout SpaceData) -> Void) {
-        guard var d = data else { return }
-        let before = d
-        f(&d)
-        guard d != before else { return }
-        push(before)
-        data = d
-        sel = sel.filter { id in d.shapes.contains { $0.id == id } }
-        persist()
-    }
-
-    private func push(_ d: SpaceData) {
-        undo.append(d)
-        if undo.count > 30 { undo.removeFirst() }
-    }
-
-    private func doUndo() {
-        guard let last = undo.popLast() else { return }
-        data = last
-        sel = sel.filter { id in last.shapes.contains { $0.id == id } }
-        persist()
-    }
-
     private func saveName() {
-        guard var d = data else { return }
+        guard var d = m.data else { return }
         d.rec.name = spaceName.trimmingCharacters(in: .whitespaces)
-        data = d
-        persist()
-    }
-
-    private func persist() {
-        guard let d = data else { return }
-        try? SpaceStore.save(d)
-        AppModel.shared.reload()
-    }
-
-    private func flash(_ s: String) {
-        toast = s
-        Task {
-            try? await Task.sleep(for: .seconds(3))
-            if toast == s { toast = nil }
-        }
+        m.data = d
+        m.persist()
     }
 
     // MARK: 스캔 지도

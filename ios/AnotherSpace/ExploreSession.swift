@@ -275,6 +275,7 @@ final class ExploreSession {
     @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var openProg: [Int: Float] = [:]             // 여는 움직임 진행 (0~1)
     @ObservationIgnored private var animRoom: [Int: Int] = [:]               // 열기 시작한 쪽 방
+    @ObservationIgnored private var passed: Set<Int> = []                    // 방금 지나온 문: 1m 밖으로 멀어지거나 문 쪽을 볼 때까지 열쇠 문을 안 보임
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -618,7 +619,7 @@ final class ExploreSession {
             if r != candidate { candidate = r; candidateT = 0 } else { candidateT += dt }
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
             outsideT = r == 0 ? outsideT + dt : 0
-            updateDoors(dt, hs, L)
+            updateDoors(dt, hs, fit.dirToSaved(fwd), L)
             buildTimer += dt
             if buildTimer > 0.1 { buildTimer = 0; buildSome(fit, I) }
         }
@@ -690,12 +691,14 @@ final class ExploreSession {
     // MARK: 문 (다른 세계 사이)
     /// 기준은 모두 1m: 같은 세계끼리는 늘 열림. 다른 세계 사이는 평소 지금 방의 벽처럼 닫혀 있고,
     /// 1m 안으로 다가가면 문틀·열쇠 구멍·떠 있는 황금 열쇠가 보이며 그 열쇠를 누르면 열림.
-    /// 열린 문을 지나가면 바로 닫히고(반대편에서도 1m 안이라 닫힌 문이 보임), 지나가지 않고 1m 밖으로 멀어져도 닫힘
+    /// 열린 문을 지나가면 바로 닫히고 지나온 쪽에선 그냥 벽으로 보임(1m 밖으로 멀어지거나 문 쪽을 돌아볼 때까지 열쇠 문 안 보임). 지나가지 않고 1m 밖으로 멀어져도 닫힘
     static let doorReach: Float = 1.0
 
-    private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ L: Layout) {
+    private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ fs: SIMD3<Float>, _ L: Layout) {
         guard let d = data else { return }
         let p = L.plane(hs.x, hs.z)
+        var look = SIMD2<Float>(simd_dot(SIMD2<Float>(fs.x, fs.z), L.ex), simd_dot(SIMD2<Float>(fs.x, fs.z), L.ez))
+        look = simd_length(look) > 0.1 ? simd_normalize(look) : .zero
         let breath = 0.5 + 0.5 * sin(t * 2.4)                                   // 숨 쉬듯
         var glowMat: PhysicallyBasedMaterial?
         for (i, ds) in L.doors.enumerated() {
@@ -718,7 +721,8 @@ final class ExploreSession {
                         let crossed = (doorSide[i] ?? side) * side < 0          // 반대편으로 나감 = 지나감
                         if crossed {
                             doorOpen.remove(i)
-                            doorShow[i] = 1                                    // 바로 뒤에 닫힌 문이 보이게
+                            doorShow[i] = 0                                    // 지나온 문은 뒤에 남아 있어도 열쇠 문을 바로 안 보임
+                            passed.insert(i)
                         } else if !near {
                             doorOpen.remove(i)
                         }
@@ -751,8 +755,14 @@ final class ExploreSession {
                 let on = realClosed.contains(i) && near && !closed
                 if leaf.isEnabled != on { leaf.isEnabled = on }
             }
+            // 방금 지나온 문: 1m 밖으로 멀어지거나, 돌아서서 문 쪽을 바라보면 다시 열쇠 문이 보임
+            if passed.contains(i) {
+                let to = ds.mid - p
+                let facing = simd_length(to) > 0.05 && simd_dot(simd_normalize(to), look) > 0.8
+                if !near || facing { passed.remove(i) }
+            }
             // 마법의 양문: 다른 세계 사이, 닫혀 있고, 문 밖 1m 안 — 서 있는 쪽 방에만 (열쇠 움직이는 중엔 연 쪽에)
-            let want: Float = (!same && !inside && near && !doorOpen.contains(i)) || prog != nil ? 1 : 0
+            let want: Float = (!same && !inside && near && !doorOpen.contains(i) && !passed.contains(i)) || prog != nil ? 1 : 0
             var sh = doorShow[i] ?? 0
             sh += (want - sh) * min(1, dt * 4)
             if abs(sh - want) < 0.01 { sh = want }

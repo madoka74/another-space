@@ -6,7 +6,6 @@ struct HomeView: View {
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @State private var path: [String] = []
     @State private var safetyFor: String?
-    @State private var deleting: SpaceRec?
     @State private var theming: ThemeTarget?
     private var model: AppModel { AppModel.shared }
 
@@ -57,15 +56,6 @@ struct HomeView: View {
             } cancel: { safetyFor = nil }
         }
         .sheet(item: $theming) { t in ThemeSheet(target: t) { theming = nil } }
-        .alert("이 공간을 지울까요?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
-            Button("지우기", role: .destructive) {
-                if let d = deleting { SpaceStore.delete(d.id); model.reload() }
-                deleting = nil
-            }
-            Button("취소", role: .cancel) { deleting = nil }
-        } message: {
-            Text("스캔한 모양과 방 구분, 방마다 정한 세계가 모두 지워져요.")
-        }
     }
 
     private func jumpToEdit() {
@@ -75,29 +65,40 @@ struct HomeView: View {
         }
     }
 
+    /// 앱 버전 (빌드할 때 version.json 값이 들어감)
+    static var version: String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        let b = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        return "v\(v) (\(b))"
+    }
+
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("어나더 스페이스").font(.system(size: 44, weight: .bold))
-            Text("익숙한 집이, 문을 열 때마다 다른 세계가 돼요").font(.title3).foregroundStyle(.secondary)
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("어나더 스페이스").font(.system(size: 44, weight: .bold))
+                    Text(Self.version).font(.callout.monospacedDigit()).foregroundStyle(.tertiary)
+                }
+                Text("문을 열 때마다 다른 세계").font(.title3).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                model.start(.scan(replace: nil))
+            } label: {
+                Label("새 공간 스캔", systemImage: "viewfinder")
+            }
+            .disabled(!AppModel.supported)
         }
     }
 
     private var intro: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("먼저 집을 한 번 스캔해 주세요").font(.title2.weight(.semibold))
-            VStack(alignment: .leading, spacing: 10) {
-                Label("집 안의 모든 방을 천천히 걸어 다니며 바닥과 벽을 골고루 바라봐요.", systemImage: "figure.walk")
-                Label("문턱을 넘어 방 안쪽까지 들어가야 그 방이 생겨요.", systemImage: "door.left.hand.open")
-                Label("스캔이 끝나면 방마다 사각형으로 구성돼요. 사각형을 끌고 붙여 실제 집 모양에 맞추고, 방마다 이름과 세계를 정해요.", systemImage: "square.split.2x2")
-            }
-            .foregroundStyle(.secondary)
-            Button {
-                model.start(.scan(replace: nil))
-            } label: {
-                Label("공간 스캔 시작", systemImage: "viewfinder").font(.title3).padding(.horizontal, 12).padding(.vertical, 6)
-            }
-            .disabled(!AppModel.supported)
+        VStack(alignment: .leading, spacing: 12) {
+            Label("모든 방을 천천히 걸으며 바닥·벽을 골고루", systemImage: "figure.walk")
+            Label("문턱을 넘어 방 안쪽까지", systemImage: "door.left.hand.open")
+            Label("끝나면 방 구성에서 사각형으로 다듬기", systemImage: "square.split.2x2")
         }
+        .font(.title3)
+        .foregroundStyle(.secondary)
     }
 
     private var list: some View {
@@ -109,18 +110,8 @@ struct HomeView: View {
                     theming = ThemeTarget(space: s.id, room: r)
                 } edit: {
                     path = [s.id]
-                } rescan: {
-                    model.start(.scan(replace: s.id))
-                } delete: {
-                    deleting = s
                 }
             }
-            Button {
-                model.start(.scan(replace: nil))
-            } label: {
-                Label("새 공간 스캔", systemImage: "plus")
-            }
-            .disabled(!AppModel.supported)
         }
     }
 }
@@ -151,7 +142,7 @@ private struct ThemeSheet: View {
                 }
                 Text(r.title).font(.title3)
                 if unified {
-                    Text("모든 방 같은 세계예요 — 바꾸면 모든 방이 같이 바뀌어요.").font(.callout).foregroundStyle(.secondary)
+                    Label("모든 방에 같이 적용", systemImage: "square.on.square").font(.callout).foregroundStyle(.secondary)
                 }
                 ThemePicker(room: r) { p, w, t in
                     SpaceStore.setTheme(target.space, room: r.id, place: p, weather: w, time: t)
@@ -176,8 +167,6 @@ private struct SpaceCard: View {
     let explore: () -> Void
     let theme: (Int) -> Void
     let edit: () -> Void
-    let rescan: () -> Void
-    let delete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -185,12 +174,7 @@ private struct SpaceCard: View {
                 Text(space.name.isEmpty ? "우리 집" : space.name).font(.title2.weight(.semibold))
                 Text("방 \(space.rooms.count)곳").foregroundStyle(.secondary)
                 Spacer()
-                Menu {
-                    Button("방 구성", systemImage: "square.split.2x2", action: edit)
-                    Button("다시 스캔", systemImage: "viewfinder", action: rescan)
-                    Button("지우기", systemImage: "trash", role: .destructive, action: delete)
-                } label: { Image(systemName: "ellipsis").frame(width: 36, height: 36) }
-                .buttonStyle(.borderless)
+                Button(action: edit) { Label("방 구성", systemImage: "square.split.2x2") }
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 10)], alignment: .leading, spacing: 10) {
                 ForEach(space.rooms) { r in
@@ -207,18 +191,21 @@ private struct SpaceCard: View {
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                        .contentShape(RoundedRectangle(cornerRadius: 14))
+                        .contentShape(.hoverEffect, RoundedRectangle(cornerRadius: 14))
+                        .hoverEffect(.highlight)
                     }
                     .buttonStyle(.plain)
-                    .hoverEffect(.highlight)
+                    .buttonBorderShape(.roundedRectangle(radius: 14))
                 }
             }
-            HStack(spacing: 12) {
+            HStack {
+                Spacer()
                 Button(action: explore) {
-                    Label("탐험 시작", systemImage: "sparkles").font(.title3).padding(.horizontal, 10).padding(.vertical, 4)
+                    Label("탐험 시작", systemImage: "sparkles").font(.title3).padding(.horizontal, 14).padding(.vertical, 4)
                 }
+                .buttonStyle(.borderedProminent)
                 .disabled(!AppModel.supported || space.rooms.isEmpty)
-                Button("방 구성", action: edit)
+                Spacer()
             }
         }
         .padding(24)
