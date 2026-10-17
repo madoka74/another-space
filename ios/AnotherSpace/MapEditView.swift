@@ -73,17 +73,22 @@ struct MapEditView: View {
             if s.isEmpty { dismissWindow(id: "inspector", value: spaceId) } else { openWindow(id: "inspector", value: spaceId) }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button { safety = true } label: {
-                    Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
+            // 공간 이름 오른쪽에 탐험 시작 (뒤로 가기 버튼과 떨어지게)
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 16) {
+                    Text(spaceName.isEmpty ? "방 구성" : spaceName).font(.headline)
+                    Button { safety = true } label: {
+                        Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
                 }
-                .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
             }
         }
         .sheet(isPresented: $safety) {
             SafetySheet {
                 safety = false
-                AppModel.shared.start(.explore(spaceId))
+                AppModel.shared.start(.explore(spaceId), returnTo: spaceId)
             } cancel: { safety = false }
         }
         .sheet(item: $unifyRoom) { r in unifySheet(r) }
@@ -142,8 +147,6 @@ struct MapEditView: View {
                         .onEnded { _ in zoomBase = zoom }
                 )
             HStack(spacing: 8) {
-                Button { setZoom(zoom / 1.4) } label: { Image(systemName: "minus.magnifyingglass") }
-                Button { setZoom(zoom * 1.4) } label: { Image(systemName: "plus.magnifyingglass") }
                 if tool == .select {
                     Menu {
                         Button { startDraw(.draw) } label: { Label("방", systemImage: "rectangle.dashed") }
@@ -152,6 +155,8 @@ struct MapEditView: View {
                 } else {
                     Button { startDraw(.select) } label: { Image(systemName: "xmark") }
                 }
+                Button { setZoom(zoom / 1.4) } label: { Image(systemName: "minus.magnifyingglass") }
+                Button { setZoom(zoom * 1.4) } label: { Image(systemName: "plus.magnifyingglass") }
             }
             .padding(14)
         }
@@ -476,7 +481,7 @@ struct MapEditView: View {
                 }
 
                 section("방") {
-                    Toggle(isOn: Binding(get: { m.multi }, set: { m.multi = $0 })) {
+                    Toggle(isOn: Binding(get: { m.multi }, set: { m.multi = $0; if !$0 { sel = [] } })) {
                         Image(systemName: "checklist")
                     }
                     .toggleStyle(.button)

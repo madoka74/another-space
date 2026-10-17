@@ -4,6 +4,7 @@ import SwiftUI
 struct ShapeInspector: View {
     @State private var renaming = false
     @State private var nameText = ""
+    @FocusState private var typing: Int?           // 폭·깊이 숫자 입력 중 (다른 버튼을 누르면 키보드를 닫음)
     private var m: EditModel { EditModel.shared }
 
     var body: some View {
@@ -90,14 +91,14 @@ struct ShapeInspector: View {
             .pickerStyle(.segmented)
             HStack(spacing: 8) {
                 Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").frame(width: 40)
-                Button { m.nudge(-step, 0) } label: { Image(systemName: "arrow.left").frame(width: 34, height: 26) }
-                Button { m.nudge(0, -step) } label: { Image(systemName: "arrow.up").frame(width: 34, height: 26) }
-                Button { m.nudge(0, step) } label: { Image(systemName: "arrow.down").frame(width: 34, height: 26) }
-                Button { m.nudge(step, 0) } label: { Image(systemName: "arrow.right").frame(width: 34, height: 26) }
+                Button { typing = nil; m.nudge(-step, 0) } label: { Image(systemName: "arrow.left").frame(width: 34, height: 26) }
+                Button { typing = nil; m.nudge(0, -step) } label: { Image(systemName: "arrow.up").frame(width: 34, height: 26) }
+                Button { typing = nil; m.nudge(0, step) } label: { Image(systemName: "arrow.down").frame(width: 34, height: 26) }
+                Button { typing = nil; m.nudge(step, 0) } label: { Image(systemName: "arrow.right").frame(width: 34, height: 26) }
             }
             if picked.count == 1, let s = picked.first {
-                sizeRow("arrow.left.and.right", Int((s.width * 100).rounded())) { cm in m.resize(s.id, w: Float(cm) / 100, d: nil) }
-                sizeRow("arrow.up.and.down", Int((s.depth * 100).rounded())) { cm in m.resize(s.id, w: nil, d: Float(cm) / 100) }
+                sizeRow("arrow.left.and.right", tag: 1, Int((s.width * 100).rounded())) { cm in m.resize(s.id, w: Float(cm) / 100, d: nil) }
+                sizeRow("arrow.up.and.down", tag: 2, Int((s.depth * 100).rounded())) { cm in m.resize(s.id, w: nil, d: Float(cm) / 100) }
             }
         }
         .buttonStyle(.bordered)
@@ -105,17 +106,18 @@ struct ShapeInspector: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
     }
 
-    private func sizeRow(_ icon: String, _ cm: Int, _ set: @escaping (Int) -> Void) -> some View {
+    private func sizeRow(_ icon: String, tag: Int, _ cm: Int, _ set: @escaping (Int) -> Void) -> some View {
         let st = Int((m.step * 100).rounded())
         return HStack(spacing: 8) {
             Image(systemName: icon).frame(width: 40)
-            Button { set(max(20, cm - st)) } label: { Image(systemName: "minus").frame(width: 30, height: 26) }
+            Button { typing = nil; set(max(20, cm - st)) } label: { Image(systemName: "minus").frame(width: 30, height: 26) }
             TextField("cm", value: Binding(get: { cm }, set: { v in set(max(20, min(3000, v))) }), format: .number)
                 .textFieldStyle(.roundedBorder)
+                .focused($typing, equals: tag)
                 .frame(width: 90)
                 .multilineTextAlignment(.trailing)
             Text("cm").foregroundStyle(.secondary)
-            Button { set(min(3000, cm + st)) } label: { Image(systemName: "plus").frame(width: 30, height: 26) }
+            Button { typing = nil; set(min(3000, cm + st)) } label: { Image(systemName: "plus").frame(width: 30, height: 26) }
         }
     }
 

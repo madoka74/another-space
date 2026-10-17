@@ -43,6 +43,7 @@ final class AppModel {
     var mode: Mode?
     var spaces: [SpaceRec] = []
     var editId: String?                   // 스캔을 마치면 바로 이 공간 편집 화면으로
+    @ObservationIgnored var returnEdit: String?    // 공간설정에서 탐험을 시작했으면 끝난 뒤 그 화면으로
     var notice: String?                   // 메인 창에 띄울 안내 한 줄
     @ObservationIgnored var openAction: (@MainActor () async -> Bool)?
     @ObservationIgnored var closeAction: (@MainActor () async -> Void)?
@@ -57,9 +58,10 @@ final class AppModel {
     func reload() { spaces = SpaceStore.list() }
 
     /// 몰입 공간 열기
-    func start(_ m: Mode) {
+    func start(_ m: Mode, returnTo: String? = nil) {
         guard !busy else { return }
         busy = true
+        returnEdit = returnTo
         Task {
             if isOpen, let closeAction { await closeAction(); isOpen = false }
             mode = m
@@ -77,7 +79,8 @@ final class AppModel {
     /// 몰입 공간 닫기 (메인 창을 지금 있는 자리 앞에 다시 띄움). savedId: 방금 저장한 공간 → 편집 화면으로
     func finish(savedId: String? = nil, message: String? = nil) {
         Task {
-            if let savedId { editId = savedId }
+            editId = savedId ?? returnEdit
+            returnEdit = nil
             if let message { notice = message }
             reload()
             reopenMain()
@@ -89,6 +92,8 @@ final class AppModel {
 
     /// 사용자가 시스템 쪽(디지털 크라운 등)에서 몰입 공간을 닫았을 때
     func disappeared() {
+        if editId == nil { editId = returnEdit }
+        returnEdit = nil
         isOpen = false
         mode = nil
         reload()

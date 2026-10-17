@@ -101,6 +101,9 @@ struct SkinResult: Sendable {
     var groups: [SkinGroup] = []
     var cells: Set<Int64> = []     // 이 그물이 덮는 1m 칸 (저장 좌표) — 그 칸의 미리 그린 가구는 숨김
     var doorHits: [Int: Set<Int>] = [:]   // 문 번호 → 문 자리를 막고 있는 칸 (폭 10cm × 높이 10cm) — 실제 문이 닫혔는지 판단
+    var doorTouched: Set<Int> = []        // 이 그물이 문 자리를 지나는 문 (문 자리를 새로 본 그물인지)
+    var floorY: Float?                    // 이 그물에서 '바닥'으로 알아본 면의 높이 (가운데 값, 지금 좌표)
+    var floorN = 0
 }
 
 enum Skin {
@@ -166,6 +169,7 @@ enum Skin {
         var groups: [Int64: SkinGroup] = [:]
         let wv = m.v.map { simd_make_float3(m.m * SIMD4<Float>($0, 1)) }
         let keep = keepMask(wv, m.f, floorY: L.floorY + fit.y)
+        var floors: [Float] = []
         var i = 0, fi = 0
         while i + 2 < m.f.count {
             defer { i += 3; fi += 1 }
@@ -181,6 +185,7 @@ enum Skin {
             guard len > 1e-9 else { continue }
             let n = cr / len
             let cls: UInt8 = fi < m.c.count ? m.c[fi] : 0
+            if cls == MeshClass.floor && n.y > 0.9 { floors.append((a.y + b.y + c.y) / 3) }
             let ns = fit.dirToSaved(n)
             let hgt = ctr.y - L.floorY
             // 문 자리: 문틀·문짝·벽에 붙은 전선 같은 그물은 허공에 뜬 조각처럼 보이므로 입히지 않음.
@@ -192,6 +197,7 @@ enum Skin {
             let np = SIMD2<Float>(simd_dot(SIMD2<Float>(ns.x, ns.z), L.ex), simd_dot(SIMD2<Float>(ns.x, ns.z), L.ez))
             for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.15, side: 0.12) {
                 if closedDoors.contains(di) || hgt > 0.5 { inDoor = true }
+                if !chunked && hgt > 0.3 && hgt < 1.9 { out.doorTouched.insert(di) }
                 let across = abs(ds.alongU ? np.x : np.y)
                 let sx = ds.alongU ? pp.y : pp.x
                 if !chunked && cls != MeshClass.floor && cls != MeshClass.ceiling && hgt > 0.3 && hgt < 1.9 && across > 0.75
@@ -204,11 +210,11 @@ enum Skin {
             let here = L.at(x: ctr.x, z: ctr.z)
             let r = here.room
             if r == 0 || r >= 256 { continue }                       // 방 밖
-            if here.wall < 0.15 { continue }                         // 반듯한 벽이 덮는 곳
-            // 벽에 붙은 것(문틀·케이블·콘센트·액자·스캔이 덜 된 벽 조각): 반듯한 벽에서 40cm 안의 세운 면은 분류와 상관없이 지움,
-            // 비전프로가 '벽·창·문'으로 알아본 면은 80cm 안이면 지움(구성이 조금 어긋난 실제 벽)
+            // 벽에 붙은 것(문틀·케이블·콘센트·액자·선반 끝·스캔이 덜 된 벽 조각):
+            // 반듯한 벽에서 30cm 안은 모두, 60cm 안의 세운 면은 분류와 상관없이, '벽·창·문'으로 알아본 면은 1.2m 안이면 지움
+            if here.wall < 0.3 { continue }
             let wallish = cls == MeshClass.wall || cls == MeshClass.window || cls == MeshClass.door
-            if abs(ns.y) < 0.35 && (here.wall < 0.4 || (wallish && here.wall < 0.8)) { continue }
+            if abs(ns.y) < 0.5 && (here.wall < 0.6 || (wallish && here.wall < 1.2)) { continue }
             // 머리 위(2m 위)는 부딪힐 일이 없으니 입히지 않음 (천장 조명·커튼 레일·문 위 케이블)
             if hgt > 2.0 { continue }
             if cls == MeshClass.ceiling || hgt > L.ceil[r] - 0.1 { continue }
@@ -233,6 +239,11 @@ enum Skin {
             groups[key] = g
         }
         out.groups = Array(groups.values)
+        if floors.count >= 20 {
+            floors.sort()
+            out.floorY = floors[floors.count / 2]
+            out.floorN = floors.count
+        }
         return out
     }
 
@@ -277,7 +288,15 @@ final class ExploreSession {
     @ObservationIgnored private var doorShow: [Int: Float] = [:]    // 문틀·열쇠 보이는 정도
     @ObservationIgnored private var doorSide: [Int: Float] = [:]    // 문을 열 때 서 있던 쪽 (지나가면 닫음)
     @ObservationIgnored private var lastSide: [Int: Float] = [:]    // 문 밖에서 마지막으로 서 있던 쪽
-    @ObservationIgnored private var realHits: [Int: [UUID: Set<Int>]] = [:]   // 문 → 그물 덩어리마다 막힌 칸
+    @ObservationIgnored private var realHits: [Int: [UUID: (Set<Int>, Double)]] = [:]   // 문 → 그물 덩어리마다 (막힌 칸, 문 자리를 본 때)
+    @ObservationIgnored private var doorUrgent = false        // 실제 닫힌 문 앞에 서 있음 → 그 근처 그물을 더 자주 다시 봄
+    @ObservationIgnored private var floorSamples: [UUID: (Float, Int)] = [:]   // 그물마다 바닥 높이(지금 좌표)·면 수
+    @ObservationIgnored private var floorFitY: Float?         // 실제 바닥으로 맞춘 높이 차이 (있으면 앵커보다 이걸 믿음)
+    @ObservationIgnored private var floorTimer: Float = 0
+    @ObservationIgnored private var fitAt: Float?             // 처음 공간을 찾은 때
+    @ObservationIgnored private let peek = ModelEntity()      // 실제 문을 열 수 있게 시야 가운데로 현실을 보여 주는 작은 원
+    @ObservationIgnored private var peekLook: Float = 0       // 닫힌 실제 문을 바라본 시간
+    @ObservationIgnored private var peekAmt: Float = 0
     @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var openProg: [Int: Float] = [:]             // 여는 움직임 진행 (0~1)
     @ObservationIgnored private var animRoom: [Int: Int] = [:]               // 열기 시작한 쪽 방
@@ -351,6 +370,10 @@ final class ExploreSession {
         root.addChild(skinRoot)
         root.addChild(player.root)
         Sfx.preload()
+        // 현실 창: 가려 주는 재질(OcclusionMaterial)은 그 뒤의 가상 물체를 지워 현실이 보이게 함
+        peek.model = ModelComponent(mesh: .generateCylinder(height: 0.002, radius: 1), materials: [OcclusionMaterial()])
+        peek.isEnabled = false
+        root.addChild(peek)
         spaceRoot.components.set(OpacityComponent(opacity: 0))
         skinRoot.components.set(OpacityComponent(opacity: 0))
 
@@ -553,7 +576,8 @@ final class ExploreSession {
                 dirty.remove(a.id)
                 meshEnts.removeValue(forKey: a.id)?.removeFromParent()
                 setLiveCells(a.id, [])
-                setDoorHits(a.id, [:])
+                setDoorHits(a.id, [:], touched: [])
+                floorSamples[a.id] = nil
             default:
                 meshes[a.id] = a
                 dirty.insert(a.id)
@@ -593,8 +617,10 @@ final class ExploreSession {
             let p = r.pos.xz
             f.t = SIMD2<Float>(m.columns.3.x, m.columns.3.z) - SIMD2<Float>(p.x * f.c - p.y * f.s, p.x * f.s + p.y * f.c)
         }
+        if let fy = floorFitY { f.y = fy }     // 높이는 실제 바닥으로 맞춘 값을 씀 (앵커 높이가 틀어져 공간이 가라앉지 않게)
         fitTarget = f
         if fit == nil {                        // 처음: 바로 맞춤
+            fitAt = t
             fit = f
             skinFit = f
             spaceRoot.transform = f.transform
@@ -624,6 +650,7 @@ final class ExploreSession {
 
     /// 맞춘 좌표를 쓰고, 다음부터는 바로 찾도록 그 자리에 새 위치 기억(월드 앵커)을 만들어 저장
     private func applyAligned(_ f: Fit) {
+        fitAt = t
         fitTarget = f
         fit = f
         skinFit = f
@@ -650,6 +677,49 @@ final class ExploreSession {
             data = d
             try? SpaceStore.save(d)
         }
+    }
+
+    // MARK: 바닥 높이
+    /// 바닥을 확인했거나(실제 바닥 면으로 높이를 맞춤), 공간을 찾은 지 8초가 지났으면 보여 줌
+    private var floorOK: Bool { floorFitY != nil || (fitAt.map { t - $0 > 8 } ?? false) }
+
+    /// 머리 근처(4m) 그물들의 '바닥' 면 높이 가운데 값으로 저장 바닥과의 높이 차이를 맞춤
+    private func updateFloor(_ L: Layout) {
+        var list: [(Float, Int)] = []
+        for (id, smp) in floorSamples {
+            guard let a = meshes[id] else { continue }
+            let p = simd_make_float3(a.originFromAnchorTransform.columns.3)
+            guard simd_distance(p.xz, head.xz) < 4, smp.0 < head.y - 0.8 else { continue }
+            list.append(smp)
+        }
+        let total = list.reduce(0) { $0 + $1.1 }
+        guard total >= 60 else { return }
+        list.sort { $0.0 < $1.0 }
+        var acc = 0
+        var lf = list[0].0
+        for (y, n) in list { acc += n; if acc * 2 >= total { lf = y; break } }
+        let want = lf - L.floorY
+        floorFitY = want
+        if var tg = fitTarget, abs(tg.y - want) > 0.03 {
+            tg.y = want
+            fitTarget = tg
+        }
+    }
+
+    // MARK: 현실 창 (닫힌 실제 문을 열 수 있게)
+    /// 닫힌 실제 문(손잡이 문)을 2초 넘게 바라보면 시야 가운데에 작은 원으로 현실이 보임. 다른 곳을 보면 닫힘
+    private func placePeek(_ dt: Float) {
+        let target: Float = peekLook > 2 ? 1 : 0
+        peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 5 : 8))
+        let on = peekAmt > 0.01
+        if peek.isEnabled != on { peek.isEnabled = on }
+        guard on else { return }
+        let f = simd_length(fwd) > 0.1 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
+        peek.position = head + f * 0.6
+        peek.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: -f)
+        let e = peekAmt * peekAmt * (3 - 2 * peekAmt)
+        let r = 0.17 * max(0.001, e)
+        peek.scale = SIMD3<Float>(r, 1, r)
     }
 
     // MARK: 매 프레임
@@ -685,12 +755,14 @@ final class ExploreSession {
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
             outsideT = r == 0 ? outsideT + dt : 0
             updateDoors(dt, hs, fit.dirToSaved(fwd), L)
+            floorTimer += dt
+            if floorTimer > 0.5 { floorTimer = 0; updateFloor(L) }
             buildTimer += dt
             if buildTimer > 0.1 { buildTimer = 0; buildSome(fit, I) }
         }
 
         // 탐험 시작 스캔 연출: 공간을 찾고 모든 방 세계가 준비되면 한 번
-        if !introDone, intro == nil, ready, let f = fit, let L = layout, let d = data {
+        if !introDone, intro == nil, ready, floorOK, let f = fit, let L = layout, let d = data {
             let hs = f.toSaved(head)
             let ii = ScanIntro(L, head: L.plane(hs.x, hs.z), floorY: d.rec.floorY, current: current)
             root.addChild(ii.root)
@@ -711,7 +783,7 @@ final class ExploreSession {
         // 안전: 공간을 아직 못 찾았거나, 구성한 방 밖이거나, 너무 빠르면 현실이 보이게
         var target: Float = 1
         var why: String?
-        if fit == nil || !ready { target = 0 }
+        if fit == nil || !ready || !floorOK { target = 0 }
         else if outsideT > 0.6 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
         else if speed > 1.4 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
         let rate: Float = target < fade ? 3 : 1.1
@@ -728,10 +800,12 @@ final class ExploreSession {
         }
         if fit != nil {
             let total = data?.rec.rooms.count ?? 0
-            let msg = ready ? (why ?? player.status) : "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
+            let msg = !ready ? "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
+                : (!floorOK ? "바닥 높이를 맞추는 중이에요. 발밑을 한 번 내려다봐 주세요." : (why ?? player.status))
             if msg != message { message = msg }
         }
 
+        placePeek(dt)
         for (id, wld) in worlds { wld.tick(dt, active: id == current) }
         soundTick(dt)
         placeHud(dt)
@@ -789,6 +863,11 @@ final class ExploreSession {
         look = simd_length(look) > 0.1 ? simd_normalize(look) : .zero
         let breath = 0.5 + 0.5 * sin(t * 2.4)                                   // 숨 쉬듯
         var glowMat: PhysicallyBasedMaterial?
+        var urgent = false, lookingAtLeaf = false
+        defer {
+            doorUrgent = urgent
+            peekLook = lookingAtLeaf ? peekLook + dt : 0
+        }
         for (i, ds) in L.doors.enumerated() {
             var same = ds.single                                               // 한 방 안의 문은 늘 같은 세계
             if !same, let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
@@ -843,9 +922,19 @@ final class ExploreSession {
             }
             // 실제 닫힌 문(손잡이 문): 실제 문이 닫혀 있고, 1m 안이고, 문 자리가 '이 방의 벽'으로 막혀 있지 않을 때만.
             // 같은 세계면 1m 안에서 바로, 다른 세계면 열쇠로 연 뒤에. 멀리선 안 보임(같은 세계는 저쪽 공간이 보임)
+            // 문 자리 한가운데에 서 있으면 실제 문은 열려 있는 것 (닫힌 문 자리엔 설 수 없음) → 그물을 기다리지 않고 바로 열림
+            if realClosed.contains(i) && ds.zone(p, margin: 0.05, side: -0.1) {
+                realClosed.remove(i)
+                dirty.formUnion(meshes.keys)
+            }
             if let leaf = worlds[ds.roomA]?.doorLeaf[i] {
                 let on = realClosed.contains(i) && near && !closed
                 if leaf.isEnabled != on { leaf.isEnabled = on }
+                if on {
+                    urgent = true
+                    let to = ds.mid - p
+                    if simd_length(to) > 0.05 && simd_dot(simd_normalize(to), look) > 0.8 { lookingAtLeaf = true }
+                }
             }
             // 방금 지나온 문: 1m 밖으로 멀어지거나, 돌아서서 문 쪽을 바라보면 다시 열쇠 문이 보임
             if passed.contains(i) {
@@ -907,24 +996,28 @@ final class ExploreSession {
         v.left.scale = [k, 1, 1]; v.right.scale = [k, 1, 1]
     }
 
-    /// 실제 문이 닫혔는지: 문 자리(폭 × 0.3~1.9m) 중 비전프로가 '문'으로 알아본 면이 막은 비율로 (그 사이 값은 그대로 — 깜빡이지 않게)
-    private func setDoorHits(_ id: UUID, _ hits: [Int: Set<Int>]) {
+    /// 실제 문이 닫혔는지: 문 자리를 가로막은 면이 문틀 안쪽을 덮은 비율로 (그 사이 값은 그대로 — 깜빡이지 않게).
+    /// 문 자리를 가장 최근에 본 그물(1초 안)만 믿음 — 문을 열었는데 오래된 그물이 남아 닫힌 채로 있지 않게
+    private func setDoorHits(_ id: UUID, _ hits: [Int: Set<Int>], touched seen: Set<Int>) {
         guard let L = layout else { return }
-        var touched = Set(hits.keys)
-        for (i, var m) in realHits where m[id] != nil && hits[i] == nil {
+        let now = CACurrentMediaTime()
+        var touched = seen.union(hits.keys)
+        for (i, var m) in realHits where m[id] != nil && !touched.contains(i) {
             m[id] = nil
             realHits[i] = m
             touched.insert(i)
         }
-        for (i, h) in hits { realHits[i, default: [:]][id] = h }
+        for i in seen.union(hits.keys) { realHits[i, default: [:]][id] = (hits[i] ?? [], now) }
         for i in touched where i < L.doors.count {
+            let entries = realHits[i] ?? [:]
+            let latest = entries.values.map(\.1).max() ?? 0
             var all = Set<Int>()
-            for (_, h) in realHits[i] ?? [:] { all.formUnion(h) }
+            for (_, e) in entries where e.1 >= latest - 1.0 { all.formUnion(e.0) }
             let cols = max(1, Int(((L.doors[i].width - 0.16) / 0.1).rounded(.up)))
             let cover = Float(all.count) / Float(cols * 16)
-            // 문 자리를 가로막은 면이 문틀 안쪽의 절반 넘게 덮으면 닫힘, 30% 밑이면 열림 (그 사이는 그대로 — 깜빡이지 않게)
+            // 절반 넘게 덮으면 닫힘, 35% 밑이면 열림
             let was = realClosed.contains(i)
-            if cover > 0.5 { realClosed.insert(i) } else if cover < 0.3 { realClosed.remove(i) }
+            if cover > 0.5 { realClosed.insert(i) } else if cover < 0.35 { realClosed.remove(i) }
             if was != realClosed.contains(i) { dirty.formUnion(meshes.keys) }      // 문 자리 그물을 숨기거나 다시 보이게
         }
     }
@@ -970,7 +1063,8 @@ final class ExploreSession {
             guard let a = meshes[id] else { dirty.remove(id); continue }
             let fresh = meshEnts[id] == nil
             let p = simd_make_float3(a.originFromAnchorTransform.columns.3)
-            let wait = simd_distance(p.xz, head.xz) < 3 ? 0.4 : 1.0            // 가까운 곳(문 앞 등)은 더 자주
+            let close = simd_distance(p.xz, head.xz) < 3
+            let wait = close ? (doorUrgent ? 0.12 : 0.4) : 1.0                  // 가까운 곳(문 앞 등)은 더 자주, 닫힌 실제 문 앞이면 아주 자주
             if !fresh, let last = builtAt[id], now - last < wait { continue }
             cand.append((id, simd_distance(p.xz, head.xz) - (fresh ? 3 : 0)))     // 아직 한 번도 안 입힌 것 먼저
         }
@@ -988,7 +1082,8 @@ final class ExploreSession {
                 guard !ended, meshes[id] != nil else { return }
                 apply(id, res.groups)
                 setLiveCells(id, res.cells)
-                setDoorHits(id, res.doorHits)
+                setDoorHits(id, res.doorHits, touched: res.doorTouched)
+                if let fy = res.floorY { floorSamples[id] = (fy, res.floorN) } else { floorSamples[id] = nil }
             }
         }
     }

@@ -33,6 +33,9 @@ struct HomeView: View {
                 .frame(maxWidth: 980, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
+            .overlay(alignment: .bottom) {
+                Text(Self.version).font(.caption.monospacedDigit()).foregroundStyle(.tertiary).padding(.bottom, 14)
+            }
             .navigationDestination(for: String.self) { id in MapEditView(spaceId: id) }
         }
         .onAppear {
@@ -74,21 +77,18 @@ struct HomeView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("어나더 스페이스").font(.system(size: 44, weight: .bold))
-                    Text(Self.version).font(.callout.monospacedDigit()).foregroundStyle(.tertiary)
-                }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("어나더 스페이스").font(.system(size: 44, weight: .bold))
+            HStack {
                 Text("문을 열 때마다 다른 세계").font(.title3).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    model.start(.scan(replace: nil))
+                } label: {
+                    Label("새 공간 스캔", systemImage: "viewfinder")
+                }
+                .disabled(!AppModel.supported)
             }
-            Spacer()
-            Button {
-                model.start(.scan(replace: nil))
-            } label: {
-                Label("새 공간 스캔", systemImage: "viewfinder")
-            }
-            .disabled(!AppModel.supported)
         }
     }
 
