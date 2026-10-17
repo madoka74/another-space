@@ -196,8 +196,10 @@ enum Skin {
             let pp = L.plane(ctr.x, ctr.z)
             var inDoor = false
             let np = SIMD2<Float>(simd_dot(SIMD2<Float>(ns.x, ns.z), L.ex), simd_dot(SIMD2<Float>(ns.x, ns.z), L.ez))
-            for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.15, side: 0.12) {
-                if closedDoors.contains(di) || hgt > 0.5 { inDoor = true }
+            // 문 자리(앞뒤 30cm, 양옆 15cm)는 문턱 높이(12cm) 위를 모두 비움 — 같은 세계면 실제 문이 닫혀 있어도 멀리선 뚫린 통로로 보이고
+            // (1m 안에선 깔끔한 문짝이 대신 보임), 실제 문짝이 구성한 문 자리에서 조금 비켜 있어도 조각으로 남지 않게
+            for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.3, side: 0.15) {
+                if closedDoors.contains(di) || hgt > 0.12 { inDoor = true }
                 if !chunked && hgt > 0.3 && hgt < 1.9 { out.doorTouched.insert(di) }
                 let across = abs(ds.alongU ? np.x : np.y)
                 let sx = ds.alongU ? pp.y : pp.x
@@ -682,20 +684,43 @@ final class ExploreSession {
         }
     }
 
+    /// 그림을 걸 수 없는 10cm 칸 (벽 앞에 물건이 있는 곳). 그림 높이(0.95~2.2m) 안에서
+    /// - 문틀·창, 수평면(선반·장 윗면), 천장 가까이까지 안 올라가는 세운 면(가구 앞면·액자 등) → 물건
+    /// - 천장 가까이까지 이어진 세운 면은 실제 벽(구성한 벽선과 조금 어긋난 것) → 물건 아님. 단 구성한 벽에서 30cm 넘게 떨어져 있으면 붙박이장 등으로 봄
     nonisolated static func findClutter(_ id: String, _ d: SpaceData, _ L: Layout) -> Set<Int64> {
         var out = Set<Int64>()
         if let mesh = SpaceStore.loadMesh(id) {
             let pts = mesh.0, cls = mesh.1
+            struct CellInfo { var vMax: Float = -9; var vertical = false; var flat = false; var doorWin = false; var far = false }
+            var info: [Int64: CellInfo] = [:]
             var t = 0
             while t * 3 + 2 < pts.count {
                 defer { t += 1 }
                 let c = t < cls.count ? cls[t] : 0
-                // 벽 자체는 빼고 (구성한 벽선이 실제 벽과 조금 어긋나 있어도 벽 전체가 '물건'으로 잡히지 않게) 물건·문틀·창만
-                if c == MeshClass.floor || c == MeshClass.ceiling || c == MeshClass.wall { continue }
-                let ctr = (pts[t * 3] + pts[t * 3 + 1] + pts[t * 3 + 2]) / 3
+                if c == MeshClass.floor || c == MeshClass.ceiling { continue }
+                let a = pts[t * 3], b = pts[t * 3 + 1], cc = pts[t * 3 + 2]
+                let ctr = (a + b + cc) / 3
                 let h = ctr.y - L.floorY
-                guard h > 0.8 && h < 2.2 else { continue }
-                out.insert(RoomWorld.clutterKey(L.plane(ctr.x, ctr.z)))
+                guard h > 0.95 else { continue }
+                let cr = simd_cross(b - a, cc - a)
+                let len = simd_length(cr)
+                guard len > 1e-7 else { continue }
+                let ny = abs(cr.y / len)
+                let key = RoomWorld.clutterKey(L.plane(ctr.x, ctr.z))
+                var ci = info[key] ?? CellInfo()
+                if ny < 0.4 {
+                    ci.vMax = max(ci.vMax, h)
+                    if h < 2.2 { ci.vertical = true; if L.at(x: ctr.x, z: ctr.z).wall > 0.3 { ci.far = true } }
+                } else if ny > 0.7 && h < 2.2 {
+                    ci.flat = true
+                }
+                if (c == MeshClass.door || c == MeshClass.window) && h < 2.2 { ci.doorWin = true }
+                info[key] = ci
+            }
+            let ceilMax = d.rec.rooms.map(\.ceil).max() ?? 2.4
+            for (k, ci) in info {
+                let fullHeight = ci.vMax > min(2.25, ceilMax - 0.2)
+                if ci.doorWin || ci.flat || (ci.vertical && (!fullHeight || ci.far)) { out.insert(k) }
             }
         } else {
             let cell = d.rec.cell
@@ -820,18 +845,22 @@ final class ExploreSession {
         guard on else { return }
         // 닫힌 실제 문이면 손잡이 쪽, 아니면(더블탭) 지금 보는 곳 정면 — 시선 높이 그대로
         let g = simd_length(fwd) > 0.1 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-        let aim = (peekDoor != nil ? peekAim : nil) ?? (head + g * 0.82)
+        let aim = (peekDoor != nil ? peekAim : nil) ?? (head + g * 1.0)
         let v = aim - head
         let dTarget = simd_length(v)
         guard dTarget > 0.05 else { return }
         let dir = v / dTarget
-        let d = min(0.45, max(0.15, dTarget * 0.55), max(0.15, roomClear * 0.8))     // 벽·문보다 늘 앞에
+        // 평소 60cm 앞. 닫힌 문이면 겨누는 곳(문 가운데 줄)보다 15cm 앞까지만, 벽에 바짝 서면 벽보다 앞 — 가상 문·벽에 가려 지워질 때만 당겨 옴
+        var d: Float = 0.6
+        if peekDoor != nil { d = min(d, dTarget - 0.15) }
+        d = min(d, roomClear - 0.1)
+        d = max(0.2, d)
         let goal = head + dir * d
         peek.position = peekAmt < 0.05 ? goal : peek.position + (goal - peek.position) * min(1, dt * 8)
         let toHead = head - peek.position
         if simd_length(toHead) > 0.01 { peek.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: simd_normalize(toHead)) }
         let e = peekAmt * peekAmt * (3 - 2 * peekAmt)
-        let r = d * 0.5 * max(0.001, e)                    // 보이는 크기 약 53°(반지름 26°)
+        let r = d * 0.25 * max(0.001, e)                   // 보이는 크기 약 28°(반지름 14°)
         peek.scale = SIMD3<Float>(r, 1, r)
     }
 

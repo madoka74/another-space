@@ -805,7 +805,7 @@ final class RoomWorld {
                 let q = s.a + dir * ((Float(i) + 0.5) * step)
                 if doorEnds.contains(where: { simd_distance($0, q) < 0.3 }) { free[i] = false; continue }
                 var off: Float = 0.15
-                while off <= 0.45 {
+                while off <= 0.65 {
                     if clutter.contains(Self.clutterKey(q + s.n * off)) { free[i] = false; break }
                     off += 0.1
                 }

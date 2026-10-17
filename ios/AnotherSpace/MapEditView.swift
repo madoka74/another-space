@@ -52,8 +52,25 @@ struct MapEditView: View {
         Group {
             if let d = data {
                 HStack(spacing: 0) {
-                    GeometryReader { geo in mapArea(d, geo.size) }
-                        .background(Color.black.opacity(0.3))
+                    VStack(spacing: 0) {
+                        // 맨 위 줄 (뒤로·공간 이름·탐험 시작): 지도 폭 안에서 — 탐험 시작은 지도 오른쪽 끝, 뒤로 버튼과 같은 높이
+                        HStack(spacing: 14) {
+                            Button { dismiss() } label: { Image(systemName: "chevron.backward") }
+                                .buttonBorderShape(.circle)
+                            Spacer(minLength: 0)
+                            Text(spaceName.isEmpty ? "방 구성" : spaceName).font(.title3.weight(.semibold)).lineLimit(1)
+                            Spacer(minLength: 0)
+                            Button { safety = true } label: {
+                                Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!AppModel.supported || d.rec.rooms.isEmpty)
+                        }
+                        .padding(.horizontal, 22)
+                        .frame(height: 76)
+                        GeometryReader { geo in mapArea(d, geo.size) }
+                            .background(Color.black.opacity(0.3))
+                    }
                     Divider()
                     panel(d).frame(width: 400)
                 }
@@ -61,8 +78,7 @@ struct MapEditView: View {
                 Text("공간을 불러오지 못했어요.").foregroundStyle(.secondary)
             }
         }
-        .navigationTitle(spaceName.isEmpty ? "방 구성" : spaceName)
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear(perform: load)
         .onDisappear {
             dismissWindow(id: "inspector", value: spaceId)
@@ -145,15 +161,6 @@ struct MapEditView: View {
                 Button { setZoom(zoom / 1.4) } label: { Image(systemName: "minus.magnifyingglass") }
                 Button { setZoom(zoom * 1.4) } label: { Image(systemName: "plus.magnifyingglass") }
             }
-            .padding(14)
-        }
-        .overlay(alignment: .topTrailing) {
-            // 탐험 시작: 지도 오른쪽 위
-            Button { safety = true } label: {
-                Label("탐험 시작", systemImage: "sparkles").labelStyle(.titleAndIcon)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!AppModel.supported || (data?.rec.rooms.isEmpty ?? true))
             .padding(14)
         }
         .overlay(alignment: .top) {
