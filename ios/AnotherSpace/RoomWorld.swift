@@ -220,7 +220,7 @@ final class RoomWorld {
         addGround(dc, R: R, floorY: floorY)
         addBands(dc, R: R, floorY: floorY)
         addThings(dc, rec: rec, L, floorY: floorY)
-        if dc.paintings { addPaintings(segs, L, floorY: floorY) }
+        if dc.paintings { findPaintSlots(segs, L, floorY: floorY) }
         if dc.stringLights { addStringLights(segs, L, ceilY: ceilY) }
         addClouds(ceilY: ceilY)
         addWeather(rects, L, floorY: floorY, ceilY: ceilY)
@@ -771,34 +771,33 @@ final class RoomWorld {
         }
     }
 
-    /// 앱에 담긴 명화 (빌드할 때 tools/fetch_art.py 가 받은 저작권 끝난 유명 화가 그림, 앱 안 art/)
-    /// 포켓 갤러리 보관함 그림 파일 (탐험 시작 때 채움) — 전시관에 먼저 걺
+    /// 포켓 갤러리 보관함 그림 파일 (탐험 시작 때 채움) — 전시관 방마다 한 점씩
     static var pgArt: [URL] = []
 
+    /// 앱에 담긴 명화 (빌드할 때 tools/fetch_art.py 가 받은 저작권 끝난 유명 화가 그림, 앱 안 art/)
     static let artNames: [String] = {
         let urls = Bundle.main.urls(forResourcesWithExtension: "jpg", subdirectory: "art") ?? []
         return urls.map { $0.deletingPathExtension().lastPathComponent }.sorted()
     }()
 
-    /// 전시관: 창이 아닌 벽 중 '평평하게 비어 있는 곳'마다 명화를 무작위로 걺.
-    /// 벽 앞 15~45cm, 눈높이(0.8~2.2m)에 스캔에서 물건(가구·문틀·선반 등)이 있는 곳과 문 자리 30cm 안은 피하고,
-    /// 남은 빈 구간을 1.4m 안팎마다 나눠 한 점씩 — 그림 비율 그대로, 구간에 맞는 크기(최대 1.3×1.25m)
-    private func addPaintings(_ segs: [WallSeg], _ L: Layout, floorY: Float) {
-        var g = SeededRNG(seed: UInt64.random(in: 1...UInt64.max))          // 들어갈 때마다 다른 그림
-        // 보관함 그림 먼저(무작위 순서), 이어서 앱에 담긴 명화(무작위). 둘 다 없으면 만든 그림 6장
-        var names: [(String, String)] = Self.pgArt.shuffled(using: &g).map { ($0.path, "file") }
-            + Self.artNames.shuffled(using: &g).map { ($0, "art") }
-        if names.isEmpty { names = (0..<6).map { ("art_\($0)", "tex") } }
-        var next = 0
-        var arts: [String: Geo] = [:]
-        var folders: [String: String] = [:]
-        var frames = Geo()
+    /// 그림 걸 자리 하나: 벽 위 가운데(저장 좌표), 벽에서 방 쪽 방향, 벽 따라 오른쪽, 이 자리 폭, 크기 변화(0.82~1)
+    struct PaintSlot { let mid: SIMD2<Float>; let n: SIMD3<Float>; let right: SIMD3<Float>; let width: Float; let k: Float }
+    private(set) var paintSlots: [PaintSlot] = []
+    private let paintRoot = Entity()
+    private var paintFloor: Float = 0
+
+    /// 전시관: 창이 아닌 벽 중 '평평하게 비어 있는 곳'마다 그림 자리를 정해 둠 (그림은 탐험 세션이 골라 hang 으로 걺).
+    /// 벽 앞 15~65cm, 그림 높이(0.95~2.2m)에 물건(가구·문틀·선반 등)이 있는 곳과 문 자리 30cm 안은 피하고,
+    /// 남은 빈 구간을 1.4m 안팎마다 나눠 한 자리씩
+    private func findPaintSlots(_ segs: [WallSeg], _ L: Layout, floorY: Float) {
+        var g = SeededRNG(seed: UInt64(room.id * 977 + 5))
+        paintFloor = floorY
+        local.addChild(paintRoot)
         var doorEnds: [SIMD2<Float>] = []
         for ds in L.doors where ds.roomA == room.id || ds.roomB == room.id {
             let (ea, eb, _) = ds.edge(for: room.id)
             doorEnds += [ea, eb]
         }
-        let top = room.ceil
         for s in segs where !s.window {
             let len = simd_distance(s.a, s.b)
             guard len >= 0.8 else { continue }
@@ -815,6 +814,9 @@ final class RoomWorld {
                     off += 0.1
                 }
             }
+            let n2 = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))
+            let nn = SIMD3<Float>(n2.x, 0, n2.y)
+            let right = simd_cross(-nn, SIMD3<Float>(0, 1, 0))
             var i = 0
             while i < n {
                 guard free[i] else { i += 1; continue }
@@ -827,38 +829,46 @@ final class RoomWorld {
                 let count = max(1, Int((span + 0.3) / 1.4))
                 let slot = span / Float(count)
                 for c in 0..<count {
-                    let (name, folder) = names[next % names.count]
-                    next += 1
-                    var ar: Float = 0.8
-                    if folder != "tex", let t = Tex.get(name, folder: folder) { ar = Float(t.width) / Float(max(1, t.height)) }
-                    folders[name] = folder
-                    let maxW = min(1.3, slot * 0.72) * Float.random(in: 0.82...1.0, using: &g)
-                    let maxH = min(1.25, top - 1.2)
-                    var w = maxW, h = w / ar
-                    if h > maxH { h = maxH; w = h * ar }
-                    guard w >= 0.3, h >= 0.3 else { continue }
-                    let mid2 = L.flat(s.a + dir * (t0 + slot * (Float(c) + 0.5)))
-                    let n2 = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))
-                    let nn = SIMD3<Float>(n2.x, 0, n2.y)
-                    let right = simd_cross(-nn, SIMD3<Float>(0, 1, 0))
-                    let cy = min(max(1.5, 0.95 + h / 2), top - 0.15 - h / 2)        // 아래 끝 0.95m 위, 위 끝은 천장 15cm 아래
-                    let ctr = SIMD3<Float>(mid2.x, floorY + cy, mid2.y)
-                    let pp = ctr + nn * 0.035, ff = ctr + nn * 0.025
-                    let hw = right * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
-                    var geo = arts[name] ?? Geo()
-                    geo.quad(pp - hw - hh, pp + hw - hh, pp + hw + hh, pp - hw + hh,
-                             SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
-                    arts[name] = geo
-                    let fw = right * (w / 2 + 0.05), fh = SIMD3<Float>(0, h / 2 + 0.05, 0)
-                    frames.quad(ff - fw - fh, ff + fw - fh, ff + fw + fh, ff - fw + fh, .zero, .zero, .zero, .zero)
+                    paintSlots.append(PaintSlot(mid: L.flat(s.a + dir * (t0 + slot * (Float(c) + 0.5))), n: nn, right: right,
+                                                width: slot, k: Float.random(in: 0.82...1.0, using: &g)))
                 }
             }
         }
+    }
+
+    /// 고른 그림들을 자리마다 걺 (그림 비율 그대로, 자리 폭에 맞게 최대 1.3×1.25m). 예전 그림은 내림
+    func hang(_ arts: [TextureResource]) {
+        for c in Array(paintRoot.children) { c.removeFromParent() }
+        guard !arts.isEmpty, !paintSlots.isEmpty else { return }
         let lit = Worlds.safe(tint, min: 0.55)
-        for (name, geo) in arts {
-            if let e = geo.entity("art", Tex.unlit(name, tint: lit, folder: folders[name] ?? "tex", sampler: Tex.clamp)) { local.addChild(e) }
+        let top = room.ceil
+        var frames = Geo()
+        var geos = [Geo](repeating: Geo(), count: arts.count)
+        for (i, sl) in paintSlots.enumerated() {
+            let t = arts[i % arts.count]
+            let ar = Float(t.width) / Float(max(1, t.height))
+            let maxW = min(1.3, sl.width * 0.72) * sl.k
+            let maxH = min(1.25, top - 1.2)
+            var w = maxW, h = w / ar
+            if h > maxH { h = maxH; w = h * ar }
+            guard w >= 0.3, h >= 0.3 else { continue }
+            let cy = min(max(1.5, 0.95 + h / 2), top - 0.15 - h / 2)        // 아래 끝 0.95m 위, 위 끝은 천장 15cm 아래
+            let ctr = SIMD3<Float>(sl.mid.x, paintFloor + cy, sl.mid.y)
+            let pp = ctr + sl.n * 0.035, ff = ctr + sl.n * 0.025
+            let hw = sl.right * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
+            geos[i % arts.count].quad(pp - hw - hh, pp + hw - hh, pp + hw + hh, pp - hw + hh,
+                                      SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+            let fw = sl.right * (w / 2 + 0.05), fh = SIMD3<Float>(0, h / 2 + 0.05, 0)
+            frames.quad(ff - fw - fh, ff + fw - fh, ff + fw + fh, ff - fw + fh, .zero, .zero, .zero, .zero)
         }
-        if let e = frames.entity("frames", UnlitMaterial(color: Tex.color(SIMD3<Float>(0.3, 0.22, 0.14) * lit))) { local.addChild(e) }
+        for (i, geo) in geos.enumerated() where !geo.isEmpty {
+            var m = UnlitMaterial(color: Tex.color(lit))
+            var p = MaterialParameters.Texture(arts[i])
+            p.sampler = Tex.clamp
+            m.color = .init(tint: Tex.color(lit), texture: p)
+            if let e = geo.entity("art\(i)", m) { paintRoot.addChild(e) }
+        }
+        if let e = frames.entity("frames", UnlitMaterial(color: Tex.color(SIMD3<Float>(0.3, 0.22, 0.14) * lit))) { paintRoot.addChild(e) }
     }
 
     /// 카페: 벽 위쪽을 따라 늘어진 전구 줄

@@ -23,7 +23,12 @@ struct ExploreView: View {
         } attachments: {
             Attachment(id: "hud") { ExploreHud(s: s) }
         }
-        .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { v in s.tapped(v.entity) })
+        // 손가락 집기는 비전프로가 직접 알아본 것만 씀 (손 모양을 앱이 따로 재면 손을 내리고 있을 때 엄지·검지가 가까워져 헛집기가 생김).
+        // 더블탭을 먼저 기다리고, 아니면 싱글탭 — 보는 곳 어디든 받도록 눈 둘레에 보이지 않는 '탭 받는 상자'를 둠
+        .gesture(
+            SpatialTapGesture(count: 2).targetedToAnyEntity().onEnded { _ in s.doubleTapped() }
+                .exclusively(before: SpatialTapGesture().targetedToAnyEntity().onEnded { v in s.tapped(v.entity) })
+        )
         .task { await s.start() }
         .onDisappear { s.stop() }
     }
@@ -307,7 +312,8 @@ final class ExploreSession {
     @ObservationIgnored private var peekAway: Float = 0       // 현실 창을 연 뒤 문에서 눈을 돌린 시간
     @ObservationIgnored private var peekGone: Float = 0       // 손잡이 문이 잠깐 안 보인 시간 (잠깐 끊겨도 바로 닫지 않음)
     @ObservationIgnored private var peekAim: SIMD3<Float>?    // 현실 창이 겨누는 곳: 문 가운데 줄의 손잡이 높이(1m), 내 쪽에 가장 가까운 곳 (지금 좌표)
-    @ObservationIgnored private var hands: HandTrackingProvider?
+    @ObservationIgnored private let tapCatcher = Entity()     // 머리를 둘러싼 보이지 않는 탭 받는 상자
+    @ObservationIgnored private var hudAlert = false          // 안전 알림 (방 밖·너무 빠름) — 계속 보임
     @ObservationIgnored private var pinching: [Bool] = [false, false]      // 왼손·오른손 엄지·검지가 맞닿아 있는지
     @ObservationIgnored private var pinchAt: [Float] = [-9, -9]           // 맞닿기 시작한 때 (너무 짧은 흔들림은 무시)
     @ObservationIgnored private var pendingTap: Float?                     // 한 번 집은 때 — 0.55초 안에 또 집으면 더블탭, 아니면 싱글탭
@@ -408,7 +414,24 @@ final class ExploreSession {
         spaceRoot.components.set(OpacityComponent(opacity: 0))
         skinRoot.components.set(OpacityComponent(opacity: 0))
 
-        let auth = await ar.requestAuthorization(for: [.worldSensing, .handTracking])
+        // 탭 받는 상자: 머리를 둘러싼 4m 상자의 여섯 면(얇은 판) — 어디를 보고 집어도 탭이 들어옴 (열쇠·안내판이 더 가까우면 그쪽이 먼저)
+        let wallT: Float = 0.05, half: Float = 4
+        var shapes: [ShapeResource] = []
+        for ax in 0..<3 {
+            for sgn: Float in [-1, 1] {
+                var size = SIMD3<Float>(repeating: half * 2)
+                size[ax] = wallT
+                var off = SIMD3<Float>(repeating: 0)
+                off[ax] = sgn * half
+                shapes.append(ShapeResource.generateBox(size: size).offsetBy(translation: off))
+            }
+        }
+        tapCatcher.name = "tap-catcher"
+        tapCatcher.components.set(CollisionComponent(shapes: shapes))
+        tapCatcher.components.set(InputTargetComponent())
+        root.addChild(tapCatcher)
+
+        let auth = await ar.requestAuthorization(for: [.worldSensing])
         guard auth[.worldSensing] == .allowed else {
             message = "주변 공간 알아보기를 허락해야 다른 세계를 입힐 수 있어요. 설정 > 개인정보 보호 및 보안에서 켜 주세요."
             return
@@ -416,13 +439,7 @@ final class ExploreSession {
         let w = WorldTrackingProvider()
         let m = SceneReconstructionProvider(modes: [.classification])
         world = w
-        var providers: [any DataProvider] = [w, m]
-        // 손: 손가락 더블탭으로 현실 창 열고 닫기 (허락하지 않으면 이 기능만 빠짐)
-        if auth[.handTracking] == .allowed && HandTrackingProvider.isSupported {
-            let h = HandTrackingProvider()
-            hands = h
-            providers.append(h)
-        }
+        let providers: [any DataProvider] = [w, m]
         do { try await ar.run(providers) } catch {
             message = "공간 인식을 시작하지 못했어요. 나갔다가 다시 들어와 주세요."
             return
@@ -457,18 +474,51 @@ final class ExploreSession {
             let next = todo.first { $0.id == current } ?? todo.first { near.contains($0.id) } ?? todo[0]
             await Tex.preload(RoomWorld.textures(next))
             guard !ended, worlds[next.id] == nil, let d2 = data, let r = d2.rec.room(next.id) else { continue }
-            addWorld(d2, r, L)
+            let nw = addWorld(d2, r, L)
+            await hangGallery(nw)                                       // 전시관이면 그림까지 걸고 다음 방으로 (보일 때 이미 걸려 있게)
             refreshActive()
             if !meshEnts.isEmpty { dirty.formUnion(meshes.keys) }      // 그 방 가구 색을 새 세계에 맞게
             try? await Task.sleep(for: .milliseconds(30))
         }
     }
 
-    private func addWorld(_ d: SpaceData, _ r: RoomRec, _ L: Layout) {
+    @discardableResult
+    private func addWorld(_ d: SpaceData, _ r: RoomRec, _ L: Layout) -> RoomWorld {
         let w = RoomWorld(d, r, layout: L, clutter: clutter)
         spaceRoot.addChild(w.world)
         spaceRoot.addChild(w.local)
         worlds[r.id] = w
+        return w
+    }
+
+    // MARK: 전시관 그림
+    /// 방의 그림 자리 수만큼 고름: 포켓 갤러리 보관함에서 1점(무작위) + 나머지는 앱에 담긴 명화(무작위, 겹치지 않게),
+    /// 보관함 그림의 자리도 무작위. 그림은 다른 스레드에서 읽고(화면이 멈추지 않게) 다 읽은 뒤 한 번에 바꿔 걺.
+    /// 탐험 시작 때와, 그 방에서 나갈 때마다 다시 골라 둠 → 들어갈 때마다 새 그림
+    @ObservationIgnored private var hanging: Set<Int> = []
+
+    private func hangGallery(_ w: RoomWorld) async {
+        let n = w.paintSlots.count
+        guard n > 0, !hanging.contains(w.room.id) else { return }
+        hanging.insert(w.room.id)
+        defer { hanging.remove(w.room.id) }
+        var urls: [URL] = []
+        let bundled = RoomWorld.artNames.shuffled().compactMap { Bundle.main.url(forResource: $0, withExtension: "jpg", subdirectory: "art") }
+        if let mine = RoomWorld.pgArt.randomElement() { urls.append(mine) }
+        urls += bundled.prefix(max(0, n - urls.count))
+        if urls.count < n { urls += RoomWorld.pgArt.shuffled().prefix(n - urls.count) }   // 명화가 없을 때만 보관함으로 채움
+        urls.shuffle()
+        var texs: [TextureResource] = []
+        for u in urls {
+            let cg = await Task.detached(priority: .utility) { UIImage(contentsOfFile: u.path)?.cgImage }.value
+            guard let cg, !ended else { continue }
+            if let t = try? await TextureResource(image: cg, withName: nil, options: .init(semantic: .color)) { texs.append(t) }
+        }
+        if texs.isEmpty {                                                 // 그림 파일이 하나도 없으면 만든 그림
+            texs = (0..<6).compactMap { Tex.get("art_\($0)", folder: "tex") }
+        }
+        guard !ended, worlds[w.room.id] === w else { return }
+        w.hang(texs)
     }
 
     /// 비·눈·반딧불은 지금 방과 이웃 방만 (문턱을 넘을 때 이미 내리고 있게)
@@ -524,7 +574,8 @@ final class ExploreSession {
                     old.world.removeFromParent()
                     old.local.removeFromParent()
                 }
-                addWorld(dd, rr, L)
+                let nw = addWorld(dd, rr, L)
+                Task { await hangGallery(nw) }
                 for k in 0..<4 { mats[rid * 4 + k] = nil }
                 refreshActive()
                 await Task.yield()
@@ -708,7 +759,8 @@ final class ExploreSession {
             while t * 3 + 2 < pts.count {
                 defer { t += 1 }
                 let c = t < cls.count ? cls[t] : 0
-                if c == MeshClass.floor || c == MeshClass.ceiling { continue }
+                // '벽'으로 알아본 면은 실제 벽 — 구성한 벽선과 어긋나 있어도 물건이 아님 (v0.4.7에서 빠졌던 것을 되돌림)
+                if c == MeshClass.floor || c == MeshClass.ceiling || c == MeshClass.wall { continue }
                 let a = pts[t * 3], b = pts[t * 3 + 1], cc = pts[t * 3 + 2]
                 let ctr = (a + b + cc) / 3
                 let h = ctr.y - L.floorY
@@ -820,48 +872,7 @@ final class ExploreSession {
     }
 
     // MARK: 현실 창 (닫힌 실제 문을 열 수 있게)
-    /// 손가락 집기(엄지·검지 맞닿음, 어느 손이든, 손을 안 봐도 됨)
-    /// - 더블탭(0.55초 안에 두 번): 시선 앞 현실 창 열기/닫기
-    /// - 싱글탭: 안내판 띄우기/숨기기 — 단 그 집기가 열쇠·안내판 버튼을 누른 것이거나, 열쇠 문이 보이는 동안은 아님(열쇠가 우선)
-    /// 맞닿음 2.2cm 안, 풂 3cm 넘게 (자연스럽게 두 번 집을 땐 손가락을 크게 안 벌려서 예전 3.5cm 기준으론 두 번째가 안 잡혔음)
-    private func checkTaps() {
-        if let h = hands, h.state == .running {
-            let (l, r) = h.latestAnchors
-            for (k, a) in [l, r].enumerated() {
-                guard let a, a.isTracked, let sk = a.handSkeleton else { pinching[k] = false; continue }
-                let tj = sk.joint(.thumbTip), ij = sk.joint(.indexFingerTip)
-                guard tj.isTracked, ij.isTracked else { continue }
-                let m = a.originFromAnchorTransform
-                let tp = simd_make_float3(m * tj.anchorFromJointTransform.columns.3)
-                let ip = simd_make_float3(m * ij.anchorFromJointTransform.columns.3)
-                let d = simd_distance(tp, ip)
-                if !pinching[k] && d < 0.022 {
-                    pinching[k] = true
-                    pinchAt[k] = t
-                    if let p0 = pendingTap, t - p0 < 0.55 {
-                        pendingTap = nil
-                        freePeek.toggle()
-                    } else {
-                        pendingTap = t
-                    }
-                } else if pinching[k] && d > 0.03 && t - pinchAt[k] > 0.04 {
-                    pinching[k] = false
-                }
-            }
-        }
-        // 싱글탭 확정 (두 번째 집기를 기다린 뒤)
-        if let p0 = pendingTap, t - p0 > 0.55 {
-            pendingTap = nil
-            let onThing = abs(lastEntityTap - p0) < 0.6 || abs(lastUITap - p0) < 0.6
-            let keyShown = doorShow.values.contains { $0 > 0.3 }
-            if !onThing && !keyShown {
-                hudPinned.toggle()
-                if !hudPinned { themeOpen = false }
-            }
-        }
-    }
-
-    /// 안내판 버튼을 누름 (그 집기는 싱글탭으로 치지 않음)
+    /// 안내판 버튼을 누름 (안내판 버튼은 SwiftUI가 따로 받으므로 탭 받는 상자와 겹치지 않음 — 기록만)
     func uiTouched() { lastUITap = t }
 
     /// 손잡이 문을 바라보면 열리는 현실 창: 눈에서 문 손잡이 높이(1m)를 향한 선 위에 떠서 그쪽 현실을 보여 줌.
@@ -973,10 +984,14 @@ final class ExploreSession {
             let total = data?.rec.rooms.count ?? 0
             let msg: String? = !ready ? "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
                 : (!floorOK ? "바닥 높이를 맞추는 중이에요. 발밑을 한 번 내려다봐 주세요." : (why ?? player.status))
-            if msg != message { message = msg }
+            if msg != message {
+                message = msg
+                if msg != nil { hudAutoUntil = t + 4 }        // 새 알림은 4초 보여 주고 사라짐 (탭하면 바로 닫힘)
+            }
         }
+        hudAlert = why != nil                                  // 방 밖·너무 빠름 같은 안전 알림은 계속 보임
+        tapCatcher.position = head
 
-        checkTaps()
         placePeek(dt)
         for (id, wld) in worlds { wld.tick(dt, active: id == current) }
         soundTick(dt)
@@ -984,6 +999,10 @@ final class ExploreSession {
     }
 
     private func enterRoom(_ r: Int) {
+        // 나온 방이 전시관이면 그림을 새로 골라 둠 (다시 들어가면 다른 그림)
+        if let prev = worlds[current], !prev.paintSlots.isEmpty, current != r {
+            Task { await hangGallery(prev) }
+        }
         current = r
         hudAutoUntil = t + 4                                // 방이 바뀌면 안내판으로 잠깐 알려 줌
         doorOpen.removeAll()                                // 넘어오면 뒤의 문은 다시 닫힘 (이 방 벽처럼)
@@ -1228,9 +1247,22 @@ final class ExploreSession {
         return simd_distance(p, a + ab * k)
     }
 
-    /// 떠 있는 열쇠를 누름 (바라보고 손가락 집기 · 직접 누르기)
+    /// 더블탭: 시선 앞 현실 창 열기/닫기
+    func doubleTapped() {
+        freePeek.toggle()
+    }
+
+    /// 싱글탭: 열쇠를 누르면 문 열기, 그 밖(탭 받는 상자)이면 안내판 띄우기/닫기 — 단 열쇠 문이 보이는 동안은 열쇠가 우선(안내판 안 바뀜)
     func tapped(_ e: Entity) {
-        lastEntityTap = t
+        if e === tapCatcher {
+            guard !doorShow.values.contains(where: { $0 > 0.3 }) else { return }
+            if hudShow > 0.5 {
+                hudPinned = false; hudAutoUntil = 0; themeOpen = false
+            } else {
+                hudPinned = true
+            }
+            return
+        }
         var cur: Entity? = e
         while let c = cur {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
@@ -1345,11 +1377,13 @@ final class ExploreSession {
         let k = min(1, max(0.5, (roomClear - 0.08) / 0.5))
         hud.scale = SIMD3<Float>(repeating: k)
         // 싱글탭·방 알림으로 뜨므로 눈앞 조금 아래에 (아래를 내려다봐야 보이던 자리에서 올림)
-        let target = head + q.act((themeOpen ? SIMD3<Float>(0, -0.3, -0.65) : SIMD3<Float>(0, -0.22, -0.65)) * k)
+        // 예전처럼 시선 아래쪽 (고개를 조금 숙이면 보이는 곳)
+        let target = head + q.act((themeOpen ? SIMD3<Float>(0, -0.4, -0.6) : SIMD3<Float>(0, -0.5, -0.5)) * k)
         hud.position = hud.position + (target - hud.position) * min(1, dt * 5)
-        hud.orientation = q * simd_quatf(angle: -0.25, axis: [1, 0, 0])
+        hud.orientation = q * simd_quatf(angle: themeOpen ? -0.3 : -0.5, axis: [1, 0, 0])
         // 아래를 본다고 뜨지 않음: 알릴 말이 있을 때·방에 막 들어섰을 때(4초)·싱글탭으로 띄웠을 때·테마를 고르는 중일 때만
-        let want: Float = (message != nil || themeOpen || hudPinned || t < hudAutoUntil) ? 1 : 0
+        // 보이는 때: 싱글탭으로 띄움 · 새 알림 4초(방이 바뀔 때 포함) · 안전 알림 · 테마 고르는 중
+        let want: Float = (hudAlert || themeOpen || hudPinned || t < hudAutoUntil) ? 1 : 0
         hudShow += (want - hudShow) * min(1, dt * 5)
         hud.components.set(OpacityComponent(opacity: hudShow))
         hud.isEnabled = hudShow > 0.02
