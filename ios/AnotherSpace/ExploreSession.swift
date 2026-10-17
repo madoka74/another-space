@@ -49,6 +49,7 @@ private struct ExploreHud: View {
             HStack(spacing: 14) {
                 if s.room != nil {
                     Button {
+                        s.uiTouched()
                         s.themeOpen.toggle()
                     } label: {
                         Label(s.themeOpen ? "테마 닫기" : (s.unified ? "모든 방 테마 바꾸기" : "테마 바꾸기"),
@@ -66,6 +67,7 @@ private struct ExploreHud: View {
         .padding(22)
         .frame(width: s.themeOpen ? 640 : 480)
         .glassBackgroundEffect()
+        .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })     // 안내판을 누른 집기는 싱글탭(안내판 닫기)으로 치지 않음
     }
 }
 
@@ -307,7 +309,12 @@ final class ExploreSession {
     @ObservationIgnored private var peekAim: SIMD3<Float>?    // 현실 창이 겨누는 곳: 문 가운데 줄의 손잡이 높이(1m), 내 쪽에 가장 가까운 곳 (지금 좌표)
     @ObservationIgnored private var hands: HandTrackingProvider?
     @ObservationIgnored private var pinching: [Bool] = [false, false]      // 왼손·오른손 엄지·검지가 맞닿아 있는지
-    @ObservationIgnored private var lastPinch: [Float] = [-9, -9]         // 마지막으로 맞닿은 때
+    @ObservationIgnored private var pinchAt: [Float] = [-9, -9]           // 맞닿기 시작한 때 (너무 짧은 흔들림은 무시)
+    @ObservationIgnored private var pendingTap: Float?                     // 한 번 집은 때 — 0.55초 안에 또 집으면 더블탭, 아니면 싱글탭
+    @ObservationIgnored private var lastEntityTap: Float = -9              // 열쇠 등 물체를 누른 때 (그 집기는 싱글탭으로 치지 않음)
+    @ObservationIgnored private var lastUITap: Float = -9                  // 안내판 버튼을 누른 때
+    @ObservationIgnored private var hudPinned = false                      // 싱글탭으로 띄운 안내판
+    @ObservationIgnored private var hudAutoUntil: Float = 0                // 방에 들어서면 잠깐 보이는 안내판
     @ObservationIgnored private var freePeek = false                       // 더블탭으로 연 현실 창 (시선 앞)
     @ObservationIgnored private var roomClear: Float = 1      // 머리에서 가장 가까운 벽·문까지 (안내판이 벽·문 뒤로 숨지 않게)
     @ObservationIgnored private var peekAmt: Float = 0
@@ -492,6 +499,7 @@ final class ExploreSession {
 
     // MARK: 테마 바꾸기 (지금 방)
     func setTheme(place: String, weather: String, time: String) {
+        lastUITap = t
         guard var d = data, let L = layout, current != 0 else { return }
         let id = current
         d.setTheme(id, place: place, weather: weather, time: time)       // '모든 방 같게'면 모든 방이 바뀜
@@ -812,43 +820,61 @@ final class ExploreSession {
     }
 
     // MARK: 현실 창 (닫힌 실제 문을 열 수 있게)
-    /// 손가락 더블탭(엄지·검지를 0.45초 안에 두 번 모음, 어느 손이든) → 시선 앞 현실 창 열기/닫기
-    private func checkDoubleTap() {
-        guard let h = hands, h.state == .running else { return }
-        let (l, r) = h.latestAnchors
-        for (k, a) in [l, r].enumerated() {
-            guard let a, a.isTracked, let sk = a.handSkeleton else { pinching[k] = false; continue }
-            let tj = sk.joint(.thumbTip), ij = sk.joint(.indexFingerTip)
-            guard tj.isTracked, ij.isTracked else { continue }
-            let m = a.originFromAnchorTransform
-            let tp = simd_make_float3(m * tj.anchorFromJointTransform.columns.3)
-            let ip = simd_make_float3(m * ij.anchorFromJointTransform.columns.3)
-            let d = simd_distance(tp, ip)
-            if !pinching[k] && d < 0.015 {
-                pinching[k] = true
-                if t - lastPinch[k] < 0.45 {
-                    lastPinch[k] = -9
-                    freePeek.toggle()
-                } else {
-                    lastPinch[k] = t
+    /// 손가락 집기(엄지·검지 맞닿음, 어느 손이든, 손을 안 봐도 됨)
+    /// - 더블탭(0.55초 안에 두 번): 시선 앞 현실 창 열기/닫기
+    /// - 싱글탭: 안내판 띄우기/숨기기 — 단 그 집기가 열쇠·안내판 버튼을 누른 것이거나, 열쇠 문이 보이는 동안은 아님(열쇠가 우선)
+    /// 맞닿음 2.2cm 안, 풂 3cm 넘게 (자연스럽게 두 번 집을 땐 손가락을 크게 안 벌려서 예전 3.5cm 기준으론 두 번째가 안 잡혔음)
+    private func checkTaps() {
+        if let h = hands, h.state == .running {
+            let (l, r) = h.latestAnchors
+            for (k, a) in [l, r].enumerated() {
+                guard let a, a.isTracked, let sk = a.handSkeleton else { pinching[k] = false; continue }
+                let tj = sk.joint(.thumbTip), ij = sk.joint(.indexFingerTip)
+                guard tj.isTracked, ij.isTracked else { continue }
+                let m = a.originFromAnchorTransform
+                let tp = simd_make_float3(m * tj.anchorFromJointTransform.columns.3)
+                let ip = simd_make_float3(m * ij.anchorFromJointTransform.columns.3)
+                let d = simd_distance(tp, ip)
+                if !pinching[k] && d < 0.022 {
+                    pinching[k] = true
+                    pinchAt[k] = t
+                    if let p0 = pendingTap, t - p0 < 0.55 {
+                        pendingTap = nil
+                        freePeek.toggle()
+                    } else {
+                        pendingTap = t
+                    }
+                } else if pinching[k] && d > 0.03 && t - pinchAt[k] > 0.04 {
+                    pinching[k] = false
                 }
-            } else if pinching[k] && d > 0.035 {
-                pinching[k] = false
+            }
+        }
+        // 싱글탭 확정 (두 번째 집기를 기다린 뒤)
+        if let p0 = pendingTap, t - p0 > 0.55 {
+            pendingTap = nil
+            let onThing = abs(lastEntityTap - p0) < 0.6 || abs(lastUITap - p0) < 0.6
+            let keyShown = doorShow.values.contains { $0 > 0.3 }
+            if !onThing && !keyShown {
+                hudPinned.toggle()
+                if !hudPinned { themeOpen = false }
             }
         }
     }
 
+    /// 안내판 버튼을 누름 (그 집기는 싱글탭으로 치지 않음)
+    func uiTouched() { lastUITap = t }
+
     /// 손잡이 문을 바라보면 열리는 현실 창: 눈에서 문 손잡이 높이(1m)를 향한 선 위에 떠서 그쪽 현실을 보여 줌.
     /// 문에 다가가면 원도 눈 쪽으로 당겨져(문 앞 가상 문짝보다 늘 앞) 가려지지 않고, 크기는 거리에 맞춰 보이는 크기가 같게
     private func placePeek(_ dt: Float) {
-        let target: Float = (peekDoor != nil || freePeek) ? 1 : 0
+        let target: Float = freePeek ? 1 : 0
         peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 5 : 8))
         let on = peekAmt > 0.01
         if peek.isEnabled != on { peek.isEnabled = on }
         guard on else { return }
         // 닫힌 실제 문이면 손잡이 쪽, 아니면(더블탭) 지금 보는 곳 정면 — 시선 높이 그대로
         let g = simd_length(fwd) > 0.1 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-        let aim = (peekDoor != nil ? peekAim : nil) ?? (head + g * 1.0)
+        let aim = head + g * 1.0
         let v = aim - head
         let dTarget = simd_length(v)
         guard dTarget > 0.05 else { return }
@@ -859,7 +885,7 @@ final class ExploreSession {
         d = min(d, roomClear - 0.1)
         d = max(0.2, d)
         let goal = head + dir * d
-        peek.position = peekAmt < 0.05 ? goal : peek.position + (goal - peek.position) * min(1, dt * 8)
+        peek.position = peekAmt < 0.05 ? goal : peek.position + (goal - peek.position) * min(1, dt * 30)   // 시선에 거의 붙어서 따라감
         let toHead = head - peek.position
         if simd_length(toHead) > 0.01 { peek.orientation = simd_quatf(from: SIMD3<Float>(0, 1, 0), to: simd_normalize(toHead)) }
         let e = peekAmt * peekAmt * (3 - 2 * peekAmt)
@@ -950,7 +976,7 @@ final class ExploreSession {
             if msg != message { message = msg }
         }
 
-        checkDoubleTap()
+        checkTaps()
         placePeek(dt)
         for (id, wld) in worlds { wld.tick(dt, active: id == current) }
         soundTick(dt)
@@ -959,6 +985,7 @@ final class ExploreSession {
 
     private func enterRoom(_ r: Int) {
         current = r
+        hudAutoUntil = t + 4                                // 방이 바뀌면 안내판으로 잠깐 알려 줌
         doorOpen.removeAll()                                // 넘어오면 뒤의 문은 다시 닫힘 (이 방 벽처럼)
         guard let d = data, let L = layout, let rm = d.rec.room(r) else { return }
         if worlds[r] == nil {                               // 아직 못 만든 방이면 바로 만듦
@@ -1028,10 +1055,8 @@ final class ExploreSession {
                     peekGone += dt
                     if peekGone > 0.8 { peekDoor = nil; peekAway = 0; peekGone = 0 }     // 실제 문이 열렸거나 1m 밖으로 멀어짐
                 }
-            } else {
-                peekLook = lookingAt != nil ? peekLook + dt : 0
-                if peekLook > 1.5, let i = lookingAt { peekDoor = i; peekLook = 0; peekAway = 0 }
             }
+            _ = lookingAt                                   // 닫힌 문에서 현실 창을 저절로 여는 것은 없앰 (필요하면 더블탭)
         }
         for (i, ds) in L.doors.enumerated() {
             var same = ds.single                                               // 한 방 안의 문은 늘 같은 세계
@@ -1205,6 +1230,7 @@ final class ExploreSession {
 
     /// 떠 있는 열쇠를 누름 (바라보고 손가락 집기 · 직접 누르기)
     func tapped(_ e: Entity) {
+        lastEntityTap = t
         var cur: Entity? = e
         while let c = cur {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
@@ -1318,10 +1344,12 @@ final class ExploreSession {
         // 벽·문에 바짝 다가서면 안내판을 당겨 오고 그만큼 작게 (벽·문 뒤로 숨어 안 보이지 않게, 보이는 크기는 그대로)
         let k = min(1, max(0.5, (roomClear - 0.08) / 0.5))
         hud.scale = SIMD3<Float>(repeating: k)
-        let target = head + q.act((themeOpen ? SIMD3<Float>(0, -0.4, -0.6) : SIMD3<Float>(0, -0.55, -0.5)) * k)
+        // 싱글탭·방 알림으로 뜨므로 눈앞 조금 아래에 (아래를 내려다봐야 보이던 자리에서 올림)
+        let target = head + q.act((themeOpen ? SIMD3<Float>(0, -0.3, -0.65) : SIMD3<Float>(0, -0.22, -0.65)) * k)
         hud.position = hud.position + (target - hud.position) * min(1, dt * 5)
-        hud.orientation = q * simd_quatf(angle: themeOpen ? -0.3 : -0.5, axis: [1, 0, 0])
-        let want: Float = (message != nil || themeOpen || fwd.y < -0.45) ? 1 : 0
+        hud.orientation = q * simd_quatf(angle: -0.25, axis: [1, 0, 0])
+        // 아래를 본다고 뜨지 않음: 알릴 말이 있을 때·방에 막 들어섰을 때(4초)·싱글탭으로 띄웠을 때·테마를 고르는 중일 때만
+        let want: Float = (message != nil || themeOpen || hudPinned || t < hudAutoUntil) ? 1 : 0
         hudShow += (want - hudShow) * min(1, dt * 5)
         hud.components.set(OpacityComponent(opacity: hudShow))
         hud.isEnabled = hudShow > 0.02
