@@ -207,6 +207,11 @@ struct MapEditView: View {
                          at: CGPoint(x: r.midX, y: r.maxY + 14))
             }
         }
+        // 정리가 필요한 사각형 (애매한 틈·겹침, 경계에 안 맞는 문): 노란 점선
+        let bad = Self.issues(d)
+        for s in d.shapes where bad.contains(s.id) {
+            ctx.stroke(Path(rect(s, V).insetBy(dx: -3, dy: -3)), with: .color(.yellow), style: StrokeStyle(lineWidth: 2.5, dash: [7, 5]))
+        }
         // 붙는 선
         for g in guides {
             var p = Path()
@@ -411,6 +416,19 @@ struct MapEditView: View {
                 .pickerStyle(.segmented)
                 .onChange(of: tool) { _, t in pin = nil; cursor = nil; if t != .select { sel = [] } }
                 Toggle("여러 개 고르기", isOn: $multi)
+                let bad = Self.issues(d)
+                if !bad.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+                        Text("틈·겹침이 애매하거나 문이 경계에 안 맞는 사각형 \(bad.count)개 (노란 점선) — 탐험 때 틈이 보일 수 있어요")
+                            .font(.callout).fixedSize(horizontal: false, vertical: true)
+                        Button("정리") { change { $0.tidy(full: false) }; flash("붙이고 문을 경계에 맞췄어요") }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(12)
+                    .background(Color.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                }
+                guide
                 Text(hint(d)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
                 if !picked.isEmpty {
@@ -543,6 +561,37 @@ struct MapEditView: View {
             if let w { t.u1 = t.u0 + w }
             if let dd { t.v1 = t.v0 + dd }
             d.updateShape(t)
+        }
+    }
+
+    /// 자동 정리를 하면 2.5cm 넘게 바뀔 사각형들 = 지금 틈·겹침이 애매하거나 문이 경계에 안 맞는 곳
+    static func issues(_ d: SpaceData) -> Set<Int> {
+        var t = d
+        t.tidy(full: false)
+        var out = Set<Int>()
+        for a in d.shapes {
+            guard let b = t.shapes.first(where: { $0.id == a.id }) else { continue }
+            if abs(a.u0 - b.u0) > 0.025 || abs(a.u1 - b.u1) > 0.025 || abs(a.v0 - b.v0) > 0.025 || abs(a.v1 - b.v1) > 0.025 { out.insert(a.id) }
+        }
+        return out
+    }
+
+    /// 방·문 구성 원칙 (편집 화면 안내)
+    private var guide: some View {
+        DisclosureGroup("방·문 구성 원칙") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("① 방 사각형 = 실제로 걸을 수 있는 바닥. 가구가 놓인 곳도 포함하고, 벽 속까지 넓히지 마세요.")
+                Text("② 옆방과는 '딱 붙이기'가 기본이에요(실제 벽 두께의 가운데 선). 붙은 곳엔 벽이 한 장 서요. 2~25cm쯤 애매하게 떨어지거나 겹치면 노란 점선으로 알려 드려요.")
+                Text("③ 한 방을 여러 사각형으로 만들 땐 서로 딱 붙이거나 겹치게 하고 '결합'으로 같은 방으로.")
+                Text("④ 문은 실제 문이 있는 곳에만, 폭은 실제 문 폭(문틀 안쪽)과 같게, 두 방 경계를 가로질러 그리세요. 앞뒤 깊이는 아무렇게나 그려도 경계에 맞춰져요. 실제 문보다 넓게 그리면 그만큼 벽이 뚫려 실제 벽이 보여요.")
+                Text("⑤ 벽 없이 트인 곳(거실-주방 등)은 같은 방으로 결합하거나, 트인 길이 전체에 통로를 그리세요.")
+                Text("⑥ 다 그린 뒤 '이음새 자동 정리'를 한 번 누르면 틈·겹침을 붙이고 거의 한 줄인 벽을 맞추고 문을 경계에 맞춰요.")
+                Text("⑦ 탐험 중 다른 세계와 이어진 문은 멀리선 지금 방의 벽(숲이면 덤불, 바다면 난간)으로 보이고, 1m 안에서 문과 열쇠가 나타나요.")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 6)
         }
     }
 

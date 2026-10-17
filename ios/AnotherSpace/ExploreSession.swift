@@ -158,7 +158,7 @@ enum Skin {
     /// 벽은 사각형에서 반듯하게 세우므로 벽 가까이(15cm)의 면은 버림. 방 밖(거울 속·창밖·구성하지 않은 곳)·천장·바닥 면도 버림.
     /// 벽에서 떨어져 있는 실제 벽면(구성을 넓게 잡았을 때)은 물건처럼 입혀서 보이게 함 (부딪히지 않게)
     /// chunked: 미리 그려 두는 스캔 그물 — 1m 칸마다 나눔
-    static func build(_ m: MeshCopy, _ I: SkinInfo, _ fit: Fit, chunked: Bool = false) -> SkinResult {
+    static func build(_ m: MeshCopy, _ I: SkinInfo, _ fit: Fit, chunked: Bool = false, closedDoors: Set<Int> = []) -> SkinResult {
         let L = I.layout
         var out = SkinResult()
         var groups: [Int64: SkinGroup] = [:]
@@ -185,8 +185,8 @@ enum Skin {
             let pp = L.plane(ctr.x, ctr.z)
             var inDoor = false
             for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.15) {
-                inDoor = true
-                if !chunked && hgt > 0.3 && hgt < 1.9 && abs(ns.y) < 0.5 && ds.zone(pp, margin: 0.1) {
+                if closedDoors.contains(di) { inDoor = true }                  // 깔끔한 실제 문짝을 보이는 동안만 그물을 숨김
+                if !chunked && cls == MeshClass.door && hgt > 0.3 && hgt < 1.9 && abs(ns.y) < 0.5 && ds.zone(pp, margin: 0.1) {
                     let sx = ds.alongU ? pp.y : pp.x
                     let col = Int((sx - ds.s0) / 0.1), row = Int((hgt - 0.3) / 0.1)
                     out.doorHits[di, default: []].insert(row * 1000 + col)
@@ -267,6 +267,8 @@ final class ExploreSession {
     @ObservationIgnored private var lastSide: [Int: Float] = [:]    // 문 밖에서 마지막으로 서 있던 쪽
     @ObservationIgnored private var realHits: [Int: [UUID: Set<Int>]] = [:]   // 문 → 그물 덩어리마다 막힌 칸
     @ObservationIgnored private var realClosed: Set<Int> = []                // 실제 문이 닫혀 있는 문
+    @ObservationIgnored private var openProg: [Int: Float] = [:]             // 여는 움직임 진행 (0~1)
+    @ObservationIgnored private var animRoom: [Int: Int] = [:]               // 열기 시작한 쪽 방
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -701,52 +703,94 @@ final class ExploreSession {
             let here = side >= 0 ? ds.roomA : ds.roomB
             if !same {
                 if inside {
-                    // 문 자리 안에 서 있으면(닫힌 문짝을 그냥 지나쳐 들어와도) 열어 둠 — 들어온 쪽을 기억
-                    if !doorOpen.contains(i) { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
+                    // 문 자리 안에 서 있으면(닫힌 문을 그냥 지나쳐 들어와도) 열어 둠 — 들어온 쪽을 기억
+                    if !doorOpen.contains(i) && openProg[i] == nil { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
                 } else {
                     lastSide[i] = side
                     if doorOpen.contains(i) {
                         let crossed = (doorSide[i] ?? side) * side < 0          // 반대편으로 나감 = 지나감
-                        if crossed || dist > Self.doorReach { doorOpen.remove(i) }
+                        if crossed {
+                            doorOpen.remove(i)
+                            doorShow[i] = 1                                    // 바로 뒤에 닫힌 문이 보이게
+                        } else if dist > Self.doorReach {
+                            doorOpen.remove(i)
+                        }
                     }
                 }
             }
-            let target: Float = (same || doorOpen.contains(i)) ? 0 : 1
-            var st = doorState[i] ?? target
-            if st != target {
-                st += (target - st) * min(1, dt * 6)
-                if abs(st - target) < 0.01 { st = target }
-            }
-            doorState[i] = st
-            // 실제 문이 닫혀 있으면 깔끔한 문짝으로 (다른 세계 문짝이 닫혀 있을 땐 그 뒤라 숨김)
-            if let leaf = worlds[ds.roomA]?.doorLeaf[i] { leaf.isEnabled = realClosed.contains(i) && st < 0.5 }
-            for rid in [ds.roomA, ds.roomB] {
-                for e in worlds[rid]?.doorPanels[i] ?? [] {
-                    e.isEnabled = st > 0.01
-                    e.scale = SIMD3<Float>(max(0.001, st), 1, 1)
+            // 여는 움직임 (1.1초): 열쇠가 구멍으로 → 돌고 → 문짝이 양옆 벽 속으로
+            var prog = openProg[i]
+            if var pr = prog {
+                pr += dt / 1.1
+                if pr >= 1 {
+                    openProg[i] = nil
+                    prog = nil
+                    doorOpen.insert(i)
+                    doorShow[i] = 0
+                } else {
+                    openProg[i] = pr
+                    prog = pr
                 }
             }
-            // 문틀·열쇠: 다른 세계 사이, 닫혀 있고, 문 밖 1m 안일 때 — 서 있는 쪽 방의 문짝에만
-            let want: Float = (!same && !inside && dist < Self.doorReach && !doorOpen.contains(i)) ? 1 : 0
+            // 문 자리가 '이 방의 벽'으로 막혀 있는지 (같은 세계면 늘 열림)
+            let closed = !same && !doorOpen.contains(i) && (prog ?? 0) < 0.4
+            for rid in [ds.roomA, ds.roomB] {
+                for e in worlds[rid]?.doorPanels[i] ?? [] where e.isEnabled != closed { e.isEnabled = closed }
+            }
+            // 실제 문이 닫혀 있으면 실제 문짝 (막힌 벽 뒤일 땐 숨김)
+            if let leaf = worlds[ds.roomA]?.doorLeaf[i] {
+                let on = realClosed.contains(i) && !closed
+                if leaf.isEnabled != on { leaf.isEnabled = on }
+            }
+            // 마법의 양문: 다른 세계 사이, 닫혀 있고, 문 밖 1m 안 — 서 있는 쪽 방에만 (여는 중엔 연 쪽에)
+            let want: Float = (!same && !inside && dist < Self.doorReach && !doorOpen.contains(i)) || prog != nil ? 1 : 0
             var sh = doorShow[i] ?? 0
             sh += (want - sh) * min(1, dt * 4)
             if abs(sh - want) < 0.01 { sh = want }
+            if prog != nil { sh = 1 }
             doorShow[i] = sh
+            let showRoom = prog != nil ? (animRoom[i] ?? here) : here
             for rid in [ds.roomA, ds.roomB] {
-                guard let ui = worlds[rid]?.doorUI[i] else { continue }
-                let v: Float = rid == here ? sh : 0
-                ui.root.isEnabled = v > 0.02
-                guard ui.root.isEnabled else { continue }
-                ui.root.components.set(OpacityComponent(opacity: v))
-                ui.key.position = [0, 0.012 * sin(t * 1.3), 0]                       // 둥실둥실
-                ui.key.orientation = simd_quatf(angle: 0.3 * sin(t * 0.7), axis: [0, 1, 0])
+                guard let v = worlds[rid]?.doorView[i] else { continue }
+                let o: Float = rid == showRoom ? sh : 0
+                if v.root.isEnabled != (o > 0.02) { v.root.isEnabled = o > 0.02 }
+                guard v.root.isEnabled else { continue }
+                v.root.components.set(OpacityComponent(opacity: o))
                 if glowMat == nil { glowMat = RoomWorld.gold(rough: 0.22, glow: 0.2 + 2.2 * breath) }
-                if let gm = glowMat { for e in ui.parts { e.model?.materials = [gm] } }
+                if let gm = glowMat { for e in v.parts { e.model?.materials = [gm] } }
+                Self.pose(v, prog: rid == showRoom ? prog : nil, t: t)
             }
         }
     }
 
-    /// 실제 문이 닫혔는지: 문 자리(폭 × 0.3~1.9m)의 45% 넘게 막히면 닫힘, 30% 밑으로 비면 열림 (그 사이는 그대로 — 깜빡이지 않게)
+    /// 문 모양 맞추기: prog nil = 닫혀서 열쇠가 떠 있음, 0~1 = 여는 중
+    static func pose(_ v: DoorView, prog: Float?, t: Float) {
+        func ease(_ x: Float) -> Float { let c = min(1, max(0, x)); return c * c * (3 - 2 * c) }
+        guard let p = prog else {
+            v.left.scale = [1, 1, 1]; v.right.scale = [1, 1, 1]
+            v.keyRoot.position = [0, DoorView.keyY, DoorView.keyZ]
+            v.keyRoot.orientation = simd_quatf(angle: 0, axis: [0, 1, 0])
+            v.keyRoot.components.set(OpacityComponent(opacity: 1))
+            v.lock.components.set(OpacityComponent(opacity: 1))
+            v.key.position = [0, 0.012 * sin(t * 1.3), 0]                       // 둥실둥실
+            v.key.orientation = simd_quatf(angle: 0.3 * sin(t * 0.7), axis: [0, 1, 0])
+            return
+        }
+        // 0~0.25: 열쇠가 문 쪽으로 돌아서며 구멍으로 / 0.25~0.4: 한 바퀴 돌림 / 0.4~1: 문짝이 양옆 벽 속으로, 열쇠·구멍은 사라짐
+        let a = ease(p / 0.25), b = ease((p - 0.25) / 0.15), c = ease((p - 0.4) / 0.6)
+        v.key.position = .zero
+        v.key.orientation = simd_quatf(angle: 0, axis: [0, 1, 0])
+        let insertZ: Float = 0.045 + 0.075                                     // 열쇠 끝이 구멍에 닿는 곳
+        v.keyRoot.position = [0, DoorView.keyY, DoorView.keyZ + (insertZ - DoorView.keyZ) * a]
+        v.keyRoot.orientation = simd_quatf(angle: .pi / 2 * b, axis: [0, 0, 1]) * simd_quatf(angle: .pi / 2 * a, axis: [0, 1, 0])
+        let fade = 1 - c
+        v.keyRoot.components.set(OpacityComponent(opacity: fade))
+        v.lock.components.set(OpacityComponent(opacity: fade))
+        let k = max(0.001, 1 - c)
+        v.left.scale = [k, 1, 1]; v.right.scale = [k, 1, 1]
+    }
+
+    /// 실제 문이 닫혔는지: 문 자리(폭 × 0.3~1.9m) 중 비전프로가 '문'으로 알아본 면이 막은 비율로 (그 사이 값은 그대로 — 깜빡이지 않게)
     private func setDoorHits(_ id: UUID, _ hits: [Int: Set<Int>]) {
         guard let L = layout else { return }
         var touched = Set(hits.keys)
@@ -761,7 +805,10 @@ final class ExploreSession {
             for (_, h) in realHits[i] ?? [:] { all.formUnion(h) }
             let cols = max(1, Int((L.doors[i].width / 0.1).rounded(.down)))
             let cover = Float(all.count) / Float(cols * 16)
-            if cover > 0.45 { realClosed.insert(i) } else if cover < 0.3 { realClosed.remove(i) }
+            // 비전프로가 '문'으로 알아본 면만 셈 (주변 벽·문틀은 안 셈): 35% 넘게 막히면 닫힘, 15% 밑이면 열림
+            let was = realClosed.contains(i)
+            if cover > 0.35 { realClosed.insert(i) } else if cover < 0.15 { realClosed.remove(i) }
+            if was != realClosed.contains(i) { dirty.formUnion(meshes.keys) }      // 문 자리 그물을 숨기거나 다시 보이게
         }
     }
 
@@ -776,13 +823,15 @@ final class ExploreSession {
         var cur: Entity? = e
         while let c = cur {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
-                if (doorShow[i] ?? 0) > 0.3, let L = layout, let f = fit, i < L.doors.count {
+                if (doorShow[i] ?? 0) > 0.3, openProg[i] == nil, !doorOpen.contains(i), let L = layout, let f = fit, i < L.doors.count {
                     let hs = f.toSaved(head)
                     let p = L.plane(hs.x, hs.z)
                     let ds = L.doors[i]
                     if ds.dist(p) < Self.doorReach {
-                        doorSide[i] = ds.side(p)
-                        doorOpen.insert(i)
+                        let side = ds.side(p)
+                        doorSide[i] = side
+                        animRoom[i] = side >= 0 ? ds.roomA : ds.roomB
+                        openProg[i] = 0                                 // 열쇠가 들어가고 문이 열리는 움직임 시작
                     }
                 }
                 return
@@ -813,7 +862,8 @@ final class ExploreSession {
             builtAt[id] = now
             let copy = MeshCopy(a)
             Task {
-                let res = await Task.detached(priority: .userInitiated) { Skin.build(copy, I, fit) }.value
+                let closedNow = realClosed
+                let res = await Task.detached(priority: .userInitiated) { Skin.build(copy, I, fit, closedDoors: closedNow) }.value
                 building.remove(id)
                 guard !ended, meshes[id] != nil else { return }
                 apply(id, res.groups)
