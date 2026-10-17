@@ -276,6 +276,10 @@ struct SpaceData: Equatable {
         // ④ 문·통로 맞추기
         for di in list.indices where list[di].isDoor {
             let d = list[di]
+            // 한 방 안의 문(방을 나누지 않은 실제 문 자리): 15cm 안에 다른 방이 없으면 그대로 둠
+            let touching = Set(rooms.filter { overlap(list[$0].u0, list[$0].u1, d.u0 - 0.15, d.u1 + 0.15) > 0
+                                              && overlap(list[$0].v0, list[$0].v1, d.v0 - 0.15, d.v1 + 0.15) > 0 }.map { list[$0].room })
+            if touching.count == 1 { continue }
             var best: (Float, ShapeRec)?
             for i in rooms {
                 for j in rooms where list[i].room != list[j].room {

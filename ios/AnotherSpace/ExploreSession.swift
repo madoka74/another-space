@@ -181,18 +181,24 @@ enum Skin {
             let cls: UInt8 = fi < m.c.count ? m.c[fi] : 0
             let ns = fit.dirToSaved(n)
             let hgt = ctr.y - L.floorY
-            // 문 자리: 실제 문짝 그물은 입히지 않고(조각조각 나타나고 사라지지 않게), 막힌 칸만 세어 문이 닫혔는지 판단
+            // 문 자리: 문틀·문짝·벽에 붙은 전선 같은 그물은 허공에 뜬 조각처럼 보이므로 입히지 않음.
+            // 무릎 높이(0.5m) 아래는 걸려 넘어지지 않게 남기고, 실제 문이 닫혀 있으면(깔끔한 문짝이 대신 보임) 모두 숨김.
+            // 실제 문이 닫혔는지는 '문 자리를 가로막고 선 면'만 셈: 분류(문·벽)와 상관없이, 건너가는 방향을 마주 보는 면이
+            // 문틀 안쪽(양옆 8cm 뺀 폭 × 0.3~1.9m)을 얼마나 덮는지. 열어서 옆으로 젖혀진 문짝·문틀 옆면·옷장 문은 방향이 달라 안 셈
             let pp = L.plane(ctr.x, ctr.z)
             var inDoor = false
-            for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.15) {
-                if closedDoors.contains(di) { inDoor = true }                  // 깔끔한 실제 문짝을 보이는 동안만 그물을 숨김
-                if !chunked && cls == MeshClass.door && hgt > 0.3 && hgt < 1.9 && abs(ns.y) < 0.5 && ds.zone(pp, margin: 0.1) {
-                    let sx = ds.alongU ? pp.y : pp.x
-                    let col = Int((sx - ds.s0) / 0.1), row = Int((hgt - 0.3) / 0.1)
+            let np = SIMD2<Float>(simd_dot(SIMD2<Float>(ns.x, ns.z), L.ex), simd_dot(SIMD2<Float>(ns.x, ns.z), L.ez))
+            for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.15, side: 0.12) {
+                if closedDoors.contains(di) || hgt > 0.5 { inDoor = true }
+                let across = abs(ds.alongU ? np.x : np.y)
+                let sx = ds.alongU ? pp.y : pp.x
+                if !chunked && cls != MeshClass.floor && cls != MeshClass.ceiling && hgt > 0.3 && hgt < 1.9 && across > 0.75
+                    && sx > ds.s0 + 0.08 && sx < ds.s1 - 0.08 && ds.zone(pp, margin: 0.12) {
+                    let col = Int((sx - ds.s0 - 0.08) / 0.1), row = Int((hgt - 0.3) / 0.1)
                     out.doorHits[di, default: []].insert(row * 1000 + col)
                 }
             }
-            if inDoor && hgt < 2.2 { continue }
+            if inDoor { continue }
             let here = L.at(x: ctr.x, z: ctr.z)
             let r = here.room
             if r == 0 || r >= 256 { continue }                       // 방 밖
@@ -693,8 +699,8 @@ final class ExploreSession {
         let breath = 0.5 + 0.5 * sin(t * 2.4)                                   // 숨 쉬듯
         var glowMat: PhysicallyBasedMaterial?
         for (i, ds) in L.doors.enumerated() {
-            var same = false
-            if let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
+            var same = ds.single                                               // 한 방 안의 문은 늘 같은 세계
+            if !same, let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
                 same = ra.place == rb.place && ra.weather == rb.weather && ra.time == rb.time
             }
             let dist = ds.dist(p)
@@ -807,11 +813,11 @@ final class ExploreSession {
         for i in touched where i < L.doors.count {
             var all = Set<Int>()
             for (_, h) in realHits[i] ?? [:] { all.formUnion(h) }
-            let cols = max(1, Int((L.doors[i].width / 0.1).rounded(.down)))
+            let cols = max(1, Int(((L.doors[i].width - 0.16) / 0.1).rounded(.up)))
             let cover = Float(all.count) / Float(cols * 16)
-            // 비전프로가 '문'으로 알아본 면만 셈 (주변 벽·문틀은 안 셈): 35% 넘게 막히면 닫힘, 15% 밑이면 열림
+            // 문 자리를 가로막은 면이 문틀 안쪽의 절반 넘게 덮으면 닫힘, 30% 밑이면 열림 (그 사이는 그대로 — 깜빡이지 않게)
             let was = realClosed.contains(i)
-            if cover > 0.35 { realClosed.insert(i) } else if cover < 0.15 { realClosed.remove(i) }
+            if cover > 0.5 { realClosed.insert(i) } else if cover < 0.3 { realClosed.remove(i) }
             if was != realClosed.contains(i) { dirty.formUnion(meshes.keys) }      // 문 자리 그물을 숨기거나 다시 보이게
         }
     }

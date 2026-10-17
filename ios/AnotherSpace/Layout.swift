@@ -39,10 +39,12 @@ struct DoorSeg: Sendable {
     /// + 면 방 A 쪽, - 면 방 B 쪽
     func side(_ p: SIMD2<Float>) -> Float { simd_dot(p - mid, nA) }
     /// 문 자리 근처 (문짝 앞뒤 margin m, 폭 양옆 5cm) — 실제 문짝 그물은 여기서 따로 다룸
-    func zone(_ p: SIMD2<Float>, margin: Float) -> Bool {
+    func zone(_ p: SIMD2<Float>, margin: Float, side: Float = 0.05) -> Bool {
         let a = alongU ? p.x : p.y, s = alongU ? p.y : p.x
-        return s > s0 - 0.05 && s < s1 + 0.05 && a > min(pA, pB) - margin && a < max(pA, pB) + margin
+        return s > s0 - side && s < s1 + side && a > min(pA, pB) - margin && a < max(pA, pB) + margin
     }
+    /// 한 방 안의 문 (방을 나누지 않은 실제 문 자리) — 늘 '같은 세계'처럼 다룸
+    var single: Bool { roomA == roomB }
 }
 
 /// 사각형들을 5cm 칸으로 그려 둔 탐험용 배치.
@@ -94,33 +96,101 @@ struct Layout: Sendable {
             guard a1 > a0, b1 > b0 else { continue }
             for v in b0..<b1 { for u in a0..<a1 { wk[v * w + u] = 1; ow[v * w + u] = UInt8(s.room) } }
         }
-        var dm = [Bool](repeating: false, count: w * h)
-        for s in shapes where s.isDoor {                            // 문·통로: 방이 아닌 칸은 걸을 수 있게, 방 칸 위면 그 경계의 벽을 뚫음
-            let (a0, b0, a1, b1) = range(s)
+        // 문: 문·통로 사각형마다, 안쪽과 둘레 10cm의 방 칸을 세어 가장 많이 닿은 두 방을 잇는 문으로.
+        // 두 방이 어느 방향으로 놓였는지(무게중심)로 건너가는 방향과 양쪽 입구 줄을 정함.
+        // 방이 하나뿐이면 '한 방 안의 문'(방을 나누지 않은 실제 문 자리): 짧은 변 방향으로 건너감
+        var cand: [DoorSeg] = []
+        var candRect: [(Int, Int, Int, Int)] = []
+        for sh in shapes where sh.isDoor {
+            let (a0, b0, a1, b1) = range(sh)
             guard a1 > a0, b1 > b0 else { continue }
-            for v in b0..<b1 { for u in a0..<a1 { dm[v * w + u] = true; if wk[v * w + u] == 0 { wk[v * w + u] = 2 } } }
+            var cnt: [Int: Int] = [:]
+            var sum: [Int: SIMD2<Float>] = [:]
+            for v in max(0, b0 - 2)..<min(h, b1 + 2) {
+                for u in max(0, a0 - 2)..<min(w, a1 + 2) {
+                    let i = v * w + u
+                    guard wk[i] == 1 else { continue }
+                    let rr = Int(ow[i])
+                    cnt[rr, default: 0] += 1
+                    sum[rr, default: SIMD2<Float>(0, 0)] += SIMD2<Float>(Float(u), Float(v))
+                }
+            }
+            let top = cnt.sorted { $0.value > $1.value }
+            guard let first = top.first, first.value >= 3 else { continue }
+            if top.count < 2 || top[1].value < 3 {
+                // 한 방 안의 문
+                let alongU = (a1 - a0) <= (b1 - b0)
+                let ra = first.key
+                let pA = alongU ? bu + Float(a0) * r : bv + Float(b0) * r
+                let pB = alongU ? bu + Float(a1) * r : bv + Float(b1) * r
+                cand.append(DoorSeg(roomA: ra, roomB: ra, alongU: alongU, nA: alongU ? SIMD2<Float>(-1, 0) : SIMD2<Float>(0, -1), pA: pA, pB: pB,
+                                    s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
+                                    s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r))
+                candRect.append((a0, b0, a1, b1))
+                continue
+            }
+            let ra = top[0].key, rb = top[1].key
+            let ca = (sum[ra] ?? .zero) / Float(top[0].value), cb = (sum[rb] ?? .zero) / Float(top[1].value)
+            let dd = cb - ca
+            let alongU = abs(dd.x) >= abs(dd.y)
+            let aLow = alongU ? dd.x > 0 : dd.y > 0              // 방 A가 낮은 쪽(왼쪽·위)에 있음
+            // 각 방 칸이 문 폭 안에서 끝나는 줄 = 그 방의 입구 줄 (양옆 벽과 같은 줄)
+            var aMin = Int.max, aMax = Int.min, bMin = Int.max, bMax = Int.min
+            for v in max(0, b0 - 2)..<min(h, b1 + 2) {
+                for u in max(0, a0 - 2)..<min(w, a1 + 2) {
+                    if alongU ? (v < b0 || v >= b1) : (u < a0 || u >= a1) { continue }
+                    let i = v * w + u
+                    guard wk[i] == 1 else { continue }
+                    let c = alongU ? u : v
+                    if Int(ow[i]) == ra { aMin = min(aMin, c); aMax = max(aMax, c) }
+                    if Int(ow[i]) == rb { bMin = min(bMin, c); bMax = max(bMax, c) }
+                }
+            }
+            let base = alongU ? bu : bv
+            let lo = alongU ? sh.u0 : sh.v0, hi = alongU ? sh.u1 : sh.v1
+            let pA = aMax >= aMin ? base + Float(aLow ? aMax + 1 : aMin) * r : (aLow ? lo : hi)
+            let pB = bMax >= bMin ? base + Float(aLow ? bMin : bMax + 1) * r : (aLow ? hi : lo)
+            let nA = alongU ? SIMD2<Float>(aLow ? -1 : 1, 0) : SIMD2<Float>(0, aLow ? -1 : 1)
+            cand.append(DoorSeg(roomA: ra, roomB: rb, alongU: alongU, nA: nA, pA: pA, pB: pB,
+                                s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
+                                s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r))
+            candRect.append((a0, b0, a1, b1))
         }
-        // 문·통로 칸의 방 = 맞닿은 방 중 가까운 것 (방에서 퍼져 나감)
-        var q: [Int] = []
-        for i in 0..<(w * h) where wk[i] == 1 { q.append(i) }
-        var qi = 0
-        while qi < q.count {
-            let i = q[qi]; qi += 1
-            let u = i % w, v = i / w
-            for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let uu = u + du, vv = v + dv
-                guard uu >= 0, vv >= 0, uu < w, vv < h else { continue }
-                let j = vv * w + uu
-                if wk[j] == 2 && ow[j] == 0 { ow[j] = ow[i]; q.append(j) }
+        // 문 칸 표시. 방이 아닌 칸(틈)은 걸을 수 있게 하고, 그 칸의 방은 '이 문이 잇는 두 방' 중 가까운 쪽으로만
+        // (예전엔 가장 가까운 아무 방이었음 → 문이 세 번째 방에 살짝 닿으면 엉뚱한 두 방 사이 벽이 뚫려 틈이 생겼음)
+        var dof = [Int16](repeating: -1, count: w * h)
+        for (k, dg) in cand.enumerated() {
+            let (a0, b0, a1, b1) = candRect[k]
+            let midLine = (dg.pA + dg.pB) / 2
+            let base = dg.alongU ? bu : bv
+            for v in b0..<b1 {
+                for u in a0..<a1 {
+                    let i = v * w + u
+                    dof[i] = Int16(k)
+                    if wk[i] == 0 {
+                        wk[i] = 2
+                        let c = base + (Float(dg.alongU ? u : v) + 0.5) * r
+                        // 방 A 쪽 = nA 방향
+                        let towardA = (c - midLine) * (dg.alongU ? dg.nA.x : dg.nA.y) > 0
+                        ow[i] = UInt8(towardA ? dg.roomA : dg.roomB)
+                    }
+                }
             }
         }
-        for i in 0..<(w * h) where wk[i] == 2 && ow[i] == 0 { wk[i] = 0 }      // 어느 방과도 안 닿은 통로는 버림
         walk = wk; owner = ow
-        for i in 0..<(w * h) where wk[i] == 0 { dm[i] = false }
-        door = dm
-        /// 두 칸 사이에 방과 방 사이 벽이 서는지 (둘 다 걸을 수 있고, 방이 다르고, 문이 덮지 않음)
+        /// 두 칸 사이가 문으로 뚫렸는지: 그 칸을 덮은 문이 바로 이 두 방을 잇는 문일 때만
+        func opened(_ i: Int, _ j: Int) -> Bool {
+            for k in [Int(dof[i]), Int(dof[j])] where k >= 0 {
+                let dg = cand[k]
+                let x = Int(ow[i]), y = Int(ow[j])
+                if (dg.roomA == x && dg.roomB == y) || (dg.roomA == y && dg.roomB == x) { return true }
+            }
+            return false
+        }
+        door = dof.map { $0 >= 0 }
+        /// 두 칸 사이에 방과 방 사이 벽이 서는지 (둘 다 걸을 수 있고, 방이 다르고, 두 방을 잇는 문이 덮지 않음)
         func split(_ i: Int, _ j: Int) -> Bool {
-            wk[i] != 0 && wk[j] != 0 && ow[i] != ow[j] && !dm[i] && !dm[j]
+            wk[i] != 0 && wk[j] != 0 && ow[i] != ow[j] && !opened(i, j)
         }
         // 벽까지 거리 (4방향 퍼짐): 걸을 수 없는 칸 + 방과 방 사이 벽 바로 옆 칸에서 시작
         var ds = [Int16](repeating: Int16.max, count: w * h)
@@ -212,52 +282,33 @@ struct Layout: Sendable {
         }
         // 벽은 모두 칸 경계 줄에 정확히 (띄우거나 늘리지 않음). 방과 방 사이는 같은 줄에 두 방이 각자 자기 쪽을 보는
         // 한쪽 면 벽을 세움 → 반대편에선 안 보이니 겹쳐 깜빡이지 않고, 이어지는 곳의 끝점이 정확히 같아 틈이 없음
-        // 문: 문·통로 사각형마다, 안쪽과 둘레 10cm의 방 칸을 세어 가장 많이 닿은 두 방을 잇는 문으로.
-        // 두 방이 어느 방향으로 놓였는지(무게중심)로 건너가는 방향과 양쪽 입구 변을 정함
+        // 문 폭 = 실제로 뚫린 곳 (두 방 칸이 맞닿아 벽이 빠진 줄들). 문짝·문틀이 뚫린 곳과 정확히 같게.
+        // 두 방이 문 안에서 한 번도 맞닿지 않으면(문이 경계에 안 걸침) 뚫린 곳이 없으니 문도 없음
         var dl: [DoorSeg] = []
-        for sh in shapes where sh.isDoor {
-            let (a0, b0, a1, b1) = range(sh)
-            guard a1 > a0, b1 > b0 else { continue }
-            var cnt: [Int: Int] = [:]
-            var sum: [Int: SIMD2<Float>] = [:]
-            for v in max(0, b0 - 2)..<min(h, b1 + 2) {
-                for u in max(0, a0 - 2)..<min(w, a1 + 2) {
+        for (k, dg) in cand.enumerated() {
+            if dg.roomA == dg.roomB { dl.append(dg); continue }
+            let (a0, b0, a1, b1) = candRect[k]
+            var sMin = Int.max, sMax = Int.min
+            let vr = dg.alongU ? b0..<b1 : max(0, b0 - 2)..<min(h, b1 + 2)
+            let ur = dg.alongU ? max(0, a0 - 2)..<min(w, a1 + 2) : a0..<a1
+            for v in vr {
+                for u in ur {
                     let i = v * w + u
-                    guard wk[i] == 1 else { continue }
-                    let rr = Int(ow[i])
-                    cnt[rr, default: 0] += 1
-                    sum[rr, default: SIMD2<Float>(0, 0)] += SIMD2<Float>(Float(u), Float(v))
+                    let j = dg.alongU ? i + 1 : i + w
+                    guard dg.alongU ? u + 1 < w : v + 1 < h else { continue }
+                    guard wk[i] != 0, wk[j] != 0, ow[i] != ow[j], opened(i, j) else { continue }
+                    let x = Int(ow[i]), y = Int(ow[j])
+                    guard Set([x, y]) == Set([dg.roomA, dg.roomB]) else { continue }
+                    let sc = dg.alongU ? v : u
+                    sMin = min(sMin, sc); sMax = max(sMax, sc)
                 }
             }
-            let top = cnt.sorted { $0.value > $1.value }
-            guard top.count >= 2, top[1].value >= 3 else { continue }
-            let ra = top[0].key, rb = top[1].key
-            let ca = (sum[ra] ?? .zero) / Float(top[0].value), cb = (sum[rb] ?? .zero) / Float(top[1].value)
-            let dd = cb - ca
-            let alongU = abs(dd.x) >= abs(dd.y)
-            let aLow = alongU ? dd.x > 0 : dd.y > 0              // 방 A가 낮은 쪽(왼쪽·위)에 있음
-            // 각 방 칸이 문 폭 안에서 끝나는 줄 = 그 방의 입구 줄 (양옆 벽과 같은 줄)
-            var aMin = Int.max, aMax = Int.min, bMin = Int.max, bMax = Int.min
-            for v in max(0, b0 - 2)..<min(h, b1 + 2) {
-                for u in max(0, a0 - 2)..<min(w, a1 + 2) {
-                    // 문 폭 안의 칸만 (건너가는 축으로는 둘레 10cm까지)
-                    if alongU ? (v < b0 || v >= b1) : (u < a0 || u >= a1) { continue }
-                    let i = v * w + u
-                    guard wk[i] == 1 else { continue }
-                    let c = alongU ? u : v
-                    if Int(ow[i]) == ra { aMin = min(aMin, c); aMax = max(aMax, c) }
-                    if Int(ow[i]) == rb { bMin = min(bMin, c); bMax = max(bMax, c) }
-                }
-            }
-            let base = alongU ? bu : bv
-            let lo = alongU ? sh.u0 : sh.v0, hi = alongU ? sh.u1 : sh.v1
-            let pA = aMax >= aMin ? base + Float(aLow ? aMax + 1 : aMin) * r : (aLow ? lo : hi)
-            let pB = bMax >= bMin ? base + Float(aLow ? bMin : bMax + 1) * r : (aLow ? hi : lo)
-            let nA = alongU ? SIMD2<Float>(aLow ? -1 : 1, 0) : SIMD2<Float>(0, aLow ? -1 : 1)
-            // 문 폭도 벽과 같은 칸 줄로 (문짝 끝과 벽 끝이 정확히 맞닿게)
-            dl.append(DoorSeg(roomA: ra, roomB: rb, alongU: alongU, nA: nA, pA: pA, pB: pB,
-                              s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
-                              s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r))
+            guard sMax >= sMin else { continue }
+            var t = dg
+            let base = dg.alongU ? bv : bu
+            t.s0 = base + Float(sMin) * r
+            t.s1 = base + Float(sMax + 1) * r
+            dl.append(t)
         }
         doors = dl
         // 창은 50cm 안 되면 벽으로 (조각난 창 방지)
@@ -279,6 +330,12 @@ struct Layout: Sendable {
     private func index(_ p: SIMD2<Float>) -> Int? {
         let u = Int(((p.x - u0) / Layout.res).rounded(.down)), v = Int(((p.y - v0) / Layout.res).rounded(.down))
         return (u >= 0 && v >= 0 && u < W && v < H) ? v * W + u : nil
+    }
+
+    /// 평면 좌표의 그 자리가 걸을 수 있는 곳(어느 방이든)인지
+    func walkable(_ p: SIMD2<Float>) -> Bool {
+        guard let i = index(p) else { return false }
+        return walk[i] != 0
     }
 
     /// 그 자리의 방 (걸을 수 없는 곳이면 0)과 벽까지 거리(m)
