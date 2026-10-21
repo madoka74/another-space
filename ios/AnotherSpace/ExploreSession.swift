@@ -167,6 +167,9 @@ final class ExploreSession {
     @ObservationIgnored private var openHold: [Int: Float] = [:]    // 이때까지는 다시 닫힘으로 치지 않음 (방금 문 자리를 지남)
     @ObservationIgnored private var realClosed: Set<Int> = []       // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var doorPlanes: [UUID: (Int, Bool)] = [:]   // 문으로 알아본 평면 → (문 번호, 문 자리를 가로막고 있는지)
+    @ObservationIgnored private var hands: HandTrackingProvider?
+    @ObservationIgnored private var grip: [Int: (Float, Float, Float, Float)] = [:]   // 문 → (손이 문짝에 가장 가까웠던 거리, 처음 닿은 때, 마지막으로 닿아 있던 때, 닿은 쪽)
+    @ObservationIgnored private var coverPeak: [Int: Float] = [:]   // 닫혀 있는 동안 가장 많이 막혔던 비율
     @ObservationIgnored private var leafSeen: Set<Int> = []         // 닫힌 실제 문이 보이던 문 (그 문이 열리면 바로 열린 공간으로)
     @ObservationIgnored private var solidDoors: Set<Int> = []       // 지금 막혀 보이는 문 (벽 또는 닫힌 실제 문)
     @ObservationIgnored private var leafDoor: Int?                  // 가장 가까이 보이는 닫힌 실제 문
@@ -247,6 +250,12 @@ final class ExploreSession {
     @ObservationIgnored private var alignMap: Align.Map?
     @ObservationIgnored private let player = AmbientPlayer()
     @ObservationIgnored private var hanging: Set<Int> = []
+    // 불멍 (캠핑장에서 앉으면)
+    @ObservationIgnored private var fire: Campfire?
+    @ObservationIgnored private var standH: Float = 0         // 서 있을 때 머리 높이 (바닥에서)
+    @ObservationIgnored private var sitT: Float = 0
+    @ObservationIgnored private var standT: Float = 0
+    @ObservationIgnored private var seated = false
 
     init(spaceId: String) {
         self.spaceId = spaceId
@@ -307,7 +316,7 @@ final class ExploreSession {
         tapCatcher.components.set(InputTargetComponent())
         root.addChild(tapCatcher)
 
-        let auth = await ar.requestAuthorization(for: [.worldSensing])
+        let auth = await ar.requestAuthorization(for: [.worldSensing, .handTracking])
         guard auth[.worldSensing] == .allowed else {
             message = "주변 공간 알아보기를 허락해야 다른 세계를 입힐 수 있어요. 설정 > 개인정보 보호 및 보안에서 켜 주세요."
             return
@@ -319,6 +328,12 @@ final class ExploreSession {
         // 세운 평면(문으로 알아본 면): 그물보다 빨리 바뀌어 실제 문이 열리고 닫히는 걸 바로 알 수 있음
         let planes = PlaneDetectionProvider.isSupported ? PlaneDetectionProvider(alignments: [.vertical]) : nil
         if let planes { providers.append(planes) }
+        // 손: 닫힌 문짝을 잡고 당기거나 미는 순간을 바로 알아챔 (그물·평면은 문이 다 열리고도 몇 초 늦음)
+        if HandTrackingProvider.isSupported && auth[.handTracking] == .allowed {
+            let hp = HandTrackingProvider()
+            hands = hp
+            providers.append(hp)
+        }
         do { try await ar.run(providers) } catch {
             message = "공간 인식을 시작하지 못했어요. 나갔다가 다시 들어와 주세요."
             return
@@ -439,6 +454,7 @@ final class ExploreSession {
     }
 
     func stop() {
+        fire?.remove(); fire = nil
         updateSub?.cancel()
         ar.stop()
         player.stopAll()
@@ -450,6 +466,7 @@ final class ExploreSession {
         guard !ended else { return }
         saveVox()
         ended = true
+        fire?.remove(); fire = nil
         player.stopAll()
         AppModel.shared.finish()
     }
@@ -525,6 +542,8 @@ final class ExploreSession {
         themeQuiet = t + 3
         let targets = d.rec.isUnified ? d.rec.rooms.map(\.id) : [id]
         closeDocent()
+        fire?.remove(); fire = nil                                // 테마가 바뀌면 불도 새로 (다시 앉아 있으면 그 테마에 맞게 피어남)
+        seated = false; sitT = 0
         // 새 그림을 미리 읽은 뒤 바꿔 끼움 (지금 방 먼저, 읽는 동안은 예전 세계가 그대로 보임)
         themeTask?.cancel()
         let snapshot = d
@@ -622,9 +641,8 @@ final class ExploreSession {
             }
             if let n = now { doorPlanes[a.id] = n } else { doorPlanes[a.id] = nil }
             if let n = now, n.1 {
-                // 문 자리를 가로막은 문 면 → 닫힘 (그물을 기다리지 않음)
-                if !realClosed.contains(n.0) { realClosed.insert(n.0) }
-                openHold[n.0] = nil
+                // 문 자리를 가로막은 문 면 → 닫힘 (그물을 기다리지 않음). 방금 손·그물로 열림을 알았으면 그동안은 늦게 온 평면을 믿지 않음
+                if t > (openHold[n.0] ?? 0) && !realClosed.contains(n.0) { realClosed.insert(n.0) }
                 closeSince[n.0] = nil
             } else if let w = was, w.1 {
                 // 가로막고 있던 문 면이 젖혀지거나 사라짐 → 바로 열림
@@ -842,6 +860,7 @@ final class ExploreSession {
             if r != candidate { candidate = r; candidateT = 0 } else { candidateT += dt }
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
             outsideT = r == 0 ? outsideT + dt : 0
+            handDoors(L, fit)
             updateDoors(dt, hs, fit.dirToSaved(fwd), L)
             floorTimer += dt
             if floorTimer > 0.5 { floorTimer = 0; updateFloor(L) }
@@ -909,6 +928,88 @@ final class ExploreSession {
         soundTick(dt)
         placeHud(dt)
         placeDocent(dt)
+        campTick(dt)
+    }
+
+    // MARK: 불멍
+    /// 캠핑장에서 앉으면(머리가 서 있을 때보다 35cm 넘게 낮아져 2초 머묾) 앞 1~1.8m 평평한 빈 바닥에 모닥불.
+    /// 의자든 바닥이든 머리 높이로 알아봄. 일어나면(머리가 다시 올라오거나 걷기 시작) 불이 사그라들고 연기로 흩어짐
+    private func campTick(_ dt: Float) {
+        if let fr = fire {
+            fr.tick(dt)
+            if fr.done { fire = nil }
+        }
+        guard let f = fit, let L = layout, ready, introDone, fade > 0.5 else { return }
+        let hs = f.toSaved(head)
+        let h: Float = hs.y - L.floorY
+        // 서 있는 높이: 더 높아지면 바로, 걷는 동안엔 천천히 따라감 (앉아 있을 땐 그대로)
+        if standH == 0 || h > standH { standH = h } else if speed > 0.3 && !seated { standH += (h - standH) * min(1, dt * 0.4) }
+        let low = h < standH - 0.35 && h < 1.35 && h > 0.45
+        if !seated {
+            sitT = (low && speed < 0.15) ? sitT + dt : 0
+            if sitT > 2.0 {
+                seated = true
+                standT = 0
+                sitDown(hs, L)
+            }
+        } else {
+            standT = (h > standH - 0.2 || speed > 0.5) ? standT + dt : 0
+            if standT > 0.4 {
+                seated = false
+                sitT = 0
+                fire?.die()
+            }
+        }
+    }
+
+    private func sitDown(_ hs: SIMD3<Float>, _ L: Layout) {
+        guard let d = data, let rm = d.rec.room(current), rm.place == "camp", let w = worlds[current], let f = fit else { return }
+        let me = SIMD2<Float>(hs.x, hs.z)
+        if let fr = fire {
+            let fp = SIMD2<Float>(fr.root.position.x, fr.root.position.z)
+            if fr.dying && simd_distance(fp, me) < 2.5 { fr.revive(); return }
+            if !fr.dying { return }
+            fr.remove()
+            fire = nil
+        }
+        let fs = f.dirToSaved(fwd)
+        var dir = SIMD2<Float>(fs.x, fs.z)
+        dir = simd_length(dir) > 0.05 ? simd_normalize(dir) : SIMD2<Float>(0, -1)
+        let blocked = vox?.blockedCells(minH: 0.05) ?? []
+        func free(_ p: SIMD2<Float>, _ r: Float) -> Bool {
+            let c = L.at(x: p.x, z: p.y)
+            guard c.room == current, c.wall > r + 0.05 else { return false }
+            for ring in [Float(0), r * 0.5, r] {
+                let n = ring == 0 ? 1 : 10
+                for k in 0..<n {
+                    let a = Float(k) / Float(n) * 2 * .pi
+                    let q = p + SIMD2<Float>(cos(a), sin(a)) * ring
+                    let pl = L.plane(q.x, q.y)
+                    if L.at(x: q.x, z: q.y).room != current { return false }
+                    if blocked.contains(RoomWorld.clutterKey(pl)) { return false }
+                    if Skin.inSwing(L, pl) { return false }
+                }
+            }
+            return true
+        }
+        var cands: [(SIMD2<Float>, Float, Float)] = []         // 자리, 점수, 반지름
+        for r in [Float(0.55), Float(0.42)] {
+            var dd: Float = r == 0.55 ? 1.0 : 0.85
+            while dd <= 1.9 {
+                for a in [Float(0), 0.2, -0.2, 0.4, -0.4, 0.65, -0.65] {
+                    let v = SIMD2<Float>(dir.x * cos(a) - dir.y * sin(a), dir.x * sin(a) + dir.y * cos(a))
+                    let p = me + v * dd
+                    cands.append((p, abs(dd - 1.25) + abs(a) * 0.8 + (r < 0.5 ? 1 : 0), r))
+                }
+                dd += 0.1
+            }
+        }
+        cands.sort { $0.1 < $1.1 }
+        guard let pick = cands.first(where: { free($0.0, $0.2) }) else { return }      // 앞에 빈 바닥이 없으면 피우지 않음
+        let wd = simd_quatf(angle: -w.angle, axis: [0, 1, 0]).act(SIMD3<Float>(1, 0, 0.35))
+        let cf = Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd)
+        spaceRoot.addChild(cf.root)
+        fire = cf
     }
 
     private func enterRoom(_ r: Int) {
@@ -917,6 +1018,7 @@ final class ExploreSession {
             Task { await hangGallery(prev) }
         }
         if docent != nil { closeDocent() }
+        if current != r { fire?.die(); seated = false; sitT = 0 }
         current = r
         if t > themeQuiet { hudUntil = max(hudUntil, t + 4) }      // 방이 바뀌면 알림판으로 잠깐 알려 줌
         doorOpen.removeAll()
@@ -1143,12 +1245,72 @@ final class ExploreSession {
             let cols = max(1, Int(((L.doors[i].width - 0.16) / 0.1).rounded(.up)))
             let cv = Float(all.count) / Float(cols * 16)
             cover[i] = cv
-            let planeShut = doorPlanes.values.contains { $0.0 == i && $0.1 }     // 문 면이 아직 가로막고 있으면 그물로 열지 않음
-            if cv < 0.45 && !planeShut {
+            // 닫혀 있던 문의 막힌 비율이 가장 많던 때보다 15% 넘게 줄면(문짝이 움직이기 시작) 바로 열림
+            if realClosed.contains(i) { coverPeak[i] = max(coverPeak[i] ?? 0, cv) }
+            let dropped = realClosed.contains(i) && (coverPeak[i] ?? 0) > 0.55 && cv < (coverPeak[i] ?? 0) - 0.15
+            if cv < 0.45 || dropped {
+                if realClosed.contains(i) { openHold[i] = max(openHold[i] ?? 0, t + 3) }
                 realClosed.remove(i)
                 closeSince[i] = nil
+                coverPeak[i] = nil
             } else if cv > 0.55 && !realClosed.contains(i) && closeSince[i] == nil {
                 closeSince[i] = t
+            }
+        }
+    }
+
+    /// 손으로 실제 문 열기 알아채기 (닫혀 있다고 아는 문만):
+    /// - 손(손바닥 가운데)이 문짝 15cm 안, 손잡이 높이(0.6~1.5m)에 0.2초 넘게 닿았다가
+    /// - 문짝에서 20cm 넘게 멀어지며 당기거나(손잡이 높이 그대로, 문 폭 안), 문짝 너머 반대편으로 8cm 넘게 밀고 들어가면 → 바로 열림.
+    /// 잘못 알아챈 경우(손만 대고 뗌)는 6초 뒤 그물이 다시 닫힘으로 돌려놓음 (그물은 문이 다 열리고도 몇 초 늦게 따라오므로 그 전엔 닫지 않음)
+    private func handDoors(_ L: Layout, _ f: Fit) {
+        guard let hp = hands, hp.state == .running else { return }
+        let la = hp.latestAnchors
+        var pts: [SIMD3<Float>] = []
+        for a in [la.leftHand, la.rightHand] {
+            guard let a, a.isTracked, let sk = a.handSkeleton else { continue }
+            let j = sk.joint(.middleFingerKnuckle)
+            guard j.isTracked else { continue }
+            let w = a.originFromAnchorTransform * j.anchorFromJointTransform
+            pts.append(f.toSaved(simd_make_float3(w.columns.3)))
+        }
+        for (i, ds) in L.doors.enumerated() {
+            guard realClosed.contains(i) else { grip[i] = nil; continue }
+            let lo: Float = min(ds.pA, ds.pB), hi: Float = max(ds.pA, ds.pB)
+            var touch: (Float, Float)? = nil          // (문짝까지 거리, 쪽)
+            var far: Float = 0                         // 닿았던 쪽에서 문짝까지 가장 먼 손
+            var through = false
+            for sp in pts {
+                let pp = L.plane(sp.x, sp.z)
+                let hgt: Float = sp.y - L.floorY
+                let a: Float = ds.alongU ? pp.x : pp.y
+                let s: Float = ds.alongU ? pp.y : pp.x
+                guard hgt > 0.55, hgt < 1.6, s > ds.s0 - 0.1, s < ds.s1 + 0.1 else { continue }
+                let side: Float = a < (lo + hi) / 2 ? -1 : 1
+                let gap: Float = a < lo ? lo - a : (a > hi ? a - hi : 0)
+                if gap < 0.15 && (touch == nil || gap < touch!.0) { touch = (gap, side) }
+                if let g = grip[i] {
+                    if side == g.3 { far = max(far, gap) }
+                    else if gap > 0.08 { through = true }          // 닫힌 문을 손이 뚫고 지나갈 수는 없음 → 밀어서 열었음
+                }
+            }
+            if var g = grip[i] {
+                if let tc = touch, tc.1 == g.3 { g.0 = min(g.0, tc.0); g.2 = t }
+                let held = g.2 - g.1 >= 0.2
+                if held && (through || (g.0 < 0.1 && far - g.0 > 0.2 && t - g.2 < 1.5)) {
+                    realClosed.remove(i)
+                    realHits[i] = [:]
+                    closeSince[i] = nil
+                    coverPeak[i] = nil
+                    openHold[i] = max(openHold[i] ?? 0, t + 6)
+                    grip[i] = nil
+                } else if t - g.2 > 1.5 {
+                    grip[i] = nil
+                } else {
+                    grip[i] = g
+                }
+            } else if let tc = touch {
+                grip[i] = (tc.0, t, t, tc.1)
             }
         }
     }
@@ -1353,7 +1515,7 @@ final class ExploreSession {
                 building.remove(id)
                 guard !ended, meshes[id] != nil else { return }
                 // 좌표가 자리를 잡은 뒤에만 가구를 고침 (자리 잡는 중의 어긋난 그물이 엉뚱한 곳에 가구를 만들지 않게)
-                if fitStable { vox?.update(cols: res.cols, floor: res.floorSeen) }
+                if fitStable { vox?.update(cols: res.cols, floor: res.floorSeen, now: t) }
                 if res.doorTouched.isEmpty && res.doorHits.isEmpty { doorAnchors.remove(id) } else { doorAnchors.insert(id) }
                 setDoorHits(id, res.doorHits, touched: res.doorTouched)
                 if let fy = res.floorY { floorSamples[id] = (fy, res.floorN) } else { floorSamples[id] = nil }

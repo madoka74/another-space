@@ -58,7 +58,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
-        NSHandsTrackingUsageDescription: 탐험 중 손가락을 두 번 모으면(더블탭) 눈앞에 작은 현실 창을 열고 닫는 데 사용합니다.
+        NSHandsTrackingUsageDescription: 탐험 중 손가락을 두 번 모으면(더블탭) 눈앞에 작은 현실 창을 열고 닫고, 실제 문을 잡고 여는 순간을 바로 알아채 문 너머 공간을 보여 주는 데 사용합니다. 손 정보는 저장하지 않습니다.
         NSWorldSensingUsageDescription: 집 안의 바닥·벽·가구 모양을 알아보고, 그 위에 다른 세계(숲·바다·도시 등)를 정확히 입히는 데 사용합니다. 공간 정보는 기기 안에만 저장됩니다.
         UIApplicationSceneManifest:
           UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication

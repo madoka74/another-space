@@ -254,7 +254,6 @@ final class RoomWorld {
         addThings(dc, rec: rec, L, floorY: floorY)
         if dc.paintings {
             paintSegs = segs.filter { !$0.window }
-            roomSegs = segs
             paintLayout = L
             paintFloor = floorY
             local.addChild(paintRoot)
@@ -933,7 +932,6 @@ final class RoomWorld {
     private let paintRoot = Entity()
     private var paintFloor: Float = 0
     private var paintSegs: [WallSeg] = []
-    private var roomSegs: [WallSeg] = []
     private var paintLayout: Layout?
     var hasPaintings: Bool { paintLayout != nil }
 
@@ -1114,19 +1112,13 @@ final class RoomWorld {
     private var immerseGoal: Float = 0
     private var motes: Entity?
 
-    private var skin: Entity?                 // 그림을 크게 펼쳐 벽 전체에 두른 것
-    private var focus: Entity?                // 지금 해설 중인 그림 (다른 그림은 흐리게)
-
-    /// 그림 속으로 (컬러 모드만): 그 그림을 크게 늘여 방 벽 전체에 두르고(그림 쪽에서 시작해 뒤에서 거울처럼 이어짐),
-    /// 천장은 그림의 어두운 색으로 덮고, 바닥도 그 색으로 물들이고, 다른 그림은 흐리게, 그림 색의 빛 알갱이가 떠다님.
-    /// nil이면 원래대로. 흑백·선 그림에서는 아무것도 바꾸지 않음
+    /// 그림 속으로 (컬러 모드만): 방을 그 그림의 색으로 칠함 — 벽은 그림의 밝은·가운데 색을 진하게, 바닥은 그림의 어두운 색,
+    /// 그림 색의 빛 알갱이가 방 안 가득 떠다님. nil이면 원래대로. 흑백·선 그림에서는 아무것도 바꾸지 않음
     func immerse(_ h: Hung?) {
         if let h, look == .color, h.palette.count >= 3 {
             immerseTarget = h.palette
             if immerseCur == nil || immerseAmt < 0.02 { immerseCur = h.palette }
             immerseGoal = 1
-            focus = h.group
-            buildSkin(h)
             setMotes(h.palette)
         } else {
             immerseGoal = 0
@@ -1134,92 +1126,32 @@ final class RoomWorld {
         }
     }
 
-    /// 벽 둘레 파노라마 + 천장 덮개. 그림 가운데 방향이 u=0.5, 한 바퀴에 u가 2만큼 → 뒤쪽에서 거울로 이어져 이음매가 없음
-    private func buildSkin(_ h: Hung) {
-        skin?.removeFromParent()
-        skin = nil
-        guard let L = paintLayout, !roomSegs.isEmpty else { return }
-        let top = room.ceil
-        let c2 = SIMD2<Float>(center.x, center.z)
-        let th0 = atan2(h.center.z - c2.y, h.center.x - c2.x)
-        func ang(_ p: SIMD2<Float>) -> Float {
-            var t = atan2(p.y - c2.y, p.x - c2.x) - th0
-            while t > .pi { t -= 2 * .pi }
-            while t < -.pi { t += 2 * .pi }
-            return t
-        }
-        // 그림 오른쪽으로 갈수록 u가 커지게
-        let rp = SIMD2<Float>(h.center.x, h.center.z) + SIMD2<Float>(h.right.x, h.right.z) * 0.2
-        let sgn: Float = ang(rp) >= 0 ? 1 : -1
-        func uOf(_ p: SIMD2<Float>) -> Float { 0.5 + sgn * ang(p) / .pi }
-        var g = Geo()
-        for s in roomSegs {
-            let a2 = L.flat(s.a), b2 = L.flat(s.b)
-            let len = simd_distance(a2, b2)
-            guard len > 0.05 else { continue }
-            let nw = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))
-            let inn = nw * 0.012
-            let n3 = SIMD3<Float>(nw.x, 0, nw.y)
-            let k = max(1, Int(ceil(len / 0.25)))
-            for i in 0..<k {
-                let p = a2 + (b2 - a2) * (Float(i) / Float(k)) + inn
-                let q = a2 + (b2 - a2) * (Float(i + 1) / Float(k)) + inn
-                let u0 = uOf(p)
-                var u1 = uOf(q)
-                if u1 - u0 > 1 { u1 -= 2 } else if u0 - u1 > 1 { u1 += 2 }      // 뒤쪽 이음매 (거울 반복이라 2 차이는 같은 자리)
-                g.face(SIMD3<Float>(p.x, paintFloor, p.y), SIMD3<Float>(q.x, paintFloor, q.y), toward: n3,
-                       y0: 0.01, y1: top - 0.02, u0: u0, u1: u1, v0: 0, v1: 1)
-            }
-        }
-        let root = Entity()
-        var m = UnlitMaterial(color: .white)
-        var tp = MaterialParameters.Texture(h.tex)
-        tp.sampler = Tex.mirror
-        m.color = .init(tint: UIColor(white: 0.62, alpha: 1), texture: tp)
-        m.blending = .transparent(opacity: .init(floatLiteral: 1))
-        if let e = g.entity("skin", m) { root.addChild(e) }
-        // 천장 덮개: 그림의 가장 어두운 색 (하늘 대신 그림 속 밤처럼)
-        if let cm = Self.flatMesh(L.rects(room.id), L, y: paintFloor + top - 0.03, tile: 1) {
-            let d = h.palette[2] * 0.55
-            var mm = UnlitMaterial(color: UIColor(red: CGFloat(d.x), green: CGFloat(d.y), blue: CGFloat(d.z), alpha: 1))
-            mm.blending = .transparent(opacity: .init(floatLiteral: 1))
-            root.addChild(ModelEntity(mesh: cm, materials: [mm]))
-        }
-        root.components.set(OpacityComponent(opacity: 0))
-        local.addChild(root)
-        skin = root
-    }
-
     func tickImmerse(_ dt: Float) {
-        guard immerseGoal != 0 || immerseAmt > 0 else { return }
+        guard !tinted.isEmpty, immerseGoal != 0 || immerseAmt > 0 else { return }
         let before = immerseAmt
-        immerseAmt += (immerseGoal - immerseAmt) * min(1, dt * 1.4)
-        if abs(immerseAmt - immerseGoal) < 0.005 { immerseAmt = immerseGoal }
+        immerseAmt += (immerseGoal - immerseAmt) * min(1, dt * 2.2)
+        if abs(immerseAmt - immerseGoal) < 0.01 { immerseAmt = immerseGoal }
         if let tg = immerseTarget, var cur = immerseCur {
-            for k in 0..<min(cur.count, tg.count) { cur[k] += (tg[k] - cur[k]) * min(1, dt * 2) }
+            for k in 0..<min(cur.count, tg.count) { cur[k] += (tg[k] - cur[k]) * min(1, dt * 2.5) }
             immerseCur = cur
         }
-        guard abs(before - immerseAmt) > 0.0005 || immerseGoal > 0 else { return }
-        let a = immerseAmt
-        skin?.components.set(OpacityComponent(opacity: min(1, a * 1.05)))
-        for hg in hungArts {
-            hg.group.components.set(OpacityComponent(opacity: hg.group === focus ? 1 : 1 - 0.85 * a))
+        guard abs(before - immerseAmt) > 0.0005 || immerseGoal > 0, let pal = immerseCur else { return }
+        func lum(_ c: SIMD3<Float>) -> Float { c.x * 0.3 + c.y * 0.59 + c.z * 0.11 }
+        // 채도를 한 번 더 올림 (그림의 색이 방 전체에 선명하게)
+        func rich(_ c: SIMD3<Float>, _ k: Float) -> SIMD3<Float> {
+            let l = SIMD3<Float>(repeating: lum(c))
+            return simd_clamp(l + (c - l) * k, .zero, SIMD3<Float>(repeating: 1.2))
         }
-        if let pal = immerseCur {
-            Tex.with(look) {
-                for (e, tex, base, floor) in tinted {
-                    // 바닥은 그림의 어두운 색으로 깊게, 벽(파노라마 뒤)은 그림 색으로
-                    let target = floor ? pal[2] * 0.7 : pal[0] * 0.7 + pal[1] * 0.3
-                    let c = base + (target - base) * (a * 0.95)
-                    e.model?.materials = [Tex.unlit(tex, tint: c)]
-                }
+        let wallC = rich(pal[0] * 0.55 + pal[1] * 0.6, 1.6)
+        let floorC = rich(pal[2], 1.4) * 0.75 + SIMD3<Float>(repeating: 0.03)
+        Tex.with(look) {
+            for (e, tex, base, floor) in tinted {
+                // 벽은 원래 밝기 차이(해 쪽·그늘)를 살려 같은 색으로 — 벽 무늬가 거의 안 보일 만큼 진하게
+                let shade = max(0.55, min(1.15, lum(base) / max(0.05, lum(Worlds.safe(tint, min: 0.36)))))
+                let target = floor ? floorC : wallC * shade
+                let c = base + (target - base) * immerseAmt
+                e.model?.materials = [Tex.unlit(tex, tint: c)]
             }
-        }
-        if a == 0 {
-            skin?.removeFromParent()
-            skin = nil
-            focus = nil
-            for hg in hungArts { hg.group.components.remove(OpacityComponent.self) }
         }
     }
 
@@ -1227,14 +1159,14 @@ final class RoomWorld {
         if motes == nil {
             var pe = ParticleEmitterComponent()
             pe.emitterShape = .box
-            pe.emitterShapeSize = SIMD3<Float>(max(0.5, halfSize.x * 2 - 0.6), 1.6, max(0.5, halfSize.y * 2 - 0.6))
+            pe.emitterShapeSize = SIMD3<Float>(max(0.5, halfSize.x * 2 - 0.6), 2.0, max(0.5, halfSize.y * 2 - 0.6))
             pe.birthLocation = .volume
             pe.speed = 0.04
             pe.speedVariation = 0.03
-            pe.mainEmitter.birthRate = min(120, 8 * halfSize.x * halfSize.y * 4)
-            pe.mainEmitter.lifeSpan = 6
-            pe.mainEmitter.size = 0.012
-            pe.mainEmitter.sizeVariation = 0.006
+            pe.mainEmitter.birthRate = min(260, 18 * halfSize.x * halfSize.y * 4)
+            pe.mainEmitter.lifeSpan = 7
+            pe.mainEmitter.size = 0.018
+            pe.mainEmitter.sizeVariation = 0.01
             pe.mainEmitter.noiseStrength = 0.06
             pe.mainEmitter.noiseScale = 1
             pe.mainEmitter.noiseAnimationSpeed = 0.2

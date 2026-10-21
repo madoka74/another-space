@@ -270,7 +270,11 @@ final class VoxelWorld {
         var h: UInt8 = 0                    // 보이는 높이 (10cm 단위)
         var hist: [UInt8] = []              // 최근 본 높이
         var seen: UInt8 = 0                 // 가구로 본 횟수
+        var first: Float = -1               // 처음 본 때 (지난 탐험·스캔에서 온 기둥은 -1)
+        var lastHit: Float = -100           // 마지막으로 점수를 올린 때
+        var lastFloor: Float = -100         // 마지막으로 점수를 내린 때
     }
+    private var floorAt: [Int64: Float] = [:]           // 이번 탐험에서 바닥이 보였던 칸 → 그때
     let root = Entity()                                 // 저장 좌표 (공간 뿌리 아래)
     private let L: Layout
     private var cols: [Int64: Col] = [:]
@@ -306,19 +310,30 @@ final class VoxelWorld {
     }
 
     /// 그물 한 덩어리를 새로 읽음 (좌표가 자리를 잡은 뒤에만 부름)
-    func update(cols obs: [Int64: Float], floor: Set<Int64>) {
+    /// 갑자기 나타난 큰 덩어리(지나간 사람·움직인 문·반사) 막기:
+    /// - 점수는 0.6초에 한 번만 오름 (그물이 짧은 사이 여러 번 와도 한 번으로)
+    /// - 처음 본 뒤 2.5초 넘게 계속 보여야 나타남. 이번 탐험에서 바닥이 보였던 칸(그 위가 비어 있던 곳)은 6초
+    /// - 이번 탐험에서 새로 생긴 기둥은 바닥이 보이면 3점씩 깎여 빨리 사라짐 (지난 탐험에서 확인한 가구는 1점씩)
+    func update(cols obs: [Int64: Float], floor: Set<Int64>, now: Float) {
         for (k, top) in obs {
             var c = cols[k] ?? Col()
-            c.score = min(8, c.score + 2)
-            c.seen = c.seen < 250 ? c.seen + 1 : c.seen
             c.hist.append(UInt8(min(21, max(2, Int((top / Vox.size).rounded(.up))))))
             if c.hist.count > 4 { c.hist.removeFirst() }
-            apply(k, c)
+            if now - c.lastHit >= 0.6 {
+                c.lastHit = now
+                c.score = min(8, c.score + 2)
+                c.seen = c.seen < 250 ? c.seen + 1 : c.seen
+                if c.first < 0 && !c.shown { c.first = now }
+            }
+            apply(k, c, now)
         }
         for k in floor where obs[k] == nil {
-            guard var c = cols[k] else { continue }
-            c.score = max(-4, c.score - 1)
-            apply(k, c)
+            floorAt[k] = now
+            guard var c = cols[k], now - c.lastFloor >= 0.6 else { continue }
+            c.lastFloor = now
+            let fresh = c.first >= 0 && now - c.first < 180
+            c.score = max(-4, c.score - (fresh ? 3 : 1))
+            apply(k, c, now)
         }
     }
 
@@ -328,10 +343,12 @@ final class VoxelWorld {
         return s[s.count / 2]
     }
 
-    private func apply(_ k: Int64, _ c0: Col) {
+    private func apply(_ k: Int64, _ c0: Col, _ now: Float) {
         var c = c0
         let med = median(c.hist)
-        if !c.shown && c.score >= 5 && c.seen >= 3 {
+        let wasFloor = (floorAt[k].map { now - $0 < 90 }) ?? false
+        let need: Float = wasFloor ? 6 : 2.5
+        if !c.shown && c.score >= 5 && c.seen >= 3 && c.first >= 0 && now - c.first >= need {
             c.shown = true
             c.h = med
             byChunk[Self.chunkOfCol(k), default: []].insert(k)
@@ -350,6 +367,7 @@ final class VoxelWorld {
                 changed = true
             }
         }
+        if !c.shown && c.score <= 0 && c.first >= 0 && now - c.lastHit > 4 { c.first = -1 }   // 한동안 안 보이면 처음부터 다시 셈
         if !c.shown && c.score <= -4 { cols[k] = nil; return }
         cols[k] = c
     }

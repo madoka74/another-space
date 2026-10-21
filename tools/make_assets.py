@@ -1112,6 +1112,70 @@ def sfx():
     for fq in (523.25, 783.99, 1046.5, 1567.98):                 # 끝 화음 (C·G·C·G)
         _place(buf, _bell(fq, 1.4, 2.2) * 0.22, 2.3)
     save_wav('scan', buf, -8)
+    fire_sounds(r)
+
+
+def _loop(x, fade_sec=1.0):
+    """끝 1초를 앞 1초와 겹쳐 이어 붙임 → 되풀이해도 이음매가 들리지 않음"""
+    k = int(SR * fade_sec)
+    w = np.linspace(0, 1, k)
+    head = x[:k] * w + x[-k:] * (1 - w)
+    return np.concatenate([head, x[k:-k]])
+
+
+def fire_sounds(r):
+    """모닥불 (불멍): 장작 타는 소리 되풀이 · 비에 젖은 불의 치익 소리 되풀이 · 불이 꺼지며 연기가 오르는 소리"""
+    # 장작 타는 소리 12초: 낮게 일렁이는 불길 + 타닥타닥(짧고 높은 딱 소리, 가끔 크게 '탁') + 옅은 쉬익
+    dur = 13.0
+    n = int(SR * dur)
+    t = _t(dur)
+    b = np.cumsum(r.standard_normal(n)) * 0.02
+    b -= _lowpass(b, 8)                                            # 아주 느린 흔들림은 뺌
+    roar = _lowpass(b, 260) * (0.75 + 0.25 * np.sin(2 * np.pi * 0.23 * t) * np.sin(2 * np.pi * 0.071 * t + 1))
+    air = _lowpass(r.standard_normal(n), 5000)
+    air = (air - _lowpass(air, 1200)) * 0.035 * (0.7 + 0.3 * np.sin(2 * np.pi * 0.37 * t))
+    buf = roar / (np.std(roar) + 1e-9) * 0.12 + air * 2
+    at = 0.0
+    while at < dur - 0.05:
+        at += r.exponential(1 / 11)                                 # 1초에 11번쯤
+        big = r.random() < 0.08
+        ln = r.uniform(0.002, 0.007) * (2.5 if big else 1)
+        c = r.standard_normal(int(SR * ln))
+        c = c - _lowpass(c, 1500 if big else 2500)
+        c *= np.exp(-_t(ln) * (900 if big else 1400))
+        amp = (r.uniform(0.5, 1.0) if big else r.uniform(0.08, 0.45))
+        _place(buf, c * amp, at)
+        if r.random() < 0.25:                                      # 작은 연달음 (타다닥)
+            for k in range(r.integers(1, 4)):
+                _place(buf, c * amp * r.uniform(0.3, 0.7), at + 0.012 * (k + 1) + r.uniform(0, 0.01))
+    buf = np.tanh(buf * 3.0)                                       # 큰 '탁'만 튀지 않게 눌러서 전체가 또렷이 들리게
+    save_wav('fire_loop', _loop(buf), -6)
+
+    # 비에 젖은 불: 치익 하는 김 소리 (높은 잡음이 불규칙하게 부풀었다 가라앉음) 9초
+    dur = 10.0
+    n = int(SR * dur)
+    t = _t(dur)
+    h = r.standard_normal(n)
+    h = _lowpass(h - _lowpass(h, 2500), 9000)
+    env = np.zeros(n)
+    at = 0.0
+    while at < dur:
+        ln = r.uniform(0.3, 1.4)
+        k0 = int(at * SR); k1 = min(n, int((at + ln) * SR))
+        if k1 > k0:
+            env[k0:k1] += np.sin(np.linspace(0, np.pi, k1 - k0)) * r.uniform(0.3, 1.0)
+        at += r.uniform(0.2, 0.9)
+    env = _lowpass(env, 6) + 0.15
+    save_wav('fire_hiss', _loop(h * env), -16)
+
+    # 불이 꺼질 때: 치이익 + 낮은 '후우' (연기가 오르는 바람) 3.5초
+    dur = 3.5
+    n = int(SR * dur)
+    t = _t(dur)
+    h = r.standard_normal(n)
+    hiss = _lowpass(h - _lowpass(h, 2000), 8000) * np.interp(t, [0, 0.08, 1.2, dur], [0, 1, 0.35, 0])
+    w = _lowpass(r.standard_normal(n), 500) * np.interp(t, [0, 0.4, 2.0, dur], [0, 1, 0.6, 0]) * 4
+    save_wav('fire_out', hiss + w, -14)
 
 
 def scan_grid():

@@ -226,8 +226,6 @@ enum Tex {
     /// 가로로만 되풀이 (지평선 띠·담장: 위아래가 이어지면 위 끝에 줄이 생김)
     static let band = sampler(.repeat, .clampToEdge)
     static let clamp = sampler(.clampToEdge, .clampToEdge)
-    /// 가로로 거울처럼 되풀이 (그림을 벽 둘레에 두를 때 이음매 없이)
-    static let mirror = sampler(.mirrorRepeat, .clampToEdge)
 
     /// 색 (표시 방식에 맞게: 흑백이면 밝기만, 선 그림이면 흰색)
     static func color(_ v: SIMD3<Float>, alpha: CGFloat = 1) -> UIColor {
