@@ -357,7 +357,6 @@ final class Scenery {
     }
 
     private func addMist<G: RandomNumberGenerator>(R: Float, floorY: Float, using g: inout G) {
-        guard look != .line else { return }
         for _ in 0..<4 {
             let p = ring(R + Float.random(in: 25...70, using: &g), Float.random(in: 0...(2 * .pi), using: &g))
             guard free(p, 12) else { continue }
@@ -371,7 +370,9 @@ final class Scenery {
             pe.mainEmitter.lifeSpan = 16
             pe.mainEmitter.size = 5
             pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 1.6
-            pe.mainEmitter.color = .constant(.single(pcolor([0.95, 0.96, 0.98], 0.18)))
+            // 선 그림: 흰 종이 위 옅은 회색 안개 (빛을 더하는 방식이면 흰 바탕에서 안 보임)
+            pe.mainEmitter.color = .constant(.single(look == .line ? UIColor(white: 0.55, alpha: 0.1) : pcolor([0.95, 0.96, 0.98], 0.18)))
+            if look == .line { pe.mainEmitter.blendMode = .alpha }
             pe.mainEmitter.opacityCurve = .gradualFadeInOut
             emitter(pe, at: SIMD3<Float>(p.x, floorY + 1.5, p.z), into: far)
         }
@@ -701,7 +702,6 @@ final class Scenery {
 
     // MARK: 전시관 먼지 빛
     private func addDust(floorY: Float) {
-        guard look != .line else { return }
         var pe = ParticleEmitterComponent()
         pe.emitterShape = .box
         pe.emitterShapeSize = SIMD3<Float>(max(0.5, halfSize.x * 2 - 0.8), 1.4, max(0.5, halfSize.y * 2 - 0.8))
@@ -713,7 +713,7 @@ final class Scenery {
         pe.mainEmitter.size = 0.004
         pe.mainEmitter.noiseStrength = 0.03
         pe.mainEmitter.color = .constant(.single(pcolor([1, 0.95, 0.8], 0.8)))
-        pe.mainEmitter.blendMode = .additive
+        pe.mainEmitter.blendMode = look == .line ? .alpha : .additive
         pe.mainEmitter.opacityCurve = .gradualFadeInOut
         let e = Entity()
         e.components.set(pe)

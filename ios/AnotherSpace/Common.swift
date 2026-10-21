@@ -226,6 +226,8 @@ enum Tex {
     /// 가로로만 되풀이 (지평선 띠·담장: 위아래가 이어지면 위 끝에 줄이 생김)
     static let band = sampler(.repeat, .clampToEdge)
     static let clamp = sampler(.clampToEdge, .clampToEdge)
+    /// 가로로 거울처럼 되풀이 (그림을 벽 둘레에 두를 때 이음매 없이)
+    static let mirror = sampler(.mirrorRepeat, .clampToEdge)
 
     /// 색 (표시 방식에 맞게: 흑백이면 밝기만, 선 그림이면 흰색)
     static func color(_ v: SIMD3<Float>, alpha: CGFloat = 1) -> UIColor {
@@ -275,4 +277,27 @@ enum Tex {
 
 extension SIMD3 where Scalar == Float {
     var xz: SIMD2<Float> { SIMD2<Float>(x, z) }
+}
+
+/// 선 그림용 입자 그림 (앱이 직접 그림): 눈 = 작은 동그라미 선, 비 = 짧은 세로 선. 흰 위에 그리고 색은 입자 색으로 입힘
+@MainActor
+enum Dots {
+    static let ring: TextureResource? = make(64, 64) { c in
+        c.setStrokeColor(UIColor.white.cgColor)
+        c.setLineWidth(7)
+        c.strokeEllipse(in: CGRect(x: 10, y: 10, width: 44, height: 44))
+    }
+    static let dash: TextureResource? = make(16, 64) { c in
+        c.setFillColor(UIColor.white.cgColor)
+        c.fill(CGRect(x: 6, y: 4, width: 4, height: 56))
+    }
+
+    private static func make(_ w: Int, _ h: Int, _ draw: (CGContext) -> Void) -> TextureResource? {
+        let f = UIGraphicsImageRendererFormat()
+        f.scale = 1
+        f.opaque = false
+        let img = UIGraphicsImageRenderer(size: CGSize(width: w, height: h), format: f).image { draw($0.cgContext) }
+        guard let cg = img.cgImage else { return nil }
+        return try? TextureResource.generate(from: cg, options: .init(semantic: .color))
+    }
 }

@@ -59,7 +59,7 @@ final class Docent {
     @ObservationIgnored private var docs: [String: DocentDoc] = [:]
     @ObservationIgnored private var checked: Set<String> = []          // 파일을 찾아봤지만 없던 그림 (매번 다시 읽지 않게)
     @ObservationIgnored private var queue: [ArtPick] = []
-    @ObservationIgnored private var running = false
+    @ObservationIgnored private var inFlight: Set<String> = []
 
     nonisolated private static var dir: URL {
         let d = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("docent", isDirectory: true)
@@ -92,24 +92,40 @@ final class Docent {
     }
 
     /// 걸린 그림 중 해설이 없는 것을 하나씩 가져옴 (서버 하루 한도·인터넷 문제로 실패하면 그 그림은 표시 안 함)
+    /// 지금 걸린 그림을 앞으로 (방을 오가며 예전 그림이 쌓여 지금 그림이 한참 기다리지 않게). 동시에 3개까지 받음
     func prefetch(_ picks: [ArtPick]) {
-        for p in picks where doc(p.id) == nil && status[p.id] != .loading && status[p.id] != .failed {
+        let ids = Set(picks.map(\.id))
+        // 아직 시작 안 한 예전 그림은 줄에서 빼고 표시도 지움 (다시 걸리면 다시 줄을 섬)
+        for q in queue where !ids.contains(q.id) { status[q.id] = nil }
+        queue.removeAll { !ids.contains($0.id) }
+        for p in picks where doc(p.id) == nil && status[p.id] != .failed && !inFlight.contains(p.id) {
+            if !queue.contains(where: { $0.id == p.id }) { queue.insert(p, at: 0) }
             status[p.id] = .loading
-            queue.append(p)
         }
+        run()
+    }
+
+    /// 이 그림 하나를 맨 앞으로 (다른 그림 줄은 그대로)
+    func prioritize(_ p: ArtPick) {
+        guard doc(p.id) == nil, !inFlight.contains(p.id) else { return }
+        queue.removeAll { $0.id == p.id }
+        queue.insert(p, at: 0)
+        status[p.id] = .loading
         run()
     }
 
     /// 실패했던 그림을 다시 (설명 창에서 '다시 시도')
     func retry(_ p: ArtPick) {
         status[p.id] = nil
-        prefetch([p])
+        prioritize(p)
     }
 
     private func run() {
-        guard !running, !queue.isEmpty else { return }
-        running = true
-        let p = queue.removeFirst()
+        while inFlight.count < 3, !queue.isEmpty { start(queue.removeFirst()) }
+    }
+
+    private func start(_ p: ArtPick) {
+        inFlight.insert(p.id)
         Task {
             let d = await Self.fetch(p)
             if let d {
@@ -122,8 +138,8 @@ final class Docent {
             } else {
                 status[p.id] = .failed
             }
-            running = false
-            try? await Task.sleep(for: .milliseconds(800))
+            inFlight.remove(p.id)
+            try? await Task.sleep(for: .milliseconds(300))
             run()
         }
     }
@@ -204,7 +220,7 @@ struct DocentCard: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView("해설을 준비하고 있어요…").frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onAppear { dc.prefetch([p]) }
+                    .onAppear { dc.prioritize(p) }
             }
         }
         .padding(24)

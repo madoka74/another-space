@@ -254,6 +254,7 @@ final class RoomWorld {
         addThings(dc, rec: rec, L, floorY: floorY)
         if dc.paintings {
             paintSegs = segs.filter { !$0.window }
+            roomSegs = segs
             paintLayout = L
             paintFloor = floorY
             local.addChild(paintRoot)
@@ -922,6 +923,8 @@ final class RoomWorld {
         let size: SIMD2<Float>
         let palette: [SIMD3<Float>]       // 그림의 색 (밝은 색, 가운데 색, 어두운 색)
         let badge: Entity                 // 오른쪽 위 i / ? 버튼
+        let group: Entity                 // 그림·액자·버튼 묶음
+        let tex: TextureResource
         /// 설명 창 자리: 그림 오른쪽 옆 (저장 좌표)
         var side: SIMD3<Float> { center + right * (size.x / 2 + 0.3) + normal * 0.1 }
     }
@@ -930,6 +933,7 @@ final class RoomWorld {
     private let paintRoot = Entity()
     private var paintFloor: Float = 0
     private var paintSegs: [WallSeg] = []
+    private var roomSegs: [WallSeg] = []
     private var paintLayout: Layout?
     var hasPaintings: Bool { paintLayout != nil }
 
@@ -993,9 +997,8 @@ final class RoomWorld {
         guard !arts.isEmpty, !paintSlots.isEmpty else { return }
         let lit: SIMD3<Float> = look == .color ? Worlds.safe(tint, min: 0.55) : SIMD3<Float>(repeating: 0.95)
         let litColor = UIColor(red: CGFloat(min(1, lit.x)), green: CGFloat(min(1, lit.y)), blue: CGFloat(min(1, lit.z)), alpha: 1)
+        let frameMat = ink(SIMD3<Float>(0.3, 0.22, 0.14) * lit)
         let top = room.ceil
-        var frames = Geo()
-        var geos = [Geo](repeating: Geo(), count: arts.count)
         for (i, sl) in paintSlots.enumerated() where i < arts.count {
             let (pick, t, pal) = arts[i]
             let ar = Float(t.width) / Float(max(1, t.height))
@@ -1008,27 +1011,30 @@ final class RoomWorld {
             let ctr = SIMD3<Float>(sl.mid.x, paintFloor + cy, sl.mid.y)
             let pp = ctr + sl.n * 0.035, ff = ctr + sl.n * 0.025
             let hw = sl.right * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
-            geos[i].quad(pp - hw - hh, pp + hw - hh, pp + hw + hh, pp - hw + hh,
-                         SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+            // 그림 한 점 = 그림 + 액자 + 해설 버튼 (그림 속으로 들어갈 때 다른 그림만 따로 흐리게)
+            let group = Entity()
+            var art = Geo()
+            art.quad(pp - hw - hh, pp + hw - hh, pp + hw + hh, pp - hw + hh,
+                     SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+            var m = UnlitMaterial(color: litColor)
+            var tp = MaterialParameters.Texture(t)
+            tp.sampler = Tex.clamp
+            m.color = .init(tint: litColor, texture: tp)
+            if let e = art.entity("art\(i)", m) { group.addChild(e) }
+            var frame = Geo()
             let fw = sl.right * (w / 2 + 0.05), fh = SIMD3<Float>(0, h / 2 + 0.05, 0)
-            frames.quad(ff - fw - fh, ff + fw - fh, ff + fw + fh, ff - fw + fh, .zero, .zero, .zero, .zero)
+            frame.quad(ff - fw - fh, ff + fw - fh, ff + fw + fh, ff - fw + fh, .zero, .zero, .zero, .zero)
+            if let e = frame.entity("frame\(i)", frameMat) { group.addChild(e) }
             // 해설 버튼: 액자 오른쪽 위 모서리 바로 안쪽, 그림보다 2cm 앞
             let badge = Self.makeBadge(name: "art-\(room.id)-\(i)")
             badge.position = ctr + sl.right * (w / 2 - 0.02) + SIMD3<Float>(0, h / 2 - 0.02, 0) + sl.n * 0.06
             badge.orientation = simd_quatf(angle: atan2(sl.n.x, sl.n.z), axis: [0, 1, 0])
             badge.isEnabled = false
-            paintRoot.addChild(badge)
+            group.addChild(badge)
+            paintRoot.addChild(group)
             hungArts.append(Hung(pick: pick, center: ctr + sl.n * 0.035, normal: sl.n, right: sl.right, size: SIMD2<Float>(w, h),
-                                 palette: pal, badge: badge))
+                                 palette: pal, badge: badge, group: group, tex: t))
         }
-        for (i, geo) in geos.enumerated() where !geo.isEmpty {
-            var m = UnlitMaterial(color: litColor)
-            var p = MaterialParameters.Texture(arts[i].1)
-            p.sampler = Tex.clamp
-            m.color = .init(tint: litColor, texture: p)
-            if let e = geo.entity("art\(i)", m) { paintRoot.addChild(e) }
-        }
-        if let e = frames.entity("frames", ink(SIMD3<Float>(0.3, 0.22, 0.14) * lit)) { paintRoot.addChild(e) }
     }
 
     /// 누른 버튼 이름으로 걸린 그림 찾기
@@ -1108,35 +1114,112 @@ final class RoomWorld {
     private var immerseGoal: Float = 0
     private var motes: Entity?
 
-    /// 그림의 색으로 방을 잠시 물들임 (nil이면 원래대로). 벽은 그림의 밝은 색, 바닥은 어두운 색, 그 색의 빛 알갱이가 떠다님
-    func immerse(in palette: [SIMD3<Float>]?) {
-        if let p = palette, p.count >= 3 {
-            immerseTarget = p
-            if immerseCur == nil || immerseAmt < 0.02 { immerseCur = p }
+    private var skin: Entity?                 // 그림을 크게 펼쳐 벽 전체에 두른 것
+    private var focus: Entity?                // 지금 해설 중인 그림 (다른 그림은 흐리게)
+
+    /// 그림 속으로 (컬러 모드만): 그 그림을 크게 늘여 방 벽 전체에 두르고(그림 쪽에서 시작해 뒤에서 거울처럼 이어짐),
+    /// 천장은 그림의 어두운 색으로 덮고, 바닥도 그 색으로 물들이고, 다른 그림은 흐리게, 그림 색의 빛 알갱이가 떠다님.
+    /// nil이면 원래대로. 흑백·선 그림에서는 아무것도 바꾸지 않음
+    func immerse(_ h: Hung?) {
+        if let h, look == .color, h.palette.count >= 3 {
+            immerseTarget = h.palette
+            if immerseCur == nil || immerseAmt < 0.02 { immerseCur = h.palette }
             immerseGoal = 1
-            setMotes(p)
+            focus = h.group
+            buildSkin(h)
+            setMotes(h.palette)
         } else {
             immerseGoal = 0
             if var m = motes?.components[ParticleEmitterComponent.self] { m.isEmitting = false; motes?.components.set(m) }
         }
     }
 
+    /// 벽 둘레 파노라마 + 천장 덮개. 그림 가운데 방향이 u=0.5, 한 바퀴에 u가 2만큼 → 뒤쪽에서 거울로 이어져 이음매가 없음
+    private func buildSkin(_ h: Hung) {
+        skin?.removeFromParent()
+        skin = nil
+        guard let L = paintLayout, !roomSegs.isEmpty else { return }
+        let top = room.ceil
+        let c2 = SIMD2<Float>(center.x, center.z)
+        let th0 = atan2(h.center.z - c2.y, h.center.x - c2.x)
+        func ang(_ p: SIMD2<Float>) -> Float {
+            var t = atan2(p.y - c2.y, p.x - c2.x) - th0
+            while t > .pi { t -= 2 * .pi }
+            while t < -.pi { t += 2 * .pi }
+            return t
+        }
+        // 그림 오른쪽으로 갈수록 u가 커지게
+        let rp = SIMD2<Float>(h.center.x, h.center.z) + SIMD2<Float>(h.right.x, h.right.z) * 0.2
+        let sgn: Float = ang(rp) >= 0 ? 1 : -1
+        func uOf(_ p: SIMD2<Float>) -> Float { 0.5 + sgn * ang(p) / .pi }
+        var g = Geo()
+        for s in roomSegs {
+            let a2 = L.flat(s.a), b2 = L.flat(s.b)
+            let len = simd_distance(a2, b2)
+            guard len > 0.05 else { continue }
+            let nw = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))
+            let inn = nw * 0.012
+            let n3 = SIMD3<Float>(nw.x, 0, nw.y)
+            let k = max(1, Int(ceil(len / 0.25)))
+            for i in 0..<k {
+                let p = a2 + (b2 - a2) * (Float(i) / Float(k)) + inn
+                let q = a2 + (b2 - a2) * (Float(i + 1) / Float(k)) + inn
+                let u0 = uOf(p)
+                var u1 = uOf(q)
+                if u1 - u0 > 1 { u1 -= 2 } else if u0 - u1 > 1 { u1 += 2 }      // 뒤쪽 이음매 (거울 반복이라 2 차이는 같은 자리)
+                g.face(SIMD3<Float>(p.x, paintFloor, p.y), SIMD3<Float>(q.x, paintFloor, q.y), toward: n3,
+                       y0: 0.01, y1: top - 0.02, u0: u0, u1: u1, v0: 0, v1: 1)
+            }
+        }
+        let root = Entity()
+        var m = UnlitMaterial(color: .white)
+        var tp = MaterialParameters.Texture(h.tex)
+        tp.sampler = Tex.mirror
+        m.color = .init(tint: UIColor(white: 0.62, alpha: 1), texture: tp)
+        m.blending = .transparent(opacity: 1)
+        if let e = g.entity("skin", m) { root.addChild(e) }
+        // 천장 덮개: 그림의 가장 어두운 색 (하늘 대신 그림 속 밤처럼)
+        if let cm = Self.flatMesh(L.rects(room.id), L, y: paintFloor + top - 0.03, tile: 1) {
+            let d = h.palette[2] * 0.55
+            var mm = UnlitMaterial(color: UIColor(red: CGFloat(d.x), green: CGFloat(d.y), blue: CGFloat(d.z), alpha: 1))
+            mm.blending = .transparent(opacity: 1)
+            root.addChild(ModelEntity(mesh: cm, materials: [mm]))
+        }
+        root.components.set(OpacityComponent(opacity: 0))
+        local.addChild(root)
+        skin = root
+    }
+
     func tickImmerse(_ dt: Float) {
-        guard !tinted.isEmpty, immerseGoal != 0 || immerseAmt > 0 else { return }
+        guard immerseGoal != 0 || immerseAmt > 0 else { return }
         let before = immerseAmt
-        immerseAmt += (immerseGoal - immerseAmt) * min(1, dt * 1.6)
+        immerseAmt += (immerseGoal - immerseAmt) * min(1, dt * 1.4)
         if abs(immerseAmt - immerseGoal) < 0.005 { immerseAmt = immerseGoal }
         if let tg = immerseTarget, var cur = immerseCur {
             for k in 0..<min(cur.count, tg.count) { cur[k] += (tg[k] - cur[k]) * min(1, dt * 2) }
             immerseCur = cur
         }
-        guard abs(before - immerseAmt) > 0.0005 || immerseGoal > 0, let pal = immerseCur else { return }
-        Tex.with(look) {
-            for (e, tex, base, floor) in tinted {
-                let target = floor ? pal[2] * 0.9 + SIMD3<Float>(repeating: 0.05) : pal[0] * 0.85 + pal[1] * 0.25
-                let c = base + (target - base) * (immerseAmt * 0.85)
-                e.model?.materials = [Tex.unlit(tex, tint: c)]
+        guard abs(before - immerseAmt) > 0.0005 || immerseGoal > 0 else { return }
+        let a = immerseAmt
+        skin?.components.set(OpacityComponent(opacity: min(1, a * 1.05)))
+        for hg in hungArts {
+            hg.group.components.set(OpacityComponent(opacity: hg.group === focus ? 1 : 1 - 0.85 * a))
+        }
+        if let pal = immerseCur {
+            Tex.with(look) {
+                for (e, tex, base, floor) in tinted {
+                    // 바닥은 그림의 어두운 색으로 깊게, 벽(파노라마 뒤)은 그림 색으로
+                    let target = floor ? pal[2] * 0.7 : pal[0] * 0.7 + pal[1] * 0.3
+                    let c = base + (target - base) * (a * 0.95)
+                    e.model?.materials = [Tex.unlit(tex, tint: c)]
+                }
             }
+        }
+        if a == 0 {
+            skin?.removeFromParent()
+            skin = nil
+            focus = nil
+            for hg in hungArts { hg.group.components.remove(OpacityComponent.self) }
         }
     }
 
@@ -1284,7 +1367,7 @@ final class RoomWorld {
         guard roomOn else { return }
         for (e, a, b) in precipTiles {
             let d = simd_length(simd_max(simd_max(a - p, p - b), SIMD2<Float>(0, 0)))
-            let on = d > 0.5
+            let on = d > 0.8                  // 머리 둘레 80cm 안에서는 내리지 않음 (눈앞 깜빡임)
             if var pe = e.components[ParticleEmitterComponent.self], pe.isEmitting != on {
                 pe.isEmitting = on
                 e.components.set(pe)
@@ -1340,8 +1423,11 @@ final class RoomWorld {
     static func precip(_ w: String, size: SIMD3<Float>, height: Float, look: LookMode = .color) -> Entity {
         let snow = w == "snow" || w == "heavysnow"
         var pe = snow ? ParticleEmitterComponent.Presets.snow : ParticleEmitterComponent.Presets.rain
-        if look == .line {                      // 흰 바탕에 보이게 짙은 회색
-            pe.mainEmitter.color = .constant(.single(UIColor(white: snow ? 0.35 : 0.3, alpha: snow ? 1 : 0.7)))
+        if look == .line {
+            // 선 그림: 흰 바탕에 더해지는(additive) 빛은 보이지 않음 → 보통 섞기로, 눈은 작은 동그라미 선, 비는 짧은 세로 선
+            pe.mainEmitter.blendMode = .alpha
+            pe.mainEmitter.color = .constant(.single(UIColor(white: 0.12, alpha: snow ? 0.9 : 0.6)))
+            if let t = snow ? Dots.ring : Dots.dash { pe.mainEmitter.image = t }
         } else if look == .mono && !snow {
             pe.mainEmitter.color = .constant(.single(UIColor(white: 0.8, alpha: 0.6)))
         }
@@ -1365,6 +1451,7 @@ final class RoomWorld {
         pe.mainEmitter.lifeSpan = Double(max(0.4, (height - 0.05) / speed))
         pe.mainEmitter.lifeSpanVariation = 0.05
         if snow { pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 1 }
+        if look == .line { pe.mainEmitter.size *= snow ? 2.2 : 1.4 }      // 동그라미 선이 보일 만큼
         let e = Entity()
         e.components.set(pe)
         return e

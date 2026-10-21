@@ -30,6 +30,10 @@ struct ExploreView: View {
         // 탭은 한 번씩만 받고, 싱글·더블은 앱이 시간으로 가름 (두 번째 탭이 0.4초 안에 오면 더블탭).
         // 보는 곳 어디든 받도록 머리 둘레에 보이지 않는 '탭 받는 상자'를 둠. 열쇠·그림 버튼은 바로 처리
         .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { v in s.tapped(v.entity) })
+        // 해설 창 아래 막대를 잡고 끌면 창을 옮김
+        .simultaneousGesture(DragGesture().targetedToEntity(where: .has(GrabTag.self)).onChanged { v in
+            s.dragDocent(to: v.convert(v.location3D, from: .local, to: .scene))
+        })
         .task { await s.start() }
         .onDisappear { s.stop() }
     }
@@ -84,6 +88,9 @@ private struct ExploreHud: View {
         .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })     // 안내판을 누른 탭은 싱글탭으로 치지 않음
     }
 }
+
+/// 끌 수 있는 막대 표시 (해설 창 옮기기)
+struct GrabTag: Component {}
 
 /// 테마 판: 크기가 늘 같은 판 (칩 9개가 딱 들어가는 폭, 좌우 여백 같게)
 private struct ThemePanel: View {
@@ -159,6 +166,7 @@ final class ExploreSession {
     @ObservationIgnored private var closeSince: [Int: Float] = [:]  // 막힘이 시작된 때 (0.6초 이어지면 닫힘)
     @ObservationIgnored private var openHold: [Int: Float] = [:]    // 이때까지는 다시 닫힘으로 치지 않음 (방금 문 자리를 지남)
     @ObservationIgnored private var realClosed: Set<Int> = []       // 실제 문이 닫혀 있는 문
+    @ObservationIgnored private var doorPlanes: [UUID: (Int, Bool)] = [:]   // 문으로 알아본 평면 → (문 번호, 문 자리를 가로막고 있는지)
     @ObservationIgnored private var leafSeen: Set<Int> = []         // 닫힌 실제 문이 보이던 문 (그 문이 열리면 바로 열린 공간으로)
     @ObservationIgnored private var solidDoors: Set<Int> = []       // 지금 막혀 보이는 문 (벽 또는 닫힌 실제 문)
     @ObservationIgnored private var leafDoor: Int?                  // 가장 가까이 보이는 닫힌 실제 문
@@ -193,6 +201,7 @@ final class ExploreSession {
     @ObservationIgnored private var themePanel: Entity?
     // 그림 설명
     @ObservationIgnored private var docentCard: Entity?
+    @ObservationIgnored private var docentBar: Entity?
     @ObservationIgnored private var docentShow: Float = 0
     @ObservationIgnored private var themeQuiet: Float = 0     // 테마를 바꾼 직후엔 알림판을 띄우지 않음
     @ObservationIgnored private var badgeT: Float = 0
@@ -306,12 +315,16 @@ final class ExploreSession {
         let w = WorldTrackingProvider()
         let m = SceneReconstructionProvider(modes: [.classification])
         world = w
-        let providers: [any DataProvider] = [w, m]
+        var providers: [any DataProvider] = [w, m]
+        // 세운 평면(문으로 알아본 면): 그물보다 빨리 바뀌어 실제 문이 열리고 닫히는 걸 바로 알 수 있음
+        let planes = PlaneDetectionProvider.isSupported ? PlaneDetectionProvider(alignments: [.vertical]) : nil
+        if let planes { providers.append(planes) }
         do { try await ar.run(providers) } catch {
             message = "공간 인식을 시작하지 못했어요. 나갔다가 다시 들어와 주세요."
             return
         }
         Task { await self.watchMeshes(m) }
+        if let planes { Task { await self.watchPlanes(planes) } }
         Task { await self.watchWorld(w) }
         // 가구 블록: 지난 탐험에서 알아낸 것(없으면 스캔 그물)을 다른 스레드에서 읽어 처음부터 보이게
         let sid = spaceId
@@ -326,7 +339,13 @@ final class ExploreSession {
                 return out
             }.value
             guard !ended else { return }
-            vox?.seed(res)
+            // 문이 쓸고 지나가는 자리의 기둥은 버림 (예전에 저장된 반쯤 열린 문짝 등)
+            var clean: [Int64: UInt8] = [:]
+            for (k, h) in res {
+                let u = Int(((k >> 21) & ((1 << 21) - 1)) - (1 << 20)), v = Int((k & ((1 << 21) - 1)) - (1 << 20))
+                if !Skin.inSwing(L, SIMD2<Float>((Float(u) + 0.5) * Vox.size, (Float(v) + 0.5) * Vox.size)) { clean[k] = h }
+            }
+            vox?.seed(clean)
         }
         // 포켓 갤러리 보관함 그림 (전시관이 있으면 처음 받는 그림을 최대 6초 기다림, 없으면 받아만 둠)
         let hasGallery = d.rec.rooms.contains { $0.place == "gallery" }
@@ -405,7 +424,7 @@ final class ExploreSession {
         }
         guard !ended, worlds[w.room.id] === w else { return }
         w.hang(arts)
-        Docent.shared.prefetch(arts.map { $0.0 })                        // 걸린 그림 중 설명이 없는 것은 미리 가져와 저장
+        if w.room.id == current { Docent.shared.prefetch(arts.map { $0.0 }) }     // 지금 방에 걸린 그림 중 해설이 없는 것을 먼저 받아 저장
     }
 
     /// 비·눈·반딧불은 지금 방과 이웃 방만 (문턱을 넘을 때 이미 내리고 있게)
@@ -454,6 +473,34 @@ final class ExploreSession {
         docentCard = e
         e.isEnabled = false
         root.addChild(e)
+        GrabTag.registerComponent()
+        // 창 아래 옮기기 막대 (창 막대처럼)
+        let bar = ModelEntity(mesh: .generateBox(width: 0.13, height: 0.012, depth: 0.012, cornerRadius: 0.006),
+                              materials: [UnlitMaterial(color: UIColor(white: 0.92, alpha: 1))])
+        bar.name = "docent-grab"
+        bar.components.set(GrabTag())
+        bar.components.set(InputTargetComponent())
+        bar.components.set(CollisionComponent(shapes: [.generateBox(size: [0.26, 0.08, 0.08])]))
+        bar.components.set(HoverEffectComponent())
+        bar.isEnabled = false
+        root.addChild(bar)
+        docentBar = bar
+    }
+
+    /// 막대를 끌어 해설 창을 옮김 (창은 늘 나를 향함)
+    func dragDocent(to p: SIMD3<Float>) {
+        guard let card = docentCard, docent != nil else { return }
+        let b = card.visualBounds(relativeTo: card)
+        let below = b.min.y - 0.035
+        card.position = p - card.orientation.act(SIMD3<Float>(b.center.x, below, 0)) * card.scale
+        faceDocent(card)
+    }
+
+    private func faceDocent(_ card: Entity) {
+        let to = head - card.position
+        let yaw = atan2(to.x, to.z)
+        let pitch = atan2(to.y, max(0.05, simd_length(SIMD2<Float>(to.x, to.z))))
+        card.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0]) * simd_quatf(angle: -pitch, axis: [1, 0, 0])
     }
 
     // MARK: 테마 바꾸기 (지금 방)
@@ -539,6 +586,47 @@ final class ExploreSession {
             default:
                 meshes[a.id] = a
                 dirty.insert(a.id)
+            }
+        }
+    }
+
+    /// 문으로 알아본 세운 평면: 문 자리를 가로막고 서 있으면 '닫힘', 그 면이 돌아가거나(열리며 젖혀짐) 자리를 벗어나거나 사라지면 바로 '열림'.
+    /// 문은 천천히 열리지만 평면은 그물보다 훨씬 빨리 따라오므로, 문짝이 조금만 젖혀져도 알아챔.
+    /// 평면으로 열림을 알면 6초 동안은 늦게 오는 그물(아직 예전 닫힌 문짝이 남은)로 다시 닫지 않음
+    private func watchPlanes(_ p: PlaneDetectionProvider) async {
+        for await u in p.anchorUpdates {
+            let a = u.anchor
+            guard a.classification == .door || doorPlanes[a.id] != nil else { continue }
+            guard let f = fit, let L = layout else { continue }
+            let was = doorPlanes[a.id]
+            var now: (Int, Bool)? = nil
+            if u.event != .removed && a.classification == .door {
+                let m = a.originFromAnchorTransform * a.geometry.extent.anchorFromExtentTransform
+                let c = f.toSaved(simd_make_float3(m.columns.3))
+                // 세운 평면의 법선 = 평면 안의 세로축이 아닌 나머지 축 (가로로 누운 축)
+                let ay = simd_make_float3(m.columns.1), az = simd_make_float3(m.columns.2)
+                let n = f.dirToSaved(simd_normalize(abs(ay.y) < abs(az.y) ? ay : az))
+                let pp = L.plane(c.x, c.z)
+                let np = SIMD2<Float>(simd_dot(SIMD2<Float>(n.x, n.z), L.ex), simd_dot(SIMD2<Float>(n.x, n.z), L.ez))
+                let big = a.geometry.extent.width > 0.4 && a.geometry.extent.height > 0.9
+                for (i, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.2, side: 0.05) {
+                    let across = abs(ds.alongU ? np.x : np.y) > 0.8
+                    now = (i, across && big)
+                    break
+                }
+            }
+            if let n = now { doorPlanes[a.id] = n } else { doorPlanes[a.id] = nil }
+            if let n = now, n.1 {
+                // 문 자리를 가로막은 문 면 → 닫힘 (그물을 기다리지 않음)
+                if !realClosed.contains(n.0) { realClosed.insert(n.0) }
+                openHold[n.0] = nil
+                closeSince[n.0] = nil
+            } else if let w = was, w.1 {
+                // 가로막고 있던 문 면이 젖혀지거나 사라짐 → 바로 열림
+                realClosed.remove(w.0)
+                realHits[w.0] = [:]
+                closeSince[w.0] = nil
+                openHold[w.0] = t + 6
             }
         }
     }
@@ -833,6 +921,7 @@ final class ExploreSession {
             Task { await hangGallery(nw) }
         }
         refreshActive()
+        if let w = worlds[r], !w.hungArts.isEmpty { Docent.shared.prefetch(w.hungArts.map(\.pick)) }
         room = rm
         player.enter(rm)
         nextEvent = t + Float.random(in: 3...8)
@@ -894,7 +983,7 @@ final class ExploreSession {
             let here = side >= 0 ? ds.roomA : ds.roomB
             // 문 자리 한가운데에 서 있으면 실제 문은 열려 있는 것 (닫힌 문 자리엔 설 수 없음)
             if ds.zone(p, margin: 0.05, side: -0.1) {
-                openHold[i] = t + 2
+                openHold[i] = max(openHold[i] ?? 0, t + 2)
                 closeSince[i] = nil
                 realClosed.remove(i)
             }
@@ -1038,7 +1127,7 @@ final class ExploreSession {
         for i in seen.union(hits.keys) {
             let nh = hits[i] ?? []
             let old = realHits[i]?[id] ?? []
-            if old.count >= 8 && nh.count * 10 <= old.count * 4 {
+            if old.count >= 6 && nh.count * 10 <= old.count * 7 {
                 realHits[i] = [:]                                   // 문이 움직였음 → 다른 덩어리의 예전 기록은 믿지 않음
             }
             realHits[i, default: [:]][id] = nh
@@ -1049,7 +1138,8 @@ final class ExploreSession {
             let cols = max(1, Int(((L.doors[i].width - 0.16) / 0.1).rounded(.up)))
             let cv = Float(all.count) / Float(cols * 16)
             cover[i] = cv
-            if cv < 0.4 {
+            let planeShut = doorPlanes.values.contains { $0.0 == i && $0.1 }     // 문 면이 아직 가로막고 있으면 그물로 열지 않음
+            if cv < 0.45 && !planeShut {
                 realClosed.remove(i)
                 closeSince[i] = nil
             } else if cv > 0.55 && !realClosed.contains(i) && closeSince[i] == nil {
@@ -1140,14 +1230,10 @@ final class ExploreSession {
         if let card = docentCard {
             let sp = docentSpot(hung).0
             // 저장 좌표 → 지금 좌표, 그리고 내 눈을 향하게 (좌우로 돌리고 위아래로 기울임)
-            let p = spaceRoot.convert(position: sp, to: root)
-            card.position = p
-            let to = head - p
-            let yaw = atan2(to.x, to.z)
-            let pitch = atan2(to.y, max(0.05, simd_length(SIMD2<Float>(to.x, to.z))))
-            card.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0]) * simd_quatf(angle: -pitch, axis: [1, 0, 0])
+            card.position = spaceRoot.convert(position: sp, to: root)
+            faceDocent(card)
         }
-        w.immerse(in: hung.palette)
+        w.immerse(hung)
     }
 
     /// 해설 창 자리 (저장 좌표): 그림 오른쪽·왼쪽 옆 중 벽 끝·가구에 걸리지 않고 나에게 가까운 쪽.
@@ -1157,15 +1243,26 @@ final class ExploreSession {
         let hs = f.toSaved(head)
         let blocked = vox?.blockedCells(minH: 0.2) ?? []
         let y = min(max(h.center.y, L.floorY + 1.1), L.floorY + 1.6)
+        let tall = vox?.blockedCells(minH: 1.0) ?? []
+        func inDoor(_ pl: SIMD2<Float>) -> Bool { L.doors.contains { $0.zone(pl, margin: 0.45, side: 0.25) } }
         func ok(_ c: SIMD3<Float>) -> Bool {
-            // 창 폭(약 40cm) 양끝과 가운데, 벽에서 10~50cm 앞이 모두 방 안·가구 없음·다른 벽에서 5cm 넘게 떨어져 있어야
-            for s: Float in [-0.22, 0, 0.22] {
+            // 창 자리(폭 약 45cm)와 그 앞: 방 안·가구 없음·다른 벽·문(열쇠 문·문짝)에서 떨어져 있어야
+            for s: Float in [-0.25, 0, 0.25] {
                 for o: Float in [0, 0.15, 0.3] {
                     let q = c + h.right * s + h.normal * o
                     let pl = L.plane(q.x, q.z)
                     let here = L.at(x: q.x, z: q.z)
-                    if here.room == 0 || here.wall < 0.05 || blocked.contains(RoomWorld.clutterKey(pl)) { return false }
+                    if here.room == 0 || here.wall < 0.05 || blocked.contains(RoomWorld.clutterKey(pl)) || inDoor(pl) { return false }
                 }
+            }
+            // 내 눈에서 창까지 가로막는 것(벽·키 큰 가구·문)이 없어야 — 가려 보이지 않는 자리에 띄우지 않음
+            let a = hs.xz, b = c.xz
+            let n = max(2, Int(simd_distance(a, b) / 0.08))
+            for k in 1..<n {
+                let q2 = a + (b - a) * (Float(k) / Float(n))
+                let pl = L.plane(q2.x, q2.y)
+                let here = L.at(x: q2.x, z: q2.y)
+                if here.room == 0 || here.wall < 0.02 || tall.contains(RoomWorld.clutterKey(pl)) || inDoor(pl) { return false }
             }
             return true
         }
@@ -1178,19 +1275,20 @@ final class ExploreSession {
             if best == nil || d < best!.1 { best = (c, d) }
         }
         if let b = best { return (b.0, true) }
-        // 그림 앞: 그림에서 나 쪽으로 (벽에서 0.5~1m), 그림을 가리지 않게 내 쪽 옆으로 조금
-        let toMe = hs - h.center
-        let lateral: Float = simd_dot(toMe, h.right) >= 0 ? 1 : -1
-        let away = min(1.0, max(0.5, simd_dot(toMe, h.normal) * 0.5))
-        var c = h.center + h.normal * away + h.right * lateral * (h.size.x / 2 * 0.6)
-        c.y = y
+        // 양옆이 다 막혔으면: 내 앞 70cm, 그림 쪽을 보는 방향에서 옆으로 비켜 (그림을 덜 가리게, 늘 보이는 자리)
+        let toArt = simd_normalize(SIMD3<Float>(h.center.x - hs.x, 0, h.center.z - hs.z))
+        let side = simd_cross(toArt, SIMD3<Float>(0, 1, 0))
+        var c = hs + toArt * 0.7 + side * 0.3
+        let pl = L.plane(c.x, c.z)
+        if L.at(x: c.x, z: c.z).room == 0 || tall.contains(RoomWorld.clutterKey(pl)) { c = hs + toArt * 0.7 - side * 0.3 }
+        c.y = min(y, hs.y - 0.15)
         return (c, false)
     }
 
     func closeDocent() {
         guard docent != nil else { return }
         docent = nil
-        for (_, w) in worlds { w.immerse(in: nil) }
+        for (_, w) in worlds { w.immerse(nil) }
     }
 
     private func placeDocent(_ dt: Float) {
@@ -1199,6 +1297,15 @@ final class ExploreSession {
         docentShow += (want - docentShow) * min(1, dt * 6)
         card.components.set(OpacityComponent(opacity: docentShow))
         card.isEnabled = docentShow > 0.02
+        if let bar = docentBar {
+            bar.isEnabled = card.isEnabled
+            if card.isEnabled {
+                let b = card.visualBounds(relativeTo: card)
+                bar.position = card.convert(position: SIMD3<Float>(b.center.x, b.min.y - 0.035, 0), to: root)
+                bar.orientation = card.orientation
+                bar.components.set(OpacityComponent(opacity: docentShow))
+            }
+        }
         for (_, w) in worlds { w.tickImmerse(dt) }
         decorT += dt
         if decorT > 3, let w = worlds[current], let v = vox {

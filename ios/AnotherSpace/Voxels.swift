@@ -149,8 +149,8 @@ enum Skin {
             // 문틀 안쪽(양옆 8cm 뺀 폭 × 0.3~1.9m)을 얼마나 덮는지. 옆으로 젖혀진 문짝·문틀 옆면은 방향이 달라 안 셈
             var inDoor = false
             let np = SIMD2<Float>(simd_dot(SIMD2<Float>(ns.x, ns.z), L.ex), simd_dot(SIMD2<Float>(ns.x, ns.z), L.ez))
+            if hgt > 0.12 && Skin.inSwing(L, pp) { inDoor = true }
             for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.3, side: 0.15) {
-                if hgt > 0.12 { inDoor = true }
                 guard !saved else { continue }
                 if hgt > 0.3 && hgt < 1.9 { out.doorTouched.insert(di) }
                 let across = abs(ds.alongU ? np.x : np.y)
@@ -199,6 +199,13 @@ enum Skin {
             out.floorN = floors.count
         }
         return out
+    }
+
+    /// 문이 열리고 닫히며 쓸고 지나가는 자리 (문 자리 + 양쪽 방으로 문 폭만큼, 최대 1m) — 실제 집에서도 늘 비어 있는 곳.
+    /// 이 안의 그물(반쯤 열린 문짝·문틀)은 가구로 치지 않음 → 문짝이 뒤늦게 큰 기둥으로 생겨 문을 막지 않게
+    static func inSwing(_ L: Layout, _ p: SIMD2<Float>) -> Bool {
+        for ds in L.doors where ds.zone(p, margin: min(1.0, max(0.3, ds.width)) + 0.05, side: 0.15) { return true }
+        return false
     }
 
     /// 저장한 스캔 그물 → 꼭짓점을 합친(이어진 면을 알 수 있게) 그물 하나
