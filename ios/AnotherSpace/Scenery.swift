@@ -40,9 +40,11 @@ final class Scenery {
     private let ex: SIMD3<Float>
     private let ez: SIMD3<Float>
     private let sortGroup: ModelSortGroup
+    private let blocked: Set<Int64>          // 가구 기둥이 있는 10cm 칸 (벽 꾸밈은 그 앞을 피함)
 
     init(room: RoomRec, look: LookMode, tint: SIMD3<Float>, center: SIMD3<Float>, halfSize: SIMD2<Float>, angle: Float,
-         floorY: Float, ceilY: Float, segs: [WallSeg], layout: Layout, sortGroup: ModelSortGroup) {
+         floorY: Float, ceilY: Float, segs: [WallSeg], layout: Layout, sortGroup: ModelSortGroup, blocked: Set<Int64> = []) {
+        self.blocked = blocked
         self.look = look
         self.center = center
         self.halfSize = halfSize
@@ -348,20 +350,9 @@ final class Scenery {
         var walls = segs.filter { !$0.window && simd_distance($0.a, $0.b) > 1.3 }.sorted { simd_distance($0.a, $0.b) > simd_distance($1.a, $1.b) }
         func p3(_ p: SIMD2<Float>, _ y: Float) -> SIMD3<Float> { let f = L.flat(p); return SIMD3<Float>(f.x, floorY + y, f.y) }
         func span(_ s: WallSeg) -> (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>)? {
-            // 문 끝에서 40cm 떨어진 가장 긴 구간
+            // 문 끝에서 40cm 떨어지고, 벽 앞 60cm 안에 가구가 없는 가장 긴 구간
             let len = simd_distance(s.a, s.b), dir = (s.b - s.a) / len
-            var cuts: [Float] = [0, len]
-            for e in doorEnds where abs(simd_dot(e - s.a, SIMD2<Float>(-dir.y, dir.x))) < 0.1 {
-                let tt = simd_dot(e - s.a, dir)
-                if tt > -0.4 && tt < len + 0.4 { cuts.append(tt) }
-            }
-            cuts.sort()
-            var best: (Float, Float)? = nil
-            for k in 0..<(cuts.count - 1) {
-                let a = max(0, cuts[k] + (k == 0 ? 0.15 : 0.4)), b = min(len, cuts[k + 1] - (k + 1 == cuts.count - 1 ? 0.15 : 0.4))
-                if b - a > 0.9 && (best == nil || b - a > best!.1 - best!.0) { best = (a, b) }
-            }
-            guard let bb = best else { return nil }
+            guard let bb = clearRun(s, doorEnds: doorEnds, depth: 0.6, minLen: 0.9) else { return nil }
             return (s.a + dir * bb.0, s.a + dir * bb.1, dir)
         }
         let wood = look == .line ? Ink.paper(0) : Tex.unlit("planks", tint: [0.9, 0.82, 0.74], folder: "tex", sampler: Tex.tiling)
@@ -533,17 +524,56 @@ final class Scenery {
         }
     }
 
+    /// 벽 s 를 따라 문 끝(margin 안)을 피하고, 벽 앞 depth m 안에 가구 기둥이 없는 가장 긴 구간 (벽 시작점에서 거리 t0, t1)
+    private func clearRun(_ s: WallSeg, doorEnds: [SIMD2<Float>], depth: Float, minLen: Float) -> (Float, Float)? {
+        let len = simd_distance(s.a, s.b)
+        guard len > minLen else { return nil }
+        let dir = (s.b - s.a) / len
+        let step: Float = 0.05
+        var best: (Float, Float)? = nil
+        var start: Float? = nil
+        var t: Float = 0.15
+        while t <= len - 0.15 + 1e-3 {
+            let q = s.a + dir * t
+            var ok = !doorEnds.contains { simd_distance($0, q) < 0.5 }
+            if ok {
+                var o: Float = 0.05
+                while o <= depth + 1e-3 {
+                    if blocked.contains(RoomWorld.clutterKey(q + s.n * o)) { ok = false; break }
+                    o += 0.1
+                }
+            }
+            if ok && start == nil { start = t }
+            let last = t + step > len - 0.15 + 1e-3
+            if let st = start, !ok || last {
+                let en = ok ? t : t - step
+                if en - st >= minLen && (best == nil || en - st > best!.1 - best!.0) { best = (st, en) }
+                start = nil
+            }
+            t += step
+        }
+        return best
+    }
+
     // MARK: 통나무집 벽난로
     private func addFireplace<G: RandomNumberGenerator>(_ segs: [WallSeg], floorY: Float, ceilY: Float, using g: inout G) {
-        guard let s = segs.filter({ !$0.window && simd_distance($0.a, $0.b) > 1.6 }).max(by: { simd_distance($0.a, $0.b) < simd_distance($1.a, $1.b) }) else { return }
-        // 문 끝 50cm 안이면 그만
-        let mid = (s.a + s.b) / 2
+        // 자리: 창이 아닌 벽 중 문 끝에서 50cm 떨어지고, 벽 앞 1m 안에 가구가 없는 1.5m 구간 (긴 벽부터)
+        var doorEnds: [SIMD2<Float>] = []
         for ds in L.doors {
-            for r in [ds.roomA, ds.roomB] where r == s.room {
+            for r in [ds.roomA, ds.roomB] where segs.first?.room == r {
                 let (a, b, _) = ds.edge(for: r)
-                if simd_distance(a, mid) < 1.1 || simd_distance(b, mid) < 1.1 { return }
+                doorEnds += [a, b]
             }
         }
+        var pick: (WallSeg, SIMD2<Float>)? = nil
+        for s in segs.filter({ !$0.window && simd_distance($0.a, $0.b) > 1.6 }).sorted(by: { simd_distance($0.a, $0.b) > simd_distance($1.a, $1.b) }) {
+            guard let run = clearRun(s, doorEnds: doorEnds, depth: 1.0, minLen: 1.5) else { continue }
+            let dir = (s.b - s.a) / simd_distance(s.a, s.b)
+            pick = (s, s.a + dir * ((run.0 + run.1) / 2))
+            break
+        }
+        guard let pk = pick else { return }
+        let s = pk.0, mid = pk.1
         let f = L.flat(mid)
         let n3 = SIMD3<Float>((L.flat(s.n) - L.flat(.zero)).x, 0, (L.flat(s.n) - L.flat(.zero)).y)
         let yaw = atan2(n3.x, n3.z)

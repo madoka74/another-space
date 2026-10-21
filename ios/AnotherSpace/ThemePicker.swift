@@ -49,7 +49,7 @@ struct ThemePicker: View {
                                 Image(systemName: LookMode(rawValue: it.id)?.icon ?? Worlds.icon(it.id)).font(.title3)
                                 Text(it.label).font(.caption)
                             }
-                            .frame(width: compact ? 60 : 68, height: compact ? 54 : 60)
+                            .frame(width: compact ? 60 : 64, height: compact ? 54 : 60)
                             .background(on ? Color.accentColor.opacity(0.45) : Color.white.opacity(0.08),
                                         in: RoundedRectangle(cornerRadius: 14))
                             .tileHover(14)

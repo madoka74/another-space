@@ -14,7 +14,7 @@ struct AnotherSpaceApp: App {
         WindowGroup(id: "inspector", for: String.self) { _ in
             ShapeInspector()
         }
-        .defaultSize(width: 520, height: 760)
+        .defaultSize(width: 720, height: 760)
         .defaultWindowPlacement { _, context in
             if let main = context.windows.first(where: { $0.id == "main" }) {
                 return WindowPlacement(.trailing(main))

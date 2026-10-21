@@ -141,8 +141,13 @@ struct Geo {
         if simd_length(p1) < 0.1 { p1 = simd_cross(dir, SIMD3<Float>(1, 0, 0)) }
         p1 = simd_normalize(p1) * (w / 2)
         let p2 = simd_normalize(simd_cross(dir, p1)) * (w / 2)
-        for p in [p1, p2] {
-            quad(a - p, b - p, b + p, a + p, .zero, .zero, .zero, .zero)
+        // 가는 네모 막대: 네 옆면이 모두 선이 지나는 면에서 굵기 절반만큼 떨어져 있어
+        // 벽·가구 면과 같은 자리에 겹쳐 깜빡이지(z-fighting) 않음. 양끝을 굵기 절반 늘려 모서리 이음새도 메움
+        let a2 = a - dir * (w / 2), b2 = b + dir * (w / 2)
+        let c = [p1 + p2, p1 - p2, -p1 - p2, -p1 + p2]
+        for k in 0..<4 {
+            let o0 = c[k], o1 = c[(k + 1) % 4]
+            quad(a2 + o0, b2 + o0, b2 + o1, a2 + o1, .zero, .zero, .zero, .zero)
         }
     }
 

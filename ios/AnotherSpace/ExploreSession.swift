@@ -81,8 +81,9 @@ private struct ExploreHud: View {
             }
         }
         .padding(22)
-        .frame(width: s.themeOpen ? 640 : 480)
+        .frame(width: s.themeOpen ? 740 : 480)          // 테마 칩 9개(장소)가 잘리지 않는 폭
         .glassBackgroundEffect()
+        .transaction { $0.animation = nil }             // 테마 판이 펼쳐질 때 버튼이 미끄러져 내려오듯 움직이지 않게 (바로 그 모양으로)
         .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })     // 안내판을 누른 탭은 싱글탭으로 치지 않음
     }
 }
@@ -269,18 +270,16 @@ final class ExploreSession {
         let sid = spaceId
         guard let I = info else { return }
         seedTask = Task {
-            let res = await Task.detached(priority: .userInitiated) { () -> (Set<Int64>, [Int64: Float]) in
-                var keys = Set<Int64>(), cells: [Int64: Float] = [:]
-                if let m = SpaceStore.loadMesh(sid) {
-                    let r = Skin.build(Skin.weld(m.0, m.1), I, Fit(), saved: true)
-                    cells = r.cellArea
-                    for (k, a) in r.vox where a >= Skin.voxMin { keys.insert(k) }
-                }
-                if let learned = VoxStore.load(sid) { keys = learned }
-                return (keys, cells)
+            let res = await Task.detached(priority: .userInitiated) { () -> [Int64: UInt8] in
+                if let learned = VoxStore.load(sid) { return learned }            // 지난 탐험에서 확인한 가구
+                guard let m = SpaceStore.loadMesh(sid) else { return [:] }       // 처음: 스캔 그물에서
+                let r = Skin.build(Skin.weld(m.0, m.1), I, Fit(), saved: true)
+                var out: [Int64: UInt8] = [:]
+                for (k, top) in r.cols { out[k] = UInt8(min(21, max(2, Int((top / Vox.size).rounded(.up))))) }
+                return out
             }.value
             guard !ended else { return }
-            vox?.seed(res.0, cells: res.1)
+            vox?.seed(res)
         }
         // 포켓 갤러리 보관함 그림 (전시관이 있으면 처음 받는 그림을 최대 6초 기다림, 없으면 받아만 둠)
         let hasGallery = d.rec.rooms.contains { $0.place == "gallery" }
@@ -291,6 +290,7 @@ final class ExploreSession {
 
     /// 아직 안 만든 방 중 '지금 있는 방 → 이웃 방 → 나머지' 순서로 하나씩
     private func buildWorlds() async {
+        await seedTask?.value                       // 가구 자리를 알아야 벽난로·선반·그림을 가구 없는 곳에 둠
         while !ended {
             guard let d = data, let L = layout else { return }
             let todo = d.rec.rooms.filter { worlds[$0.id] == nil }
@@ -315,7 +315,7 @@ final class ExploreSession {
 
     @discardableResult
     private func addWorld(_ d: SpaceData, _ r: RoomRec, _ L: Layout) -> RoomWorld {
-        let w = RoomWorld(d, r, layout: L)
+        let w = RoomWorld(d, r, layout: L, blocked: vox?.blockedCells(minH: 0.2) ?? [])
         spaceRoot.addChild(w.world)
         spaceRoot.addChild(w.local)
         worlds[r.id] = w
@@ -334,7 +334,7 @@ final class ExploreSession {
         defer { hanging.remove(w.room.id) }
         await seedTask?.value                                        // 가구 블록을 알아야 자리를 고름
         guard !ended, worlds[w.room.id] === w else { return }
-        w.planSlots(blocked: vox?.blockedCells() ?? [])
+        w.planSlots(blocked: vox?.blockedCells(minH: 1.0) ?? [])
         let n = w.paintSlots.count
         guard n > 0 else { w.hang([]); return }
         var picks: [ArtPick] = []
@@ -387,9 +387,9 @@ final class ExploreSession {
     /// 알아낸 가구 블록 저장 (다음 탐험에서 처음부터 보이게)
     private func saveVox() {
         guard let v = vox, v.changed, ready else { return }
-        let keys = v.known, id = spaceId
+        let list = v.saveList(), id = spaceId
         v.markSaved()
-        Task.detached(priority: .utility) { VoxStore.save(id, keys) }
+        Task.detached(priority: .utility) { VoxStore.save(id, list) }
     }
 
     func attachHud(_ e: Entity) {
@@ -481,7 +481,6 @@ final class ExploreSession {
             case .removed:
                 meshes[a.id] = nil
                 dirty.remove(a.id)
-                vox?.remove(a.id, now: t)
                 setDoorHits(a.id, [:], touched: [])
                 floorSamples[a.id] = nil
                 doorAnchors.remove(a.id)
@@ -589,6 +588,12 @@ final class ExploreSession {
     // MARK: 바닥 높이
     private var floorOK: Bool { floorFitY != nil || (fitAt.map { t - $0 > 8 } ?? false) }
 
+    /// 좌표가 자리를 잡았는지: 바닥 높이를 확인했고, 공간을 찾은 지 2초가 지났고, 맞춤이 거의 움직이지 않음
+    private var fitStable: Bool {
+        guard floorFitY != nil, let f = fit, let tg = fitTarget, let a = fitAt, t - a > 2 else { return false }
+        return !tg.differs(f, meters: 0.04, radians: 0.015)
+    }
+
     /// 머리 근처(4m) 그물들의 '바닥' 면 높이 가운데 값으로 저장 바닥과의 높이 차이를 맞춤
     private func updateFloor(_ L: Layout) {
         var list: [(Float, Int)] = []
@@ -643,10 +648,9 @@ final class ExploreSession {
     /// 시선 정면 60cm(벽·닫힌 문이 더 가까우면 그 앞)에 현실을 보여 주는 원. 크기는 거리에 맞춰 보이는 크기가 같게.
     /// 더블탭으로 켜고 끔. 닫힌 실제 문 앞(1m 안)이면 저절로 켜지고, 문이 열리거나 문에서 벗어나면 꺼짐
     private func placePeek(_ dt: Float) {
-        if leafDoor == nil { peekDismissed = nil }
         let auto = leafDoor != nil && leafDoor != peekDismissed
         let target: Float = (freePeek || auto) ? 1 : 0
-        peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 5 : 8))
+        peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 6 : 16))
         let on = peekAmt > 0.01
         if peek.isEnabled != on { peek.isEnabled = on }
         guard on else { return }
@@ -699,7 +703,7 @@ final class ExploreSession {
             buildTimer += dt
             if buildTimer > 0.05 { buildTimer = 0; buildSome(fit, I) }
         }
-        vox?.tick(now: t)
+        vox?.tick()
         voxSaveT += dt
         if voxSaveT > 20 { voxSaveT = 0; saveVox() }
 
@@ -751,7 +755,7 @@ final class ExploreSession {
         hudAlert = why != nil
         tapCatcher.position = head
         // 싱글탭 확정: 두 번째 탭 없이 0.4초가 지남
-        if let p = pendingTap, t - p > 0.4 {
+        if let p = pendingTap, t - p > 0.5 {
             pendingTap = nil
             singleTapped()
         }
@@ -829,6 +833,7 @@ final class ExploreSession {
         var urgent = false
         var solid = Set<Int>()
         var leaf: (Int, Float)? = nil
+        var anyLeaf = false
         for (i, ds) in L.doors.enumerated() {
             var same = ds.single
             if !same, let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
@@ -896,7 +901,13 @@ final class ExploreSession {
             if let lf = worlds[ds.roomA]?.doorLeaf[i], lf.isEnabled != leafOn { lf.isEnabled = leafOn }
             if leafOn {
                 urgent = true
-                if leaf == nil || dist < leaf!.1 { leaf = (i, dist) }
+                anyLeaf = true
+                // 현실 원은 그 닫힌 문 쪽을 바라볼 때만 (양쪽에 문이 있어도 보는 쪽 문만, 다른 데를 보면 바로 사라짐)
+                let q = simd_clamp(p, ds.lo, ds.hi)
+                var to = q - p
+                if simd_length(to) < 0.25 { to = ds.mid - p }
+                let facing = look != .zero && simd_length(to) > 0.01 && simd_dot(simd_normalize(to), look) > 0.72
+                if facing && (leaf == nil || dist < leaf!.1) { leaf = (i, dist) }
             }
             if closed || leafOn { solid.insert(i) }
             if passed.contains(i) {
@@ -930,6 +941,7 @@ final class ExploreSession {
         doorUrgent = urgent
         solidDoors = solid
         leafDoor = leaf?.0
+        if !anyLeaf { peekDismissed = nil }        // 닫힌 문에서 벗어나면 더블탭으로 닫은 것도 풂
     }
 
     /// 문 모양 맞추기: prog nil = 닫혀서 열쇠가 떠 있음, 0~1 = 열쇠로 여는 중
@@ -1010,7 +1022,7 @@ final class ExploreSession {
             cur = c.parent
         }
         if t - lastUITap < 0.3 { return }                          // 안내판을 누른 탭
-        if let p = pendingTap, t - p <= 0.4 {
+        if let p = pendingTap, t - p <= 0.5 {
             pendingTap = nil
             doubleTapped()
         } else {
@@ -1120,7 +1132,8 @@ final class ExploreSession {
                 let res = await Task.detached(priority: .userInitiated) { Skin.build(copy, I, fit) }.value
                 building.remove(id)
                 guard !ended, meshes[id] != nil else { return }
-                vox?.update(id, vox: res.vox, cells: res.cellArea, now: t)
+                // 좌표가 자리를 잡은 뒤에만 가구를 고침 (자리 잡는 중의 어긋난 그물이 엉뚱한 곳에 가구를 만들지 않게)
+                if fitStable { vox?.update(cols: res.cols, floor: res.floorSeen) }
                 if res.doorTouched.isEmpty && res.doorHits.isEmpty { doorAnchors.remove(id) } else { doorAnchors.insert(id) }
                 setDoorHits(id, res.doorHits, touched: res.doorTouched)
                 if let fy = res.floorY { floorSamples[id] = (fy, res.floorN) } else { floorSamples[id] = nil }

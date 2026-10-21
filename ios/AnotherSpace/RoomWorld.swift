@@ -152,7 +152,11 @@ final class RoomWorld {
     /// 장소마다 움직이는 것들 (새·배·자동차·사람·연기…)과 실내 꾸밈
     private var scenery: Scenery?
 
-    init(_ d: SpaceData, _ r: RoomRec, layout: Layout) {
+    /// 가구 기둥이 있는 10cm 칸 (벽난로·선반·메뉴판을 가구 없는 벽에 두려고)
+    private let blocked: Set<Int64>
+
+    init(_ d: SpaceData, _ r: RoomRec, layout: Layout, blocked: Set<Int64> = []) {
+        self.blocked = blocked
         room = r
         look = r.lookMode
         style = Worlds.style(r.place, time: r.time)
@@ -256,7 +260,7 @@ final class RoomWorld {
         addWeather(rects, L, floorY: floorY, ceilY: ceilY)
         if lineMode { addOutlines(segs, L, floorY: floorY, ceilY: ceilY) }
         let sc = Scenery(room: room, look: look, tint: tint, center: center, halfSize: halfSize, angle: angle,
-                         floorY: floorY, ceilY: ceilY, segs: segs, layout: L, sortGroup: sortGroup)
+                         floorY: floorY, ceilY: ceilY, segs: segs, layout: L, sortGroup: sortGroup, blocked: blocked)
         world.addChild(sc.far)
         local.addChild(sc.near)
         scenery = sc

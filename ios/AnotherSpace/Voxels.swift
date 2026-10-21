@@ -31,7 +31,8 @@ enum Vox {
 
 /// 그물 한 덩어리를 읽은 결과
 struct SkinResult: Sendable {
-    var vox: [Int64: Float] = [:]         // 10cm 블록 → 그 안에 든 가구 면 넓이
+    var cols: [Int64: Float] = [:]        // 10cm 기둥(평면 격자) → 그 기둥에 있는 가구 면의 가장 높은 곳 (바닥에서 m)
+    var floorSeen: Set<Int64> = []        // 바닥이 보인 기둥 (그 위에 가구가 없다는 증거)
     var cellArea: [Int64: Float] = [:]    // 1m 칸마다 그물 넓이 (바닥 10cm~2m) — 그 칸을 지금 잘 보고 있는지
     var doorHits: [Int: Set<Int>] = [:]   // 문 번호 → 문 자리를 막고 있는 칸 (폭 10cm × 높이 10cm) — 실제 문이 닫혔는지 판단
     var doorTouched: Set<Int> = []        // 이 그물이 문 자리를 지나는 문
@@ -116,6 +117,7 @@ enum Skin {
         let wv = m.v.map { simd_make_float3(m.m * SIMD4<Float>($0, 1)) }
         let keep = keepMask(wv, m.f, floorY: L.floorY + fit.y)
         var floors: [Float] = []
+        var colTop: [Int64: Float] = [:], colArea: [Int64: Float] = [:]
         var i = 0, fi = 0
         while i + 2 < m.f.count {
             defer { i += 3; fi += 1 }
@@ -130,11 +132,18 @@ enum Skin {
             let pp = L.plane(ctr.x, ctr.z)
             let hgt = ctr.y - L.floorY
             if hgt > 0.1 && hgt < 2.0 { out.cellArea[Vox.chunkOf(pp), default: 0] += len / 2 }
-            guard fi < keep.count, keep[fi] else { continue }
             let n = cr / len
             let cls: UInt8 = fi < m.c.count ? m.c[fi] : 0
-            if !saved && cls == MeshClass.floor && n.y > 0.9 { floors.append((a.y + b.y + c.y) / 3) }
             let ns = fit.dirToSaved(n)
+            // 바닥이 보이는 기둥: 그 위엔 가구가 없음 (예전에 생긴 기둥을 지우는 근거)
+            if !saved && (cls == MeshClass.floor || ns.y > 0.85) && abs(hgt) < 0.08 {
+                for s in [sa, sb, sc, ctr] {
+                    let q = L.plane(s.x, s.z)
+                    out.floorSeen.insert(Vox.chunkKey(Int((q.x / Vox.size).rounded(.down)), Int((q.y / Vox.size).rounded(.down))))
+                }
+            }
+            guard fi < keep.count, keep[fi] else { continue }
+            if !saved && cls == MeshClass.floor && n.y > 0.9 { floors.append((a.y + b.y + c.y) / 3) }
             // 문 자리(앞뒤 30cm, 양옆 15cm)는 문턱 높이(12cm) 위를 모두 비움 — 문틀·문짝·전선이 허공에 뜬 조각처럼 보이지 않게.
             // 실제 문이 닫혔는지는 '문 자리를 가로막고 선 면'만 셈: 건너가는 방향을 마주 보는 면이
             // 문틀 안쪽(양옆 8cm 뺀 폭 × 0.3~1.9m)을 얼마나 덮는지. 옆으로 젖혀진 문짝·문틀 옆면은 방향이 달라 안 셈
@@ -163,8 +172,9 @@ enum Skin {
             if abs(ns.y) < 0.5 && (here.wall < 0.6 || (wallish && here.wall < 1.2)) { continue }
             if hgt > 2.0 { continue }                                // 머리 위 (천장 조명·커튼 레일)
             if cls == MeshClass.ceiling || hgt > L.ceil[r] - 0.1 { continue }
-            if cls == MeshClass.floor || (ns.y > 0.8 && hgt < 0.06) || hgt < -0.05 { continue }
-            // 10cm 블록으로: 삼각형 위를 5cm 간격으로 찍어 그 점이 든 블록에 넓이를 나눠 담음
+            // 바닥·바닥에 깔린 것(러그·바닥 얼룩)은 가구가 아님
+            if cls == MeshClass.floor || (ns.y > 0.8 && hgt < 0.15) || hgt < -0.05 { continue }
+            // 10cm 기둥으로: 삼각형 위를 5cm 간격으로 찍어 그 점이 든 기둥의 가장 높은 곳과 넓이를 모음
             func q(_ s: SIMD3<Float>) -> SIMD3<Float> { let p = L.plane(s.x, s.z); return SIMD3<Float>(p.x, s.y - L.floorY, p.y) }
             let qa = q(sa), qb = q(sb), qc = q(sc)
             let e = max(simd_distance(qa, qb), max(simd_distance(qb, qc), simd_distance(qc, qa)))
@@ -175,11 +185,14 @@ enum Skin {
                     let w1 = Float(x) / Float(k), w2 = Float(y) / Float(k)
                     let p = qa + (qb - qa) * w1 + (qc - qa) * w2
                     guard p.y >= 0, p.y < 2.05 else { continue }
-                    let key = Vox.key(Int((p.x / Vox.size).rounded(.down)), Int((p.z / Vox.size).rounded(.down)), Int((p.y / Vox.size).rounded(.down)))
-                    out.vox[key, default: 0] += per
+                    let key = Vox.chunkKey(Int((p.x / Vox.size).rounded(.down)), Int((p.z / Vox.size).rounded(.down)))
+                    colArea[key, default: 0] += per
+                    if p.y > (colTop[key] ?? 0) { colTop[key] = p.y }
                 }
             }
         }
+        // 넓이가 작은 기둥(스치기만 한 조각)과 15cm 밑(바닥에 놓인 납작한 것)은 버림
+        for (k, top) in colTop where top >= 0.15 && (colArea[k] ?? 0) >= 0.0015 { out.cols[k] = top }
         if floors.count >= 20 {
             floors.sort()
             out.floorY = floors[floors.count / 2]
@@ -206,168 +219,151 @@ enum Skin {
     }
 }
 
-/// 탐험하며 알아낸 블록을 공간 폴더에 저장 (다음 탐험에선 처음부터 가구가 있게). 다시 스캔하면 지움
+/// 탐험하며 확인한 가구 기둥을 공간 폴더에 저장 (다음 탐험에선 처음부터 가구가 있게). 다시 스캔하면 지움.
+/// cols.bin: 기둥마다 Int64 하나 (아래 48비트 = 기둥 키, 위 = 높이 10cm 단위). 예전 블록 파일(vox.bin)은 쓰지 않고 지움
 enum VoxStore {
-    static func url(_ id: String) -> URL { SpaceStore.folder(id).appendingPathComponent("vox.bin") }
+    static func url(_ id: String) -> URL { SpaceStore.folder(id).appendingPathComponent("cols.bin") }
+    private static let keyMask: Int64 = (1 << 48) - 1
 
-    static func save(_ id: String, _ keys: Set<Int64>) {
-        var arr = Array(keys)
+    static func save(_ id: String, _ cols: [Int64: UInt8]) {
+        var arr = cols.map { ($0.key & keyMask) | (Int64($0.value) << 48) }
         let data = arr.withUnsafeMutableBufferPointer { Data(buffer: $0) }
         try? data.write(to: url(id), options: .atomic)
     }
 
-    static func load(_ id: String) -> Set<Int64>? {
+    static func load(_ id: String) -> [Int64: UInt8]? {
+        try? FileManager.default.removeItem(at: SpaceStore.folder(id).appendingPathComponent("vox.bin"))
         guard let data = try? Data(contentsOf: url(id)), data.count >= 8, data.count % 8 == 0 else { return nil }
-        var out = Set<Int64>()
+        var out: [Int64: UInt8] = [:]
         data.withUnsafeBytes { raw in
-            for i in 0..<(data.count / 8) { out.insert(raw.loadUnaligned(fromByteOffset: i * 8, as: Int64.self)) }
+            for i in 0..<(data.count / 8) {
+                let v = raw.loadUnaligned(fromByteOffset: i * 8, as: Int64.self)
+                out[v & keyMask] = UInt8(truncatingIfNeeded: v >> 48)
+            }
         }
         return out
     }
 
-    static func clear(_ id: String) { try? FileManager.default.removeItem(at: url(id)) }
+    static func clear(_ id: String) {
+        try? FileManager.default.removeItem(at: url(id))
+        try? FileManager.default.removeItem(at: SpaceStore.folder(id).appendingPathComponent("vox.bin"))
+    }
 }
 
-/// 블록 세계: 블록을 1m 칸마다 그물 하나로 (같은 방향·같은 재질로 맞닿은 면은 큰 사각형 하나로 합침)
+/// 가구 = 바닥에서 솟은 10cm 기둥들 (마인크래프트처럼 반듯한 덩어리).
+/// - 기둥마다 점수: 그물에 가구로 보이면 +2, 바닥이 보이면(그 위가 비었음) -1. 3점이 되어야 보이고, 0점 밑으로 떨어져야 사라짐 →
+///   그물이 한두 번 흔들려도 생겼다 사라졌다 하지 않음. 비전프로가 그물을 치워도(멀어져서) 그대로 둠
+/// - 늘 바닥에서 솟은 기둥이라 허공에 뜬 블록이 생길 수 없음. 둘레 8칸 중 기둥이 2개 넘게 있어야 그림(외톨이 기둥 없음)
+/// - 높이는 최근 4번 본 값의 가운데 값, 20cm 넘게 바뀌거나 세 번 연속 같을 때만 바꿈
 @MainActor
 final class VoxelWorld {
+    private struct Col {
+        var score: Int8 = 0
+        var shown = false
+        var h: UInt8 = 0                    // 보이는 높이 (10cm 단위)
+        var hist: [UInt8] = []              // 최근 본 높이
+        var seen: UInt8 = 0                 // 가구로 본 횟수
+    }
     let root = Entity()                                 // 저장 좌표 (공간 뿌리 아래)
     private let L: Layout
-    private(set) var known: Set<Int64> = []             // 보이는 블록
-    private var byChunk: [Int64: Set<Int64>] = [:]
-    private var support: [Int64: Int] = [:]             // 지금 그물 몇 덩어리가 이 블록을 보고 있는지
-    private var anchorKeys: [UUID: Set<Int64>] = [:]
-    private var anchorCells: [UUID: [Int64: Float]] = [:]
-    private var cellLive: [Int64: Float] = [:]          // 1m 칸별 지금 그물 넓이
-    private var cellSaved: [Int64: Float] = [:]         // 1m 칸별 스캔 그물 넓이
-    private var missing: [Int64: Float] = [:]           // 블록이 그물에서 사라진 때
+    private var cols: [Int64: Col] = [:]
+    private var byChunk: [Int64: Set<Int64>] = [:]      // 1m 칸 → 보이는 기둥
     private var dirty: Set<Int64> = []
     private var ents: [Int64: ModelEntity] = [:]
     private var lineEnts: [Int64: ModelEntity] = [:]
     private var colRoom: [Int64: Int] = [:]
-    private var pruneT: Float = 0
-    private(set) var changed = false                    // 마지막 저장 뒤 바뀜
-    /// (방, 그늘 0~2) → 재질
+    private(set) var changed = false
     var material: (Int, Int) -> RealityKit.Material = { _, _ in UnlitMaterial(color: .gray) }
-    /// 방 → 해 방향 (저장 좌표)
     var sun: (Int) -> SIMD3<Float> = { _ in SIMD3<Float>(0, 1, 0) }
-    /// 방 → 무늬 한 장 길이(m)
     var tile: (Int) -> Float = { _ in 1 }
-    /// 방 → 선 그림 모드인지 (블록 테두리를 검은 선으로)
     var lines: (Int) -> Bool = { _ in false }
     var fallbackRoom = 1
 
     init(_ L: Layout) { self.L = L }
 
-    var isEmpty: Bool { known.isEmpty }
+    private static let off: Int64 = 1 << 20
+    private static let mask: Int64 = (1 << 21) - 1
+    private static func uv(_ k: Int64) -> (Int, Int) { (Int(((k >> 21) & mask) - off), Int((k & mask) - off)) }
+    private static func chunkOfCol(_ k: Int64) -> Int64 { let (u, v) = uv(k); return Vox.chunkKey(Vox.fdiv(u), Vox.fdiv(v)) }
 
-    // MARK: 블록 넣고 빼기
-    func seed(_ keys: Set<Int64>, cells: [Int64: Float]) {
-        cellSaved = cells
-        for k in keys where !known.contains(k) { insert(k) }
-    }
-
-    private func insert(_ k: Int64) {
-        known.insert(k)
-        byChunk[Vox.chunk(k), default: []].insert(k)
-        markDirty(k)
-    }
-
-    private func erase(_ k: Int64) {
-        known.remove(k)
-        byChunk[Vox.chunk(k)]?.remove(k)
-        markDirty(k)
-    }
-
-    /// 그 블록의 칸 (칸 가장자리면 옆 칸도 — 맞닿은 면을 다시 정해야 함)
-    private func markDirty(_ k: Int64) {
-        let (u, v, _) = Vox.unpack(k)
-        let cu = Vox.fdiv(u), cv = Vox.fdiv(v)
-        dirty.insert(Vox.chunkKey(cu, cv))
-        let mu = u - cu * 10, mv = v - cv * 10
-        if mu == 0 { dirty.insert(Vox.chunkKey(cu - 1, cv)) }
-        if mu == 9 { dirty.insert(Vox.chunkKey(cu + 1, cv)) }
-        if mv == 0 { dirty.insert(Vox.chunkKey(cu, cv - 1)) }
-        if mv == 9 { dirty.insert(Vox.chunkKey(cu, cv + 1)) }
-    }
-
-    /// 그 1m 칸을 지금 잘 보고 있는지 (스캔 때 그물의 60% 넘게 지금 그물이 채움)
-    private func observed(_ c: Int64) -> Bool {
-        let live = cellLive[c] ?? 0
-        return live >= max(0.1, (cellSaved[c] ?? 0) * 0.6)
-    }
-
-    /// 그물 한 덩어리를 새로 읽음: 새 블록은 바로 보이고, 잘 보고 있는 칸에서 아무 그물에도 없는 블록은 사라질 후보
-    func update(_ id: UUID, vox: [Int64: Float], cells: [Int64: Float], now: Float) {
-        var keys = Set<Int64>()
-        for (k, a) in vox where a >= Skin.voxMin { keys.insert(k) }
-        let old = anchorKeys[id] ?? []
-        for k in keys.subtracting(old) { support[k, default: 0] += 1 }
-        for k in old.subtracting(keys) { drop(k, now) }
-        anchorKeys[id] = keys.isEmpty ? nil : keys
-        let oc = anchorCells[id] ?? [:]
-        for c in Set(oc.keys).union(cells.keys) {
-            let v = (cellLive[c] ?? 0) - (oc[c] ?? 0) + (cells[c] ?? 0)
-            cellLive[c] = v > 1e-4 ? v : nil
-        }
-        anchorCells[id] = cells.isEmpty ? nil : cells
-        for k in keys {
-            missing[k] = nil
-            if !known.contains(k) { insert(k); changed = true }
-        }
-        for c in cells.keys where observed(c) {
-            for k in byChunk[c] ?? [] where (support[k] ?? 0) == 0 && missing[k] == nil { missing[k] = now }
+    // MARK: 기둥 넣고 빼기
+    /// 지난 탐험에서 확인한 기둥(또는 스캔 그물에서 만든 기둥) — 처음부터 보임
+    func seed(_ list: [Int64: UInt8]) {
+        for (k, h) in list where h >= 2 {
+            var c = Col()
+            c.score = 4; c.shown = true; c.h = h; c.hist = [h, h, h]; c.seen = 3
+            cols[k] = c
+            byChunk[Self.chunkOfCol(k), default: []].insert(k)
+            markDirty(k)
         }
     }
 
-    private func drop(_ k: Int64, _ now: Float) {
-        let n = (support[k] ?? 0) - 1
-        if n <= 0 {
-            support[k] = nil
-            if known.contains(k) && missing[k] == nil { missing[k] = now }
-        } else {
-            support[k] = n
+    /// 그물 한 덩어리를 새로 읽음 (좌표가 자리를 잡은 뒤에만 부름)
+    func update(cols obs: [Int64: Float], floor: Set<Int64>) {
+        for (k, top) in obs {
+            var c = cols[k] ?? Col()
+            c.score = min(6, c.score + 2)
+            c.seen = c.seen < 250 ? c.seen + 1 : c.seen
+            c.hist.append(UInt8(min(21, max(2, Int((top / Vox.size).rounded(.up))))))
+            if c.hist.count > 4 { c.hist.removeFirst() }
+            apply(k, c)
+        }
+        for k in floor where obs[k] == nil {
+            guard var c = cols[k] else { continue }
+            c.score = max(-4, c.score - 1)
+            apply(k, c)
         }
     }
 
-    /// 비전프로가 그물 덩어리를 치움 (멀어져서) — 지운다는 뜻이 아니므로 블록은 남음
-    func remove(_ id: UUID, now: Float) {
-        for k in anchorKeys.removeValue(forKey: id) ?? [] {
-            let n = (support[k] ?? 0) - 1
-            support[k] = n > 0 ? n : nil
-        }
-        if let oc = anchorCells.removeValue(forKey: id) {
-            for (c, a) in oc {
-                let v = (cellLive[c] ?? 0) - a
-                cellLive[c] = v > 1e-4 ? v : nil
-            }
-        }
+    private func median(_ a: [UInt8]) -> UInt8 {
+        guard !a.isEmpty else { return 0 }
+        let s = a.sorted()
+        return s[s.count / 2]
     }
 
-    /// 매 프레임: 사라질 후보 정리(0.25초마다) + 바뀐 칸 다시 그리기(한 번에 budget개)
-    func tick(now: Float, budget: Int = 8) {
-        if now - pruneT > 0.25 {
-            pruneT = now
-            var gone: [Int64] = []
-            for (k, t0) in missing where now - t0 > 3 { gone.append(k) }
-            for k in gone {
-                missing[k] = nil
-                guard (support[k] ?? 0) == 0, known.contains(k), observed(Vox.chunk(k)) else { continue }
-                erase(k)
+    private func apply(_ k: Int64, _ c0: Col) {
+        var c = c0
+        let med = median(c.hist)
+        if !c.shown && c.score >= 3 {
+            c.shown = true
+            c.h = med
+            byChunk[Self.chunkOfCol(k), default: []].insert(k)
+            markDirty(k)
+            changed = true
+        } else if c.shown && c.score <= 0 {
+            c.shown = false
+            byChunk[Self.chunkOfCol(k)]?.remove(k)
+            markDirty(k)
+            changed = true
+        } else if c.shown && med != c.h {
+            let steady = c.hist.count >= 3 && c.hist.suffix(3).allSatisfy { $0 == med }
+            if abs(Int(med) - Int(c.h)) >= 2 || steady {
+                c.h = med
+                markDirty(k)
                 changed = true
             }
         }
+        if !c.shown && c.score <= -4 { cols[k] = nil; return }
+        cols[k] = c
+    }
+
+    /// 그 기둥의 칸 (칸 가장자리면 옆 칸도 — 옆면·외톨이 판단이 이웃에 따라 바뀜)
+    private func markDirty(_ k: Int64) {
+        let (u, v) = Self.uv(k)
+        for du in -1...1 { for dv in -1...1 { dirty.insert(Vox.chunkKey(Vox.fdiv(u + du), Vox.fdiv(v + dv))) } }
+    }
+
+    /// 매 프레임: 바뀐 칸 다시 그리기 (한 번에 budget개)
+    func tick(budget: Int = 6) {
         guard !dirty.isEmpty else { return }
         for c in Array(dirty.prefix(budget)) { rebuild(c) }
     }
 
-    /// 테마가 바뀜 → 모든 칸을 새 재질로
     func restyle() {
         dirty.formUnion(byChunk.keys)
         dirty.formUnion(ents.keys)
     }
 
-    /// 처음 한 번에 모두 그림 (보이기 전에)
     func rebuildAll() async {
         var n = 0
         while let c = dirty.first {
@@ -379,19 +375,36 @@ final class VoxelWorld {
 
     func markSaved() { changed = false }
 
-    /// 그림 높이(1.0~2.2m)에 블록이 있는 10cm 칸 — 전시관 그림 자리 고르기
-    func blockedCells() -> Set<Int64> {
+    /// 저장할 기둥: 보이고, 세 번 넘게 확인한 것만 (잘못 생긴 기둥이 다음 탐험으로 넘어가지 않게)
+    func saveList() -> [Int64: UInt8] {
+        var out: [Int64: UInt8] = [:]
+        for (k, c) in cols where c.shown && c.seen >= 3 { out[k] = c.h }
+        return out
+    }
+
+    /// 높이가 minH(m) 넘는 보이는 기둥의 10cm 칸 (그림·벽 꾸밈 자리 고르기)
+    func blockedCells(minH: Float) -> Set<Int64> {
         var out = Set<Int64>()
-        for k in known {
-            let (u, v, y) = Vox.unpack(k)
-            if y >= 10 && y <= 21 { out.insert(Vox.planeCell(u, v)) }
+        for (k, c) in cols where c.shown && Float(c.h) * Vox.size >= minH {
+            let (u, v) = Self.uv(k)
+            out.insert(Vox.planeCell(u, v))
         }
         return out
     }
 
     // MARK: 그물 만들기
+    /// 그려지는 높이 (외톨이 기둥은 0)
+    private func shownH(_ u: Int, _ v: Int) -> Int {
+        guard let c = cols[Vox.chunkKey(u, v)], c.shown else { return 0 }
+        var n = 0
+        for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
+            if let o = cols[Vox.chunkKey(u + du, v + dv)], o.shown { n += 1; if n >= 2 { return Int(c.h) } }
+        } }
+        return 0
+    }
+
     private func roomAt(_ u: Int, _ v: Int) -> Int {
-        let ck = Vox.chunkKey(u, v)          // 블록 기둥 키로 재사용
+        let ck = Vox.chunkKey(u, v)
         if let r = colRoom[ck] { return r }
         let p = L.flat(SIMD2<Float>((Float(u) + 0.5) * Vox.size, (Float(v) + 0.5) * Vox.size))
         var r = L.at(x: p.x, z: p.y).room
@@ -401,75 +414,51 @@ final class VoxelWorld {
         return r
     }
 
-    private static let dirs: [(Int, Int, Int)] = [(1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1)]
-
-    private func neighborCount(_ k: Int64) -> Int {
-        let (u, v, y) = Vox.unpack(k)
-        var n = 0
-        for du in -1...1 { for dv in -1...1 { for dy in -1...1 where du != 0 || dv != 0 || dy != 0 {
-            if known.contains(Vox.key(u + du, v + dv, y + dy)) { n += 1; if n >= 2 { return n } }
-        } } }
-        return n
-    }
-
-    /// 면 하나의 꼭짓점 (블록 단위 좌표: x=u, y=높이, z=v)
-    private static func corner(_ d: Int, _ layer: Int, _ a: Int, _ b: Int) -> SIMD3<Float> {
-        switch d {
-        case 0: return SIMD3<Float>(Float(layer + 1), Float(b), Float(a))
-        case 1: return SIMD3<Float>(Float(layer), Float(b), Float(a))
-        case 2: return SIMD3<Float>(Float(a), Float(layer + 1), Float(b))
-        case 3: return SIMD3<Float>(Float(a), Float(layer), Float(b))
-        case 4: return SIMD3<Float>(Float(a), Float(b), Float(layer + 1))
-        default: return SIMD3<Float>(Float(a), Float(b), Float(layer))
-        }
-    }
-
     private func rebuild(_ c: Int64) {
         dirty.remove(c)
         let keys = byChunk[c] ?? []
-        // 외톨이 블록(둘레 26칸에 블록이 하나뿐인 것)은 그리지 않음 — 허공에 뜬 점
-        var show: [Int64] = []
-        for k in keys where neighborCount(k) >= 2 || Vox.unpack(k).2 <= 1 { show.append(k) }
-        if show.isEmpty {
-            ents.removeValue(forKey: c)?.removeFromParent()
-            lineEnts.removeValue(forKey: c)?.removeFromParent()
-            if keys.isEmpty { byChunk[c] = nil }
-            return
+        if keys.isEmpty { byChunk[c] = nil }
+        let floorY = L.floorY
+        func world(_ u: Float, _ v: Float, _ h: Float) -> SIMD3<Float> {
+            let f = L.flat(SIMD2<Float>(u * Vox.size, v * Vox.size))
+            return SIMD3<Float>(f.x, floorY + h * Vox.size, f.y)
         }
-        // 면 모으기: (방향, 층, 재질) → 그 층의 2D 칸들
-        struct G: Hashable { let d: Int; let layer: Int; let mat: Int }
-        var groups: [G: Set<SIMD2<Int32>>] = [:]
         let ex3 = SIMD3<Float>(L.ex.x, 0, L.ex.y), ez3 = SIMD3<Float>(L.ez.x, 0, L.ez.y)
-        let normals: [SIMD3<Float>] = [ex3, -ex3, SIMD3<Float>(0, 1, 0), SIMD3<Float>(0, -1, 0), ez3, -ez3]
+        func shade(_ n: SIMD3<Float>, _ room: Int) -> Int {
+            let l = simd_dot(n, sun(room))
+            return l > 0.35 ? 0 : (l > -0.15 ? 1 : 2)
+        }
+        // 윗면: (높이, 재질) → 칸들 / 옆면: (방향, 줄, 아래, 위, 재질) → 줄 따라 위치들
+        struct T: Hashable { let h: Int; let mat: Int }
+        struct S: Hashable { let d: Int; let line: Int; let lo: Int; let hi: Int; let mat: Int }
+        var tops: [T: Set<SIMD2<Int32>>] = [:]
+        var sides: [S: [Int]] = [:]
         var lineRooms = Set<Int>()
-        for k in show {
-            let (u, v, y) = Vox.unpack(k)
+        for k in keys {
+            let (u, v) = Self.uv(k)
+            let h = shownH(u, v)
+            guard h > 0 else { continue }
             let room = roomAt(u, v)
             if lines(room) { lineRooms.insert(room) }
-            for (d, o) in Self.dirs.enumerated() where !known.contains(Vox.key(u + o.0, v + o.2, y + o.1)) {
-                let l = simd_dot(normals[d], sun(room))
-                let shade = l > 0.35 ? 0 : (l > -0.15 ? 1 : 2)
-                let layer: Int, a: Int, b: Int
-                switch d {
-                case 0, 1: layer = u; a = v; b = y
-                case 2, 3: layer = y; a = u; b = v
-                default: layer = v; a = u; b = y
-                }
-                groups[G(d: d, layer: layer, mat: room * 4 + shade), default: []].insert(SIMD2<Int32>(Int32(a), Int32(b)))
+            tops[T(h: h, mat: room * 4 + shade(SIMD3<Float>(0, 1, 0), room)), default: []].insert(SIMD2<Int32>(Int32(u), Int32(v)))
+            let nb = [(u + 1, v, 0, ex3), (u - 1, v, 1, -ex3), (u, v + 1, 2, ez3), (u, v - 1, 3, -ez3)]
+            for (nu, nv, d, n3) in nb {
+                let nh = shownH(nu, nv)
+                guard nh < h else { continue }
+                let line = d == 0 ? u + 1 : (d == 1 ? u : (d == 2 ? v + 1 : v))
+                let along = d < 2 ? v : u
+                sides[S(d: d, line: line, lo: nh, hi: h, mat: room * 4 + shade(n3, room)), default: []].append(along)
             }
         }
-        // 같은 층·같은 재질 칸들을 큰 사각형으로 합침 (그리는 면 수가 줄고 선 그림도 깔끔)
         var geos: [Int: Geo] = [:]
-        let floorY = L.floorY
-        func world(_ p: SIMD3<Float>) -> SIMD3<Float> {
-            let f = L.flat(SIMD2<Float>(p.x * Vox.size, p.z * Vox.size))
-            return SIMD3<Float>(f.x, floorY + p.y * Vox.size, f.y)
-        }
-        for (g, cells) in groups {
+        var lg = Geo()
+        let lw: Float = 0.012
+        // 윗면: 같은 높이·재질 칸을 큰 사각형으로
+        for (g, cells) in tops {
             var left = cells
             let sorted = cells.sorted { $0.y != $1.y ? $0.y < $1.y : $0.x < $1.x }
-            let room = g.mat / 4
-            let t = max(0.2, tile(room))
+            let t = max(0.2, tile(g.mat / 4)) / Vox.size
+            let hy = Float(g.h)
             for s in sorted where left.contains(s) {
                 var a1 = s.x
                 while left.contains(SIMD2<Int32>(a1 + 1, s.y)) { a1 += 1 }
@@ -479,23 +468,41 @@ final class VoxelWorld {
                     b1 += 1
                 }
                 for b in s.y...b1 { for a in s.x...a1 { left.remove(SIMD2<Int32>(a, b)) } }
-                let c0 = Self.corner(g.d, g.layer, Int(s.x), Int(s.y)), c1 = Self.corner(g.d, g.layer, Int(a1) + 1, Int(s.y))
-                let c2 = Self.corner(g.d, g.layer, Int(a1) + 1, Int(b1) + 1), c3 = Self.corner(g.d, g.layer, Int(s.x), Int(b1) + 1)
-                let pts = [c0, c1, c2, c3].map(world)
-                let uvs: [SIMD2<Float>] = [c0, c1, c2, c3].map { c in
-                    switch g.d {
-                    case 0, 1: return SIMD2<Float>(c.z, -c.y) * (Vox.size / t)
-                    case 2, 3: return SIMD2<Float>(c.x, c.z) * (Vox.size / t)
-                    default: return SIMD2<Float>(c.x, -c.y) * (Vox.size / t)
-                    }
+                let u0 = Float(s.x), u1 = Float(a1) + 1, v0 = Float(s.y), v1 = Float(b1) + 1
+                geos[g.mat, default: Geo()].quad(world(u0, v0, hy), world(u1, v0, hy), world(u1, v1, hy), world(u0, v1, hy),
+                                                 SIMD2<Float>(u0, v0) / t, SIMD2<Float>(u1, v0) / t, SIMD2<Float>(u1, v1) / t, SIMD2<Float>(u0, v1) / t)
+            }
+        }
+        // 옆면: 같은 줄에서 이어진 칸을 한 장으로, 선 그림이면 윗모서리·양끝 세로선·바닥선
+        for (s, list) in sides {
+            let room = s.mat / 4
+            let t = max(0.2, tile(room)) / Vox.size
+            let drawLines = lineRooms.contains(room)
+            let sorted = list.sorted()
+            var i = 0
+            while i < sorted.count {
+                var j = i
+                while j + 1 < sorted.count && sorted[j + 1] == sorted[j] + 1 { j += 1 }
+                let a0 = Float(sorted[i]), a1 = Float(sorted[j]) + 1
+                let ln = Float(s.line), lo = Float(s.lo), hi = Float(s.hi)
+                let p: [SIMD3<Float>] = s.d < 2
+                    ? [world(ln, a0, lo), world(ln, a1, lo), world(ln, a1, hi), world(ln, a0, hi)]
+                    : [world(a0, ln, lo), world(a1, ln, lo), world(a1, ln, hi), world(a0, ln, hi)]
+                geos[s.mat, default: Geo()].quad(p[0], p[1], p[2], p[3],
+                                                 SIMD2<Float>(a0, -lo) / t, SIMD2<Float>(a1, -lo) / t, SIMD2<Float>(a1, -hi) / t, SIMD2<Float>(a0, -hi) / t)
+                if drawLines {
+                    lg.stroke(p[3], p[2], width: lw)                   // 윗모서리
+                    if s.lo == 0 { lg.stroke(p[0], p[1], width: lw) }  // 바닥에 닿는 선
+                    lg.stroke(p[0], p[3], width: lw)                   // 양끝 세로선
+                    lg.stroke(p[1], p[2], width: lw)
                 }
-                geos[g.mat, default: Geo()].quad(pts[0], pts[1], pts[2], pts[3], uvs[0], uvs[1], uvs[2], uvs[3])
+                i = j + 1
             }
         }
         var descs: [MeshDescriptor] = []
         var ms: [RealityKit.Material] = []
         for (mk, geo) in geos where !geo.isEmpty {
-            var md = MeshDescriptor(name: "v\(mk)")
+            var md = MeshDescriptor(name: "c\(mk)")
             md.positions = MeshBuffers.Positions(geo.pos)
             md.textureCoordinates = MeshBuffers.TextureCoordinates(geo.uv)
             md.primitives = .triangles(geo.idx)
@@ -503,74 +510,19 @@ final class VoxelWorld {
             descs.append(md)
             ms.append(material(mk / 4, mk % 4))
         }
-        let e: ModelEntity
-        if let old = ents[c] { e = old } else { e = ModelEntity(); root.addChild(e); ents[c] = e }
-        if !descs.isEmpty, let mesh = try? MeshResource.generate(from: descs) {
-            e.model = ModelComponent(mesh: mesh, materials: ms)
+        if descs.isEmpty {
+            ents.removeValue(forKey: c)?.removeFromParent()
         } else {
-            e.model = nil
+            let e: ModelEntity
+            if let old = ents[c] { e = old } else { e = ModelEntity(); root.addChild(e); ents[c] = e }
+            if let mesh = try? MeshResource.generate(from: descs) { e.model = ModelComponent(mesh: mesh, materials: ms) }
         }
-        // 선 그림 모드: 블록 덩어리의 모서리(꺾이는 곳)만 검은 선으로
-        if !lineRooms.isEmpty, let lg = outline(show.filter { lineRooms.contains(roomAt(Vox.unpack($0).0, Vox.unpack($0).1)) }, world) {
+        if let m = lg.mesh("outline") {
             let le: ModelEntity
             if let old = lineEnts[c] { le = old } else { le = ModelEntity(); root.addChild(le); lineEnts[c] = le }
-            le.model = ModelComponent(mesh: lg, materials: [Ink.line])
+            le.model = ModelComponent(mesh: m, materials: [Ink.line])
         } else {
             lineEnts.removeValue(forKey: c)?.removeFromParent()
         }
-    }
-
-    /// 블록 덩어리 모서리 선: 모서리를 둘러싼 네 칸 중 블록이 1·3칸이거나 대각선 2칸이면 꺾이는 곳(선), 나란한 2칸이면 평평한 면(선 없음).
-    /// 한 줄로 이어지는 모서리는 긴 선 하나로 합침
-    private func outline(_ list: [Int64], _ world: (SIMD3<Float>) -> SIMD3<Float>) -> MeshResource? {
-        // 모서리 = (축, 시작 꼭짓점) — 축 0: u 방향, 1: 높이 방향, 2: v 방향
-        var edges: [Int: Set<SIMD3<Int32>>] = [0: [], 1: [], 2: []]
-        func has(_ u: Int, _ v: Int, _ y: Int) -> Bool { known.contains(Vox.key(u, v, y)) }
-        for k in list {
-            let (u, v, y) = Vox.unpack(k)
-            // 이 블록의 모서리 12개
-            for ax in 0..<3 {
-                for i in 0..<2 { for j in 0..<2 {
-                    var s = SIMD3<Int32>(Int32(u), Int32(y), Int32(v))      // x=u, y=높이, z=v (꼭짓점 좌표)
-                    switch ax {
-                    case 0: s.y += Int32(i); s.z += Int32(j)
-                    case 1: s.x += Int32(i); s.z += Int32(j)
-                    default: s.x += Int32(i); s.y += Int32(j)
-                    }
-                    edges[ax]?.insert(s)
-                }}
-            }
-        }
-        var g = Geo()
-        let w: Float = 0.011
-        for ax in 0..<3 {
-            var keep = Set<SIMD3<Int32>>()
-            for s in edges[ax] ?? [] {
-                // 모서리 둘레 네 칸
-                let x = Int(s.x), y = Int(s.y), z = Int(s.z)
-                var occ: [Bool]
-                switch ax {
-                case 0: occ = [has(x, z - 1, y - 1), has(x, z - 1, y), has(x, z, y), has(x, z, y - 1)]
-                case 1: occ = [has(x - 1, z - 1, y), has(x, z - 1, y), has(x, z, y), has(x - 1, z, y)]
-                default: occ = [has(x - 1, z, y - 1), has(x, z, y - 1), has(x, z, y), has(x - 1, z, y)]
-                }
-                let n = occ.filter { $0 }.count
-                let crease = n == 1 || n == 3 || (n == 2 && occ[0] == occ[2])
-                if crease { keep.insert(s) }
-            }
-            // 한 줄로 이어 붙이기
-            let step: SIMD3<Int32> = ax == 0 ? SIMD3<Int32>(1, 0, 0) : (ax == 1 ? SIMD3<Int32>(0, 1, 0) : SIMD3<Int32>(0, 0, 1))
-            for s in keep where !keep.contains(s &- step) {
-                var e = s
-                while keep.contains(e &+ step) { e = e &+ step }
-                // 블록 한 칸짜리 짧은 모서리(비스듬한 면의 계단)는 그리지 않음 — 선이 지저분해지지 않게, 곧은 큰 윤곽만
-                let run = Int(e.x - s.x) + Int(e.y - s.y) + Int(e.z - s.z) + 1
-                if run < 2 { continue }
-                let a = world(SIMD3<Float>(Float(s.x), Float(s.y), Float(s.z)))
-                let b = world(SIMD3<Float>(Float(e.x + step.x), Float(e.y + step.y), Float(e.z + step.z)))
-                g.stroke(a, b, width: w)
-            }
-        }
-        return g.mesh("outline")
     }
 }
