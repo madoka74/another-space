@@ -1176,13 +1176,13 @@ final class RoomWorld {
         var tp = MaterialParameters.Texture(h.tex)
         tp.sampler = Tex.mirror
         m.color = .init(tint: UIColor(white: 0.62, alpha: 1), texture: tp)
-        m.blending = .transparent(opacity: 1)
+        m.blending = .transparent(opacity: .init(floatLiteral: 1))
         if let e = g.entity("skin", m) { root.addChild(e) }
         // 천장 덮개: 그림의 가장 어두운 색 (하늘 대신 그림 속 밤처럼)
         if let cm = Self.flatMesh(L.rects(room.id), L, y: paintFloor + top - 0.03, tile: 1) {
             let d = h.palette[2] * 0.55
             var mm = UnlitMaterial(color: UIColor(red: CGFloat(d.x), green: CGFloat(d.y), blue: CGFloat(d.z), alpha: 1))
-            mm.blending = .transparent(opacity: 1)
+            mm.blending = .transparent(opacity: .init(floatLiteral: 1))
             root.addChild(ModelEntity(mesh: cm, materials: [mm]))
         }
         root.components.set(OpacityComponent(opacity: 0))

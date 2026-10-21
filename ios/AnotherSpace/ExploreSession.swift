@@ -342,8 +342,13 @@ final class ExploreSession {
             // 문이 쓸고 지나가는 자리의 기둥은 버림 (예전에 저장된 반쯤 열린 문짝 등)
             var clean: [Int64: UInt8] = [:]
             for (k, h) in res {
-                let u = Int(((k >> 21) & ((1 << 21) - 1)) - (1 << 20)), v = Int((k & ((1 << 21) - 1)) - (1 << 20))
-                if !Skin.inSwing(L, SIMD2<Float>((Float(u) + 0.5) * Vox.size, (Float(v) + 0.5) * Vox.size)) { clean[k] = h }
+                let half: Int64 = 1 << 20
+                let mask: Int64 = (1 << 21) - 1
+                let ku: Int64 = (k >> 21) & mask
+                let kv: Int64 = k & mask
+                let pu: Float = (Float(ku - half) + 0.5) * Vox.size
+                let pv: Float = (Float(kv - half) + 0.5) * Vox.size
+                if !Skin.inSwing(L, SIMD2<Float>(pu, pv)) { clean[k] = h }
             }
             vox?.seed(clean)
         }
