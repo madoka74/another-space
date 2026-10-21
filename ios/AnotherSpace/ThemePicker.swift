@@ -13,18 +13,22 @@ extension View {
 struct ThemePicker: View {
     let room: RoomRec
     var compact = false
-    /// (장소, 날씨, 시간)
-    let set: (String, String, String) -> Void
+    /// (장소, 날씨, 시간, 표시 방식)
+    let set: (String, String, String, String) -> Void
+
+    private var look: String { room.lookMode.rawValue }
+    private static let looks = LookMode.allCases.map { AxisItem(id: $0.rawValue, label: $0.label) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 14) {
-            row("장소", Worlds.places, room.place) { set($0, room.weather, room.time) }
-            row("날씨", Worlds.weathers, room.weather) { set(room.place, $0, room.time) }
-            row("시간", Worlds.times, room.time) { set(room.place, room.weather, $0) }
+            row("장소", Worlds.places, room.place) { set($0, room.weather, room.time, look) }
+            row("날씨", Worlds.weathers, room.weather) { set(room.place, $0, room.time, look) }
+            row("시간", Worlds.times, room.time) { set(room.place, room.weather, $0, look) }
+            row("표시", Self.looks, look) { set(room.place, room.weather, room.time, $0) }
             Button {
                 var g = SystemRandomNumberGenerator()
                 let (p, w, t) = Worlds.random(using: &g, avoid: [room.place])
-                set(p, w, t)
+                set(p, w, t, look)
             } label: {
                 Label("아무 세계나", systemImage: "dice")
             }
@@ -42,7 +46,7 @@ struct ThemePicker: View {
                             pick(it.id)
                         } label: {
                             VStack(spacing: 4) {
-                                Image(systemName: Worlds.icon(it.id)).font(.title3)
+                                Image(systemName: LookMode(rawValue: it.id)?.icon ?? Worlds.icon(it.id)).font(.title3)
                                 Text(it.label).font(.caption)
                             }
                             .frame(width: compact ? 60 : 68, height: compact ? 54 : 60)

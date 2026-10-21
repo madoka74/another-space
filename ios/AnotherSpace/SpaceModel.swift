@@ -9,8 +9,29 @@ struct RoomRec: Codable, Identifiable, Equatable, Hashable {
     var weather: String
     var time: String
     var ceil: Float
+    var look: String? = nil          // v0.5부터: 표시 방식 color(컬러)·mono(흑백)·line(선 그림). 없으면 컬러
 
     var title: String { Worlds.title(place: place, weather: weather, time: time) }
+    var lookMode: LookMode { LookMode(rawValue: look ?? "color") ?? .color }
+}
+
+/// 세계를 그리는 방식: 컬러 / 흑백(컬러 그대로 색만 뺌) / 선 그림(흰 바탕에 검은 윤곽선만). 전시관 그림은 어느 방식이든 컬러
+enum LookMode: String, CaseIterable, Sendable {
+    case color, mono, line
+    var label: String {
+        switch self {
+        case .color: return "컬러"
+        case .mono: return "흑백"
+        case .line: return "선 그림"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .color: return "paintpalette"
+        case .mono: return "circle.lefthalf.filled"
+        case .line: return "scribble"
+        }
+    }
 }
 
 /// 저장한 월드 앵커 (비전프로가 기억했다가 같은 자리로 알려 줌) — p: 저장 좌표
@@ -314,18 +335,20 @@ struct SpaceData: Equatable {
     }
 
     /// 세계 바꾸기: '모든 방 같게'면 모든 방을, 아니면 그 방만
-    mutating func setTheme(_ id: Int, place: String, weather: String, time: String) {
+    mutating func setTheme(_ id: Int, place: String, weather: String, time: String, look: String) {
         if rec.isUnified {
-            setAll(place: place, weather: weather, time: time)
+            setAll(place: place, weather: weather, time: time, look: look)
         } else {
-            updateRoom(id) { $0.place = place; $0.weather = weather; $0.time = time }
+            updateRoom(id) { $0.place = place; $0.weather = weather; $0.time = time; $0.look = look }
         }
     }
 
     /// 모든 방을 같은 세계로 ('모든 방 같게'로 바뀜)
-    mutating func setAll(place: String, weather: String, time: String) {
+    mutating func setAll(place: String, weather: String, time: String, look: String) {
         rec.unified = true
-        for i in rec.rooms.indices { rec.rooms[i].place = place; rec.rooms[i].weather = weather; rec.rooms[i].time = time }
+        for i in rec.rooms.indices {
+            rec.rooms[i].place = place; rec.rooms[i].weather = weather; rec.rooms[i].time = time; rec.rooms[i].look = look
+        }
     }
 
     /// 모든 방에 세계를 새로 섞어 배정 (장소는 되도록 겹치지 않게) — '방마다 다르게'로 바뀜
@@ -562,9 +585,9 @@ enum SpaceStore {
     }
 
     /// 세계 바꿔 저장 (메인 메뉴·탐험 중 테마 바꾸기). '모든 방 같게'면 모든 방이 같이 바뀜
-    static func setTheme(_ id: String, room: Int, place: String, weather: String, time: String) {
+    static func setTheme(_ id: String, room: Int, place: String, weather: String, time: String, look: String) {
         guard var s = load(id) else { return }
-        s.setTheme(room, place: place, weather: weather, time: time)
+        s.setTheme(room, place: place, weather: weather, time: time, look: look)
         try? save(s)
     }
 
@@ -590,6 +613,7 @@ enum SpaceStore {
         pos.withUnsafeBufferPointer { data.append(Data(buffer: $0)) }
         data.append(contentsOf: m.c.prefix(n))
         try? data.write(to: f.appendingPathComponent("mesh.bin"), options: .atomic)
+        VoxStore.clear(id)            // 다시 스캔하면 탐험하며 알아 둔 가구 블록은 새 스캔으로 다시 시작
     }
 
     /// (삼각형 꼭짓점들 [a,b,c,…], 분류) — 없으면 nil (예전에 스캔한 공간)

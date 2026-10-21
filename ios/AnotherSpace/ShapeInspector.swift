@@ -129,8 +129,8 @@ struct ShapeInspector: View {
                 Spacer()
                 if d.rec.isUnified { Label("모든 방", systemImage: "square.on.square").font(.caption).foregroundStyle(.secondary) }
             }
-            ThemePicker(room: r) { p, w, t in
-                m.change { d in d.setTheme(r.id, place: p, weather: w, time: t) }
+            ThemePicker(room: r) { p, w, t, l in
+                m.change { d in d.setTheme(r.id, place: p, weather: w, time: t, look: l) }
             }
             Stepper(value: Binding(get: { Double(r.ceil) }, set: { v in m.change { d in d.updateRoom(r.id) { rr in rr.ceil = Float(v) } } }),
                     in: 2.0...3.6, step: 0.05) {

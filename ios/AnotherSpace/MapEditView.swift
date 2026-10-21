@@ -596,10 +596,10 @@ struct MapEditView: View {
                 Button("완료") { unifyRoom = nil }.buttonStyle(.borderedProminent)
             }
             Text(r.title).font(.title3)
-            ThemePicker(room: r) { p, w, t in
-                m.change { $0.setAll(place: p, weather: w, time: t) }
+            ThemePicker(room: r) { p, w, t, l in
+                m.change { $0.setAll(place: p, weather: w, time: t, look: l) }
                 var nr = r
-                nr.place = p; nr.weather = w; nr.time = t
+                nr.place = p; nr.weather = w; nr.time = t; nr.look = l
                 unifyRoom = nr
             }
         }
@@ -607,7 +607,7 @@ struct MapEditView: View {
         .frame(width: 720)
         .onAppear {
             // 시트를 열자마자 지금 세계로 모든 방을 맞춤
-            m.change { $0.setAll(place: r.place, weather: r.weather, time: r.time) }
+            m.change { $0.setAll(place: r.place, weather: r.weather, time: r.time, look: r.lookMode.rawValue) }
         }
     }
 

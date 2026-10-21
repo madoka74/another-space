@@ -39,6 +39,13 @@ def main():
     with ThreadPoolExecutor(4) as ex:
         ok = list(ex.map(lambda p: one(*p), enumerate(lst)))
     print(f'명화 {sum(ok)}/{len(lst)}점 받음', flush=True)
+    # 앱이 그림 파일 → 작품 정보(포켓 갤러리 작품 id·제목·작가·주소)를 알 수 있게 — 도슨트 해설을 받을 때 씀
+    index = []
+    for i, w in enumerate(lst):
+        if os.path.exists(os.path.join(OUT, f'p_{i:03d}.jpg')):
+            index.append({'file': f'p_{i:03d}', 'id': w['id'], 'a': w.get('a', ''), 't': w.get('t', ''), 'img': w.get('img', '')})
+    with open(os.path.join(OUT, 'index.json'), 'w', encoding='utf-8') as f:
+        json.dump(index, f, ensure_ascii=False)
 
 
 if __name__ == '__main__':

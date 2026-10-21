@@ -6,7 +6,7 @@
 사용: python3 tools/make_assets.py   →  ios/AnotherSpace/Resources/{tex,sky,sfx}/"""
 import os, sys, math
 import numpy as np
-from PIL import Image, ImageFilter
+from PIL import Image, ImageFilter, ImageDraw, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, 'ios', 'AnotherSpace', 'Resources')
@@ -1135,6 +1135,99 @@ def scan_grid():
     save_png('scan_grid', rgb, a)
 
 
+def people():
+    """카페 창밖을 지나가는 사람 실루엣 4가지 (앱이 색을 입힘). 투명 그림 + 가림 그림"""
+    W, H = 256, 600
+    kinds = [dict(coat=0.0, bag=False, hat=False), dict(coat=0.35, bag=True, hat=False),
+             dict(coat=0.15, bag=False, hat=True), dict(coat=0.5, bag=False, hat=False)]
+    for k, kd in enumerate(kinds):
+        m = Image.new('L', (W, H), 0)
+        d = ImageDraw.Draw(m)
+        cx = W // 2
+        head = 34
+        d.ellipse([cx - head, 18, cx + head, 18 + head * 2], fill=255)                  # 머리
+        if kd['hat']:
+            d.rectangle([cx - head - 14, 30, cx + head + 14, 40], fill=255)
+            d.rectangle([cx - head + 4, 0, cx + head - 4, 34], fill=255)
+        d.rectangle([cx - 14, 84, cx + 14, 100], fill=255)                           # 목
+        sh = 66                                                                        # 어깨 반폭
+        body_bottom = int(330 + kd['coat'] * 160)
+        d.polygon([(cx - sh, 104), (cx + sh, 104), (cx + sh - 10 + int(kd['coat'] * 30), body_bottom),
+                   (cx - sh + 10 - int(kd['coat'] * 30), body_bottom)], fill=255)          # 몸 (외투면 길게)
+        d.ellipse([cx - sh, 96, cx - sh + 30, 130], fill=255)
+        d.ellipse([cx + sh - 30, 96, cx + sh, 130], fill=255)
+        for s in (-1, 1):                                                              # 팔
+            d.polygon([(cx + s * sh, 112), (cx + s * (sh + 14), 120), (cx + s * (sh + 18), 320), (cx + s * (sh - 6), 322)], fill=255)
+        for s in (-1, 1):                                                              # 다리
+            x0 = cx + s * 10 if s > 0 else cx - 46
+            d.polygon([(x0, body_bottom - 20), (x0 + 36, body_bottom - 20), (x0 + 32 + s * 4, H - 22), (x0 + 6 + s * 4, H - 22)], fill=255)
+            d.ellipse([x0 + s * 6 - 4, H - 36, x0 + 44 + s * 6, H - 6], fill=255)         # 신발
+        if kd['bag']:
+            d.rectangle([cx + sh + 2, 250, cx + sh + 40, 330], fill=255)
+            d.line([(cx + sh - 10, 120), (cx + sh + 20, 250)], fill=255, width=6)
+        a = np.asarray(m.filter(ImageFilter.GaussianBlur(1.2))).astype(float) / 255
+        yy = np.linspace(0, 1, H)[:, None] * np.ones((1, W))
+        shade_v = 0.85 + 0.15 * (1 - yy)
+        rgb = np.stack([np.full((H, W), 150.0)] * 3, axis=-1) * shade_v[..., None]
+        save_png(f'person_{k}', rgb, a)
+
+
+def menu_board():
+    """카페 메뉴판 (칠판에 분필 글씨)"""
+    W, H = 600, 700
+    base = noise(beta=1.2, size=1024, seed=771)[:H, :W]
+    rgb = np.stack([28 + base * 10, 38 + base * 12, 34 + base * 10], axis=-1)
+    im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+    d = ImageDraw.Draw(im)
+    def font(sz):
+        try:
+            return ImageFont.load_default(size=sz)
+        except Exception:
+            return ImageFont.load_default()
+    chalk = (236, 232, 220)
+    d.text((W // 2, 70), 'MENU', fill=chalk, font=font(64), anchor='mm')
+    d.line([(150, 112), (450, 112)], fill=chalk, width=3)
+    items = [('Espresso', '4.0'), ('Americano', '4.5'), ('Cafe Latte', '5.0'), ('Flat White', '5.0'),
+             ('Cappuccino', '5.0'), ('Vanilla Latte', '5.5'), ('Hot Chocolate', '5.0'), ('Black Tea', '4.5')]
+    y = 160
+    for n, pr in items:
+        d.text((70, y), n, fill=chalk, font=font(34), anchor='lm')
+        d.text((W - 70, y), pr, fill=chalk, font=font(34), anchor='rm')
+        y += 56
+    # 작은 컵 그림
+    d.arc([W // 2 - 40, H - 120, W // 2 + 40, H - 50], 0, 180, fill=chalk, width=4)
+    d.line([(W // 2 - 40, H - 85), (W // 2 + 40, H - 85)], fill=chalk, width=4)
+    d.arc([W // 2 + 30, H - 105, W // 2 + 60, H - 75], 270, 90, fill=chalk, width=4)
+    for k in range(3):
+        x = W // 2 - 20 + k * 20
+        d.arc([x - 8, H - 150, x + 8, H - 110], 90, 270, fill=chalk, width=3)
+    arr = np.asarray(im).astype(float)
+    arr += (noise(beta=0.5, size=1024, seed=773)[:H, :W, None] - 0.5) * 18     # 분필 가루
+    save_jpg('menu_board', arr)
+
+
+def line_art():
+    """선 그림 모드용: 오려 내기 그림(<이름>_a.png 가 있는 나무·울타리·지평선 띠·사람)마다
+    흰 바탕에 윤곽선만 검게 그린 <이름>_ln.png — 안쪽 무늬는 그리지 않음(선이 지저분해지지 않게)"""
+    folder = os.path.join(OUT, 'tex')
+    for fn in sorted(os.listdir(folder)):
+        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid'):
+            continue
+        name = fn[:-6]
+        m = Image.open(os.path.join(folder, fn)).convert('L')
+        W = m.width
+        r = max(3, int(round(W / 512 * 2.6)))
+        # 가장자리 잔털(나뭇잎·풀 끝)을 먼저 뭉개서 윤곽선이 매끄럽게
+        soft = m.filter(ImageFilter.GaussianBlur(r * 1.5))
+        mask = soft.point(lambda v: 255 if v > 110 else 0).filter(ImageFilter.MedianFilter(7))
+        eroded = mask.filter(ImageFilter.MinFilter(2 * r + 1))
+        edge = (np.asarray(mask) > 0) & ~(np.asarray(eroded) > 0)
+        out = np.full((m.height, m.width, 3), 255, np.uint8)
+        out[edge] = (22, 22, 22)
+        Image.fromarray(out).save(os.path.join(folder, name + '_ln.png'), optimize=True)
+        mask.save(os.path.join(folder, name + '_lna.png'), optimize=True)      # 선 그림에서 쓰는 매끄러운 가림 그림
+
+
 def _fetch_art():
     """전시관 명화 받기 (인터넷이 안 되면 건너뜀 — 그때는 만든 그림 art_0~5를 씀)"""
     try:
@@ -1176,9 +1269,11 @@ def main():
             prop_simple('driftwood', [(0, (100, 96, 88)), (0.5, (150, 144, 132)), (1, (196, 190, 176))], 419, aniso=(0.2, 3)),
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
-            facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze()),
+            facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
+            people(), menu_board()),
         'sfx': lambda: sfx(),
         'art': lambda: _fetch_art(),
+        'lines': lambda: line_art(),          # 오려 내기 그림을 다 만든 뒤에
     }
     for k, f in jobs.items():
         if only and k not in only:

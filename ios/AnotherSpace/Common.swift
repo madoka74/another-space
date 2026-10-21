@@ -139,29 +139,62 @@ enum Tex {
     private static var cache: [String: TextureResource] = [:]
     private static var missing: Set<String> = []
 
-    static func get(_ name: String, folder: String = "tex", raw: Bool = false) -> TextureResource? {
-        let key = folder + "/" + name
-        if let t = cache[key] { return t }
-        if missing.contains(key) { return nil }
-        // folder "file": name 이 기기 안 파일 경로 (포켓 갤러리 보관함 그림 등)
-        let url = folder == "file" ? URL(fileURLWithPath: name)
-            : (Bundle.main.url(forResource: name, withExtension: "jpg", subdirectory: folder)
-               ?? Bundle.main.url(forResource: name, withExtension: "png", subdirectory: folder))
-        guard let url, let img = UIImage(contentsOfFile: url.path), let cg = img.cgImage,
-              let t = try? TextureResource.generate(from: cg, options: .init(semantic: raw ? .raw : .color)) else {
-            missing.insert(key)
+    /// 지금 만드는 방의 표시 방식 (RoomWorld 가 만드는 동안만 바꿈). 흑백: 그림·색에서 색을 뺌, 선 그림: 흰 바탕 + 윤곽선 그림
+    static var look: LookMode = .color
+
+    /// 잠깐 다른 표시 방식으로 재질을 만듦
+    static func with<T>(_ l: LookMode, _ f: () -> T) -> T {
+        let o = look
+        look = l
+        defer { look = o }
+        return f()
+    }
+
+    private static func key(_ name: String, _ folder: String, _ l: LookMode) -> String {
+        folder + "/" + name + (l == .color ? "" : "#" + l.rawValue)
+    }
+
+    /// raw: 가림 그림 등 색이 아닌 값 (표시 방식과 상관없이 그대로), color: 표시 방식과 상관없이 컬러 (전시관 그림)
+    static func get(_ name: String, folder: String = "tex", raw: Bool = false, color: Bool = false) -> TextureResource? {
+        let l: LookMode = raw || color || folder == "file" ? .color : look
+        let k = key(name, folder, l)
+        if let t = cache[k] { return t }
+        if missing.contains(k) { return nil }
+        func url(_ n: String) -> URL? {
+            if folder == "file" { return URL(fileURLWithPath: n) }            // 기기 안 파일 경로 (포켓 갤러리 보관함 그림 등)
+            return Bundle.main.url(forResource: n, withExtension: "jpg", subdirectory: folder)
+                ?? Bundle.main.url(forResource: n, withExtension: "png", subdirectory: folder)
+        }
+        // 선 그림: 윤곽선 그림(<이름>_ln)이 있는 것(나무·울타리·지평선 띠)만, 나머지는 흰 바탕
+        let u = l == .line ? url(name + "_ln") : url(name)
+        guard let u, let img = UIImage(contentsOfFile: u.path), var cg = img.cgImage else {
+            missing.insert(k)
             return nil
         }
-        cache[key] = t
+        if l == .mono, let g = gray(cg) { cg = g }
+        guard let t = try? TextureResource.generate(from: cg, options: .init(semantic: raw ? .raw : .color)) else {
+            missing.insert(k)
+            return nil
+        }
+        cache[k] = t
         return t
     }
 
-    static func has(_ name: String, folder: String = "tex") -> Bool { cache[folder + "/" + name] != nil }
+    /// 색을 뺀 그림
+    nonisolated static func gray(_ cg: CGImage) -> CGImage? {
+        let w = cg.width, h = cg.height
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+
+    static func has(_ name: String, folder: String = "tex") -> Bool { cache[key(name, folder, look)] != nil || missing.contains(key(name, folder, look)) }
 
     /// 미리 읽어 두기: 한 장 읽고 한 프레임 쉬어서 화면이 멈추지 않게 (방에 들어갈 때 기다리지 않도록)
-    static func preload(_ list: [(String, String)]) async {
-        for (name, folder) in list where !has(name, folder: folder) && !missing.contains(folder + "/" + name) {
-            _ = get(name, folder: folder)
+    static func preload(_ list: [(String, String)], look l: LookMode = .color) async {
+        for (name, folder) in list where !with(l, { has(name, folder: folder) }) {
+            _ = with(l) { get(name, folder: folder) }
             try? await Task.sleep(for: .milliseconds(12))
             // 오려 내기 그림이면 가림 그림도 (없으면 그냥 넘어감)
             if folder == "tex", Bundle.main.url(forResource: name + "_a", withExtension: "png", subdirectory: folder) != nil {
@@ -187,8 +220,17 @@ enum Tex {
     static let band = sampler(.repeat, .clampToEdge)
     static let clamp = sampler(.clampToEdge, .clampToEdge)
 
+    /// 색 (표시 방식에 맞게: 흑백이면 밝기만, 선 그림이면 흰색)
     static func color(_ v: SIMD3<Float>, alpha: CGFloat = 1) -> UIColor {
-        UIColor(red: CGFloat(min(1, max(0, v.x))), green: CGFloat(min(1, max(0, v.y))), blue: CGFloat(min(1, max(0, v.z))), alpha: alpha)
+        switch look {
+        case .line:
+            return UIColor(white: 1, alpha: alpha)
+        case .mono:
+            let l = CGFloat(min(1, max(0, v.x * 0.3 + v.y * 0.59 + v.z * 0.11)))
+            return UIColor(white: l, alpha: alpha)
+        case .color:
+            return UIColor(red: CGFloat(min(1, max(0, v.x))), green: CGFloat(min(1, max(0, v.y))), blue: CGFloat(min(1, max(0, v.z))), alpha: alpha)
+        }
     }
 
     /// 빛을 받지 않는(조명 계산 없이 그대로 보이는) 재질. tint로 시간·날씨·그늘을 곱함
@@ -210,7 +252,9 @@ enum Tex {
     static func cutout(_ name: String, tint: SIMD3<Float>, sampler: MaterialParameters.Texture.Sampler? = nil) -> UnlitMaterial {
         let sampler = sampler ?? band
         var m = unlit(name, tint: tint, folder: "tex", sampler: sampler)
-        if let mask = get(name + "_a", folder: "tex", raw: true) {
+        // 선 그림이면 윤곽선과 꼭 맞는 매끄러운 가림 그림(<이름>_lna)
+        let lineMask = look == .line ? get(name + "_lna", folder: "tex", raw: true) : nil
+        if let mask = lineMask ?? get(name + "_a", folder: "tex", raw: true) {
             var p = MaterialParameters.Texture(mask)
             p.sampler = sampler
             m.blending = .transparent(opacity: .init(scale: 1, texture: p))

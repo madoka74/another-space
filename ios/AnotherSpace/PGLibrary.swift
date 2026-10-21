@@ -37,6 +37,16 @@ enum PGLibrary {
         return o.works
     }
 
+    /// 그림 파일 이름(안전한 id) → 작품 정보 (해설을 받을 때 씀)
+    nonisolated(unsafe) private static var bySafe: [String: Work] = [:]
+
+    /// 보관함 그림 파일 → 전시관에 걸 그림 정보
+    static func pick(_ url: URL) -> ArtPick {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let w = bySafe[stem]
+        return ArtPick(url: url, id: w?.id ?? stem, title: w?.t ?? "", artist: w?.a ?? "", thumb: w?.th ?? w?.img, pocket: true)
+    }
+
     /// 지금 바로 쓸 수 있는 그림 파일 (공유 폴더에 있거나 이미 받아 둔 것)
     static func ready(_ w: Work) -> URL? {
         let fm = FileManager.default
@@ -48,6 +58,7 @@ enum PGLibrary {
     /// 보관함 그림 파일들. 없는 그림은 받으며, 최대 wait초까지만 기다리고(그 뒤로도 계속 받아 다음 번에 씀) 준비된 것만 돌려줌
     static func prepare(wait: Double) async -> [URL] {
         let list = works()
+        bySafe = Dictionary(list.map { (safe($0.id), $0) }, uniquingKeysWith: { a, _ in a })
         guard !list.isEmpty else { return [] }
         let missing = list.filter { ready($0) == nil }
         if !missing.isEmpty {

@@ -131,6 +131,46 @@ struct Geo {
         }
     }
 
+    /// 선 그림용 가는 선 (a→b, 굵기 w): 서로 직각인 얇은 띠 두 장 — 어느 쪽에서 봐도 선으로 보임
+    mutating func stroke(_ a: SIMD3<Float>, _ b: SIMD3<Float>, width w: Float) {
+        let d = b - a
+        let l = simd_length(d)
+        guard l > 1e-4 else { return }
+        let dir = d / l
+        var p1 = simd_cross(dir, SIMD3<Float>(0, 1, 0))
+        if simd_length(p1) < 0.1 { p1 = simd_cross(dir, SIMD3<Float>(1, 0, 0)) }
+        p1 = simd_normalize(p1) * (w / 2)
+        let p2 = simd_normalize(simd_cross(dir, p1)) * (w / 2)
+        for p in [p1, p2] {
+            quad(a - p, b - p, b + p, a + p, .zero, .zero, .zero, .zero)
+        }
+    }
+
+    /// 선 그림: 상자 모서리 12개
+    mutating func boxOutline(base c: SIMD3<Float>, w: Float, d: Float, h: Float, yaw: Float, width lw: Float) {
+        let ax = SIMD3<Float>(cos(yaw), 0, -sin(yaw)), az = SIMD3<Float>(sin(yaw), 0, cos(yaw))
+        let hw = w / 2, hd = d / 2
+        let p = [c - ax * hw - az * hd, c + ax * hw - az * hd, c + ax * hw + az * hd, c - ax * hw + az * hd]
+        let up = SIMD3<Float>(0, h, 0)
+        for i in 0..<4 {
+            let a = p[i], b = p[(i + 1) % 4]
+            stroke(a, b, width: lw)
+            stroke(a + up, b + up, width: lw)
+            stroke(a, a + up, width: lw)
+        }
+    }
+
+    /// 선 그림: 텐트 모서리
+    mutating func tentOutline(base c: SIMD3<Float>, w: Float, l: Float, h: Float, yaw: Float) {
+        let ax = SIMD3<Float>(cos(yaw), 0, -sin(yaw)), az = SIMD3<Float>(sin(yaw), 0, cos(yaw))
+        let fl = c - ax * (w / 2) - az * (l / 2), fr = c + ax * (w / 2) - az * (l / 2)
+        let bl = c - ax * (w / 2) + az * (l / 2), br = c + ax * (w / 2) + az * (l / 2)
+        let ft = c - az * (l / 2) + SIMD3<Float>(0, h, 0), bt = c + az * (l / 2) + SIMD3<Float>(0, h, 0)
+        for (a, b) in [(fl, fr), (bl, br), (fl, bl), (fr, br), (fl, ft), (fr, ft), (bl, bt), (br, bt), (ft, bt)] {
+            stroke(a, b, width: 0.03)
+        }
+    }
+
     /// 작은 전구 (팔면체)
     mutating func bulb(at c: SIMD3<Float>, r: Float) {
         let pts: [SIMD3<Float>] = [c + SIMD3<Float>(r, 0, 0), c + SIMD3<Float>(-r, 0, 0), c + SIMD3<Float>(0, r, 0),
