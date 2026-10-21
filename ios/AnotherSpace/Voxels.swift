@@ -417,6 +417,26 @@ final class VoxelWorld {
         return out
     }
 
+    /// 그 10cm 칸(평면 좌표)에 보이는 가구 높이 (m, 없으면 0)
+    func heightAt(_ p: SIMD2<Float>) -> Float {
+        let u = Int((p.x / Vox.size).rounded(.down)), v = Int((p.y / Vox.size).rounded(.down))
+        return Float(shownH(u, v)) * Vox.size
+    }
+
+    /// 고양이가 올라앉을 만한 평평한 가구 윗면 높이 (둘레 3×3 칸이 모두 보이고 높이 차가 10cm 안). 아니면 nil
+    func flatTop(_ p: SIMD2<Float>) -> Float? {
+        let u = Int((p.x / Vox.size).rounded(.down)), v = Int((p.y / Vox.size).rounded(.down))
+        let h = shownH(u, v)
+        guard h >= 3 else { return nil }
+        for du in -1...1 {
+            for dv in -1...1 {
+                let o = shownH(u + du, v + dv)
+                if o == 0 || abs(o - h) > 1 { return nil }
+            }
+        }
+        return Float(h) * Vox.size
+    }
+
     // MARK: 그물 만들기
     /// 그려지는 높이 (외톨이 기둥은 0)
     private func shownH(_ u: Int, _ v: Int) -> Int {

@@ -1113,6 +1113,82 @@ def sfx():
         _place(buf, _bell(fq, 1.4, 2.2) * 0.22, 2.3)
     save_wav('scan', buf, -8)
     fire_sounds(r)
+    cat_sounds(r)
+
+
+def _formant_voice(f0, F, amp, r, breath=0.06, nasal=None):
+    """목소리 합성: f0(표본마다 음높이) 톱니파 + 숨소리 → 표본마다 바뀌는 공명(포먼트) 3개를 지남"""
+    n = len(f0)
+    ph = np.cumsum(f0 * (1 + 0.01 * _lowpass(r.standard_normal(n), 30))) / SR
+    src = 2 * (ph % 1.0) - 1
+    src = src - _lowpass(src, 120)                                  # 웅웅거림 빼기
+    src += breath * r.standard_normal(n)
+    out = np.zeros(n)
+    for k, (fc, bw) in enumerate(F):
+        y1 = y2 = 0.0
+        y = np.zeros(n)
+        R = np.exp(-np.pi * bw / SR)
+        for i in range(n):
+            c = 2 * R * np.cos(2 * np.pi * fc[i] / SR)
+            v = src[i] * (1 - R) + c * y1 - R * R * y2
+            y[i] = v
+            y2, y1 = y1, v
+        out += y * (1.0, 0.7, 0.35)[k]
+    if nasal is not None:                                           # 입을 닫은 'ㅁ' 소리: 낮게 거른 소리로 시작
+        low = _lowpass(src, 500)
+        out = out * (1 - nasal) + low * nasal * 3
+    return out * amp
+
+
+def _contour(n, pts):
+    """[(0~1 위치, 값)] 을 잇는 매끈한 곡선"""
+    x = np.linspace(0, 1, n)
+    xs, ys = zip(*pts)
+    return _lowpass(np.interp(x, xs, ys), 40) if n > 4000 else np.interp(x, xs, ys)
+
+
+def cat_sounds(r):
+    """집 고양이 방울이 소리: 야옹(보통·짧은 냥·물음표 므르앙?) · 그르릉 되풀이 · 반가운 트릴(브르릉) · 짧은 짹(신남)"""
+    def meow(name, dur, f0pts, f1, f2, f3, peak, roll=0.0, nas=0.15):
+        n = int(SR * dur)
+        f0 = _contour(n, f0pts)
+        F = [(_contour(n, f1), 160), (_contour(n, f2), 220), (_contour(n, f3), 300)]
+        env = np.interp(np.linspace(0, 1, n), [0, 0.08, 0.7, 1], [0, 1, 0.85, 0])
+        if roll > 0:                                               # 혀를 굴리는 'ㄹㄹ' (빠르게 떨림)
+            t = _t(dur)
+            env *= 1 - roll * (0.5 + 0.5 * np.sin(2 * np.pi * 27 * t)) * np.interp(t / dur, [0, 0.35, 0.5, 1], [1, 1, 0, 0])
+        nasal = np.interp(np.linspace(0, 1, n), [0, 0.12, 0.25, 1], [nas * 4, nas * 2, 0, 0]).clip(0, 0.8)
+        x = _formant_voice(f0, F, env, r, nasal=nasal)
+        save_wav(name, x, peak)
+    # 보통 야옹 (미-아-옹)
+    meow('cat_meow1', 0.72, [(0, 430), (0.3, 760), (0.6, 640), (1, 380)],
+         [(0, 450), (0.2, 520), (0.45, 1050), (0.8, 900), (1, 560)], [(0, 1800), (0.2, 2600), (0.5, 1900), (0.85, 1300), (1, 1000)],
+         [(0, 3400), (0.5, 3300), (1, 2900)], -10)
+    # 짧고 높은 냥
+    meow('cat_meow2', 0.32, [(0, 680), (0.4, 880), (1, 640)],
+         [(0, 500), (0.3, 900), (1, 760)], [(0, 2400), (0.4, 2100), (1, 1600)], [(0, 3600), (1, 3200)], -12, nas=0.08)
+    # 물음표 므르앙? (끝이 올라감)
+    meow('cat_meow3', 0.62, [(0, 420), (0.3, 470), (0.7, 560), (1, 820)],
+         [(0, 420), (0.35, 600), (0.7, 950), (1, 800)], [(0, 1400), (0.35, 1600), (0.7, 2000), (1, 2300)],
+         [(0, 3000), (1, 3400)], -11, roll=0.8, nas=0.2)
+    # 반가운 트릴 (브르릉↗)
+    meow('cat_trill', 0.48, [(0, 500), (0.6, 560), (1, 690)],
+         [(0, 450), (0.5, 520), (1, 620)], [(0, 1300), (1, 1700)], [(0, 2800), (1, 3000)], -13, roll=1.0, nas=0.3)
+    # 짧은 짹 (신나서)
+    meow('cat_chirp', 0.14, [(0, 900), (0.5, 1250), (1, 1000)],
+         [(0, 700), (1, 800)], [(0, 2600), (1, 2400)], [(0, 3800), (1, 3600)], -15, nas=0.0)
+    # 그르릉 되풀이 (들숨·날숨이 번갈아, 초당 26번쯤 떨림) 6초
+    dur = 7.0
+    n = int(SR * dur)
+    t = _t(dur)
+    rate = 26 + 2 * np.sign(np.sin(2 * np.pi * t / 3.0))
+    ph = np.cumsum(rate) / SR
+    pulse = (0.5 + 0.5 * np.cos(2 * np.pi * ph)) ** 3
+    noise = _lowpass(r.standard_normal(n), 380)
+    buzz = np.sin(2 * np.pi * np.cumsum(rate * 2) / SR) * 0.4
+    breath = 0.55 + 0.45 * np.abs(np.sin(np.pi * t / 3.0))
+    x = (noise / (np.std(noise) + 1e-9) * 0.5 + buzz) * pulse * breath
+    save_wav('cat_purr', _loop(x, 0.5), -10)
 
 
 def _loop(x, fade_sec=1.0):
@@ -1296,7 +1372,7 @@ def line_art():
 
 def line_folder(folder, sky=False):
     for fn in sorted(os.listdir(folder)):
-        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid'):
+        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid') or fn.startswith('cat_'):
             continue
         name = fn[:-6]
         m = Image.open(os.path.join(folder, fn)).convert('L')
@@ -1315,6 +1391,13 @@ def line_folder(folder, sky=False):
             continue
         Image.fromarray(out).save(os.path.join(folder, name + '_ln.png'), optimize=True)
         mask.save(os.path.join(folder, name + '_lna.png'), optimize=True)      # 선 그림에서 쓰는 매끄러운 가림 그림
+
+
+def _cat():
+    """집 테마 고양이 그림 (tools/cat_art.py) → tex/cat_*.png"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import cat_art
+    cat_art.cat_sprites(os.path.join(OUT, 'tex'))
 
 
 def _fetch_art():
@@ -1361,6 +1444,7 @@ def main():
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
             people(), menu_board(), flame()),
         'sfx': lambda: sfx(),
+        'cat': lambda: _cat(),
         'art': lambda: _fetch_art(),
         'lines': lambda: line_art(),          # 오려 내기 그림을 다 만든 뒤에
     }

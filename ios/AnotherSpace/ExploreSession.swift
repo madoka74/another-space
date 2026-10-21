@@ -256,6 +256,11 @@ final class ExploreSession {
     @ObservationIgnored private var sitT: Float = 0
     @ObservationIgnored private var standT: Float = 0
     @ObservationIgnored private var seated = false
+    // 집 고양이
+    @ObservationIgnored private var cat: HomeCat?
+    @ObservationIgnored private var catLook: LookMode?
+    @ObservationIgnored private var stillT: Float = 0
+    @ObservationIgnored private var handPts: [SIMD3<Float>] = []        // 손바닥 가운데 (저장 좌표)
 
     init(spaceId: String) {
         self.spaceId = spaceId
@@ -455,6 +460,7 @@ final class ExploreSession {
 
     func stop() {
         fire?.remove(); fire = nil
+        cat?.remove(); cat = nil
         updateSub?.cancel()
         ar.stop()
         player.stopAll()
@@ -467,6 +473,7 @@ final class ExploreSession {
         saveVox()
         ended = true
         fire?.remove(); fire = nil
+        cat?.remove(); cat = nil
         player.stopAll()
         AppModel.shared.finish()
     }
@@ -929,6 +936,61 @@ final class ExploreSession {
         placeHud(dt)
         placeDocent(dt)
         campTick(dt)
+        catTick(dt)
+    }
+
+    // MARK: 집 고양이
+    /// 집 테마 방에 있으면 고양이가 따라다님 (집이 아닌 방으로 가면 사라지고, 다시 오면 시야 가장자리로 들어옴)
+    private func catTick(_ dt: Float) {
+        stillT = speed < 0.08 ? stillT + dt : 0
+        guard let f = fit, let L = layout, let d = data else { return }
+        let rm = d.rec.room(current)
+        let home = ready && introDone && fade > 0.5 && rm?.place == "home"
+        let homeRooms = Set(d.rec.rooms.filter { $0.place == "home" }.map(\.id))
+        let hs = f.toSaved(head)
+        var fw = f.dirToSaved(fwd)
+        let gaze = simd_length(fw) > 0.01 ? simd_normalize(fw) : SIMD3<Float>(0, 0, -1)
+        fw.y = 0
+        let fwd2 = simd_length(fw) > 0.01 ? simd_normalize(SIMD2<Float>(fw.x, fw.z)) : SIMD2<Float>(0, -1)
+        // 테마(표시 방식)가 바뀌면 새로
+        if let c = cat, let rm, catLook != rm.lookMode, home { c.remove(); cat = nil }
+        if home && cat == nil {
+            // 시야 가장자리에서 걸어 들어오게: 앞 1.6m 옆쪽 빈 바닥
+            let me = SIMD2<Float>(hs.x, hs.z)
+            for a in [Float(0.55), -0.55, 0.3, -0.3, 0] {
+                let v = SIMD2<Float>(fwd2.x * cos(a) - fwd2.y * sin(a), fwd2.x * sin(a) + fwd2.y * cos(a))
+                let p = me + v * 1.6
+                if catFree(p, L, homeRooms) {
+                    let c = HomeCat(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color)
+                    spaceRoot.addChild(c.root)
+                    cat = c
+                    catLook = rm?.lookMode
+                    break
+                }
+            }
+        }
+        guard let c = cat else { return }
+        if !home { c.leave() }
+        let blocked = vox
+        let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
+                              free: { [unowned self] p in self.catFree(p, L, homeRooms) },
+                              top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
+                              height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 })
+        c.tick(dt, ctx)
+        if c.done { cat = nil }
+    }
+
+    /// 고양이가 설 수 있는 바닥: 집 테마 방 안, 벽에서 12cm 넘게, 둘레 12cm에 가구 없음, 문이 쓸고 지나가는 자리 아님
+    private func catFree(_ p: SIMD2<Float>, _ L: Layout, _ homeRooms: Set<Int>) -> Bool {
+        let a = L.at(x: p.x, z: p.y)
+        guard a.room != 0, homeRooms.contains(a.room), a.wall > 0.12 else { return false }
+        let pl = L.plane(p.x, p.y)
+        if Skin.inSwing(L, pl) { return false }
+        guard let v = vox else { return true }
+        for o in [SIMD2<Float>(0, 0), SIMD2<Float>(0.12, 0), SIMD2<Float>(-0.12, 0), SIMD2<Float>(0, 0.12), SIMD2<Float>(0, -0.12)] {
+            if v.heightAt(pl + o) > 0.05 { return false }
+        }
+        return true
     }
 
     // MARK: 불멍
@@ -1274,6 +1336,7 @@ final class ExploreSession {
             let w = a.originFromAnchorTransform * j.anchorFromJointTransform
             pts.append(f.toSaved(simd_make_float3(w.columns.3)))
         }
+        handPts = pts
         for (i, ds) in L.doors.enumerated() {
             guard realClosed.contains(i) else { grip[i] = nil; continue }
             let lo: Float = min(ds.pA, ds.pB), hi: Float = max(ds.pA, ds.pB)
@@ -1323,6 +1386,11 @@ final class ExploreSession {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
                 pendingTap = nil
                 openKey(i)
+                return
+            }
+            if c.name == "homecat" {
+                pendingTap = nil
+                cat?.poke()
                 return
             }
             if c.name.hasPrefix("art-") {

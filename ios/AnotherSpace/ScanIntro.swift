@@ -18,7 +18,7 @@ enum Sfx {
     }
 
     /// 미리 읽어 둠 (처음 울릴 때 늦지 않게)
-    static func preload() { for n in ["key_appear", "key_turn", "door_open", "scan", "fire_out"] { _ = res(n) } }
+    static func preload() { for n in ["key_appear", "key_turn", "door_open", "scan", "fire_out", "cat_trill", "cat_chirp", "cat_meow1", "cat_meow2", "cat_meow3"] { _ = res(n) } }
 
     /// 그 자리에서 나는 소리 (parent 기준 위치)
     static func play(_ name: String, in parent: Entity, at p: SIMD3<Float>, gain: Double) {
