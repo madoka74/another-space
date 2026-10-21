@@ -302,7 +302,7 @@ final class VoxelWorld {
     func update(cols obs: [Int64: Float], floor: Set<Int64>) {
         for (k, top) in obs {
             var c = cols[k] ?? Col()
-            c.score = min(6, c.score + 2)
+            c.score = min(8, c.score + 2)
             c.seen = c.seen < 250 ? c.seen + 1 : c.seen
             c.hist.append(UInt8(min(21, max(2, Int((top / Vox.size).rounded(.up))))))
             if c.hist.count > 4 { c.hist.removeFirst() }
@@ -324,20 +324,20 @@ final class VoxelWorld {
     private func apply(_ k: Int64, _ c0: Col) {
         var c = c0
         let med = median(c.hist)
-        if !c.shown && c.score >= 3 {
+        if !c.shown && c.score >= 5 && c.seen >= 3 {
             c.shown = true
             c.h = med
             byChunk[Self.chunkOfCol(k), default: []].insert(k)
             markDirty(k)
             changed = true
-        } else if c.shown && c.score <= 0 {
+        } else if c.shown && c.score <= -2 {
             c.shown = false
             byChunk[Self.chunkOfCol(k)]?.remove(k)
             markDirty(k)
             changed = true
         } else if c.shown && med != c.h {
-            let steady = c.hist.count >= 3 && c.hist.suffix(3).allSatisfy { $0 == med }
-            if abs(Int(med) - Int(c.h)) >= 2 || steady {
+            let steady = c.hist.count >= 4 && c.hist.allSatisfy { $0 == med }
+            if abs(Int(med) - Int(c.h)) >= 3 || steady {
                 c.h = med
                 markDirty(k)
                 changed = true
@@ -398,7 +398,7 @@ final class VoxelWorld {
         guard let c = cols[Vox.chunkKey(u, v)], c.shown else { return 0 }
         var n = 0
         for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
-            if let o = cols[Vox.chunkKey(u + du, v + dv)], o.shown { n += 1; if n >= 2 { return Int(c.h) } }
+            if let o = cols[Vox.chunkKey(u + du, v + dv)], o.shown { n += 1; if n >= 3 { return Int(c.h) } }
         } }
         return 0
     }
@@ -492,7 +492,10 @@ final class VoxelWorld {
                                                  SIMD2<Float>(a0, -lo) / t, SIMD2<Float>(a1, -lo) / t, SIMD2<Float>(a1, -hi) / t, SIMD2<Float>(a0, -hi) / t)
                 if drawLines {
                     lg.stroke(p[3], p[2], width: lw)                   // 윗모서리
-                    if s.lo == 0 { lg.stroke(p[0], p[1], width: lw) }  // 바닥에 닿는 선
+                    if s.lo == 0 {                                     // 바닥에 닿는 선 (바닥 면보다 1.5cm 위 — 겹쳐 깜빡이지 않게)
+                        let up = SIMD3<Float>(0, 0.015, 0)
+                        lg.stroke(p[0] + up, p[1] + up, width: lw)
+                    }
                     lg.stroke(p[0], p[3], width: lw)                   // 양끝 세로선
                     lg.stroke(p[1], p[2], width: lw)
                 }

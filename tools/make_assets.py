@@ -1172,6 +1172,23 @@ def people():
         save_png(f'person_{k}', rgb, a)
 
 
+def flame():
+    """벽난로 불꽃 한 갈래 (아래가 둥글고 위가 뾰족한 물방울 모양, 안쪽은 노랗고 바깥은 주황·빨강)"""
+    W, H = 128, 256
+    yy, xx = np.mgrid[0:H, 0:W].astype(float)
+    y = 1 - yy / (H - 1)                          # 0 아래 ~ 1 위
+    x = (xx - W / 2) / (W / 2)
+    half = np.where(y < 0.25, np.sqrt(np.clip(1 - ((0.25 - y) / 0.25) ** 2, 0, 1)), (1 - (y - 0.25) / 0.75) ** 1.4)
+    half = half * (0.9 + 0.1 * np.sin(y * 9))
+    d = np.abs(x) / np.maximum(half, 1e-3)
+    a = np.clip((1 - d) * 3, 0, 1) * (y < 0.98)
+    core = np.clip(1 - d * 1.4, 0, 1) * np.clip(1.2 - y, 0, 1)
+    rgb = np.stack([255 * np.ones_like(y), 120 + 120 * core, 30 + 160 * core ** 2], axis=-1)
+    rgb = rgb * (0.85 + 0.15 * (1 - y))[..., None]
+    a = np.asarray(Image.fromarray((a * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(2))) / 255
+    save_png('flame', rgb, a)
+
+
 def menu_board():
     """카페 메뉴판 (칠판에 분필 글씨)"""
     W, H = 600, 700
@@ -1209,7 +1226,11 @@ def menu_board():
 def line_art():
     """선 그림 모드용: 오려 내기 그림(<이름>_a.png 가 있는 나무·울타리·지평선 띠·사람)마다
     흰 바탕에 윤곽선만 검게 그린 <이름>_ln.png — 안쪽 무늬는 그리지 않음(선이 지저분해지지 않게)"""
-    folder = os.path.join(OUT, 'tex')
+    for sub in ('tex', 'sky'):
+        line_folder(os.path.join(OUT, sub), sky=(sub == 'sky'))
+
+
+def line_folder(folder, sky=False):
     for fn in sorted(os.listdir(folder)):
         if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid'):
             continue
@@ -1224,6 +1245,10 @@ def line_art():
         edge = (np.asarray(mask) > 0) & ~(np.asarray(eroded) > 0)
         out = np.full((m.height, m.width, 3), 255, np.uint8)
         out[edge] = (22, 22, 22)
+        if sky:      # 구름: 그림 자체의 투명도로 그려지므로 윤곽선 그림에 투명도를 같이 담음
+            rgba = np.concatenate([out, np.asarray(mask)[..., None]], axis=-1)
+            Image.fromarray(rgba.astype(np.uint8), 'RGBA').save(os.path.join(folder, name + '_ln.png'), optimize=True)
+            continue
         Image.fromarray(out).save(os.path.join(folder, name + '_ln.png'), optimize=True)
         mask.save(os.path.join(folder, name + '_lna.png'), optimize=True)      # 선 그림에서 쓰는 매끄러운 가림 그림
 
@@ -1270,7 +1295,7 @@ def main():
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
-            people(), menu_board()),
+            people(), menu_board(), flame()),
         'sfx': lambda: sfx(),
         'art': lambda: _fetch_art(),
         'lines': lambda: line_art(),          # 오려 내기 그림을 다 만든 뒤에

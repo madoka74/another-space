@@ -40,11 +40,21 @@ final class Scenery {
     private let ex: SIMD3<Float>
     private let ez: SIMD3<Float>
     private let sortGroup: ModelSortGroup
-    private let blocked: Set<Int64>          // 가구 기둥이 있는 10cm 칸 (벽 꾸밈은 그 앞을 피함)
+    private var blocked: Set<Int64>          // 가구 기둥이 있는 10cm 칸 (벽 꾸밈은 그 앞을 피함)
+    /// 벽 꾸밈(벽난로·선반·메뉴판) 앞 칸 — 나중에 이곳에 가구가 생기면 다른 빈 벽으로 옮김
+    private(set) var decorCells: Set<Int64> = []
+    private let roomRec: RoomRec
+    private let segsAll: [WallSeg]
+    private let floorY0: Float
+    private let ceilY0: Float
 
     init(room: RoomRec, look: LookMode, tint: SIMD3<Float>, center: SIMD3<Float>, halfSize: SIMD2<Float>, angle: Float,
          floorY: Float, ceilY: Float, segs: [WallSeg], layout: Layout, sortGroup: ModelSortGroup, blocked: Set<Int64> = []) {
         self.blocked = blocked
+        self.roomRec = room
+        self.segsAll = segs
+        self.floorY0 = floorY
+        self.ceilY0 = ceilY
         self.look = look
         self.center = center
         self.halfSize = halfSize
@@ -86,6 +96,38 @@ final class Scenery {
             if !night && !wet { addBirds(4, R: R, floorY: floorY, color: [0.1, 0.1, 0.1], using: &g) }
             addFireplace(segs, floorY: floorY, ceilY: ceilY, using: &g)
         }
+    }
+
+    /// 벽 꾸밈 앞에 가구가 새로 보이면(탐험하며 알게 된 가구) 가구 없는 다른 벽으로 옮김. 옮겼으면 true
+    @discardableResult
+    func relocate(blocked nb: Set<Int64>) -> Bool {
+        guard !decorCells.isEmpty, !decorCells.isDisjoint(with: nb) else { return false }
+        blocked = nb
+        for c in Array(near.children) { c.removeFromParent() }
+        flames.removeAll()
+        decorCells.removeAll()
+        var g = SeededRNG(seed: UInt64(roomRec.id * 4241 + 77))
+        Tex.with(look) {
+            if roomRec.place == "cafe" {
+                addCafe(segsAll, floorY: floorY0, ceilY: ceilY0, night: roomRec.time == "night", using: &g)
+            } else if roomRec.place == "home" {
+                addFireplace(segsAll, floorY: floorY0, ceilY: ceilY0, using: &g)
+            }
+        }
+        return true
+    }
+
+    /// 벽 s 의 점 mid(평면 좌표) 앞, 폭 width·깊이 depth 안의 10cm 칸
+    private func frontCells(_ s: WallSeg, mid: SIMD2<Float>, width: Float, depth: Float) -> Set<Int64> {
+        let dir = (s.b - s.a) / max(0.01, simd_distance(s.a, s.b))
+        var out = Set<Int64>()
+        var t = -width / 2
+        while t <= width / 2 + 1e-3 {
+            var o: Float = 0.05
+            while o <= depth + 1e-3 { out.insert(RoomWorld.clutterKey(mid + dir * t + s.n * o)); o += 0.1 }
+            t += 0.1
+        }
+        return out
     }
 
     // MARK: 공통
@@ -363,6 +405,7 @@ final class Scenery {
             walls.removeFirst()
             let mid = (a + b) / 2
             let w = min(1.0, simd_distance(a, b) - 0.2), h = min(1.15, top - 1.25)
+            decorCells.formUnion(frontCells(s, mid: mid, width: w, depth: 0.6))
             let n = s.n
             let c = p3(mid + n * 0.025, 1.15 + h / 2)
             let n3 = SIMD3<Float>((L.flat(n) - L.flat(.zero)).x, 0, (L.flat(n) - L.flat(.zero)).y)
@@ -395,6 +438,7 @@ final class Scenery {
             let (a, b, dir) = sp
             let len = min(1.8, simd_distance(a, b) - 0.1)
             let mid = (a + b) / 2
+            decorCells.formUnion(frontCells(s, mid: mid, width: len, depth: 0.6))
             let n3 = SIMD3<Float>((L.flat(s.n) - L.flat(.zero)).x, 0, (L.flat(s.n) - L.flat(.zero)).y)
             let r3 = SIMD3<Float>((L.flat(dir) - L.flat(.zero)).x, 0, (L.flat(dir) - L.flat(.zero)).y)
             let yaw = atan2(n3.x, n3.z)
@@ -622,15 +666,37 @@ final class Scenery {
         fe.position = [0, 0.08, 0.1]
         fe.components.set(ModelSortGroupComponent(group: sortGroup, order: 18))
         root.addChild(fe)
-        if look != .line {
-            var gm = UnlitMaterial(color: Tex.color([1, 0.5, 0.15]))
-            gm.blending = .transparent(opacity: .init(floatLiteral: 0.45))
-            let glow = ModelEntity(mesh: .generatePlane(width: 0.7, height: 0.5), materials: [gm])
-            glow.position = [0, 0.3, 0.045]
-            root.addChild(glow)
-            flames.append((glow, Float.random(in: 0...6, using: &g)))
+        // 장작 두 개 + 불꽃 세 갈래 (불꽃 모양 그림을 십자로 세워 흔들림)
+        let logM = look == .line ? Ink.paper(1) : Tex.unlit("bark", tint: [0.6, 0.5, 0.42], folder: "tex", sampler: Tex.tiling)
+        for (x, a) in [(Float(-0.06), Float(0.25)), (Float(0.07), Float(-0.3))] {
+            let log = ModelEntity(mesh: .generateCylinder(height: 0.42, radius: 0.04), materials: [logM])
+            log.orientation = simd_quatf(angle: .pi / 2, axis: [0, 0, 1]) * simd_quatf(angle: a, axis: [1, 0, 0])
+            log.position = [x, 0.05, 0.1]
+            root.addChild(log)
+        }
+        var flameM = UnlitMaterial(color: look == .line ? UIColor(white: 0.15, alpha: 1) : Tex.color([1, 0.75, 0.35]))
+        if let t = Tex.get("flame", color: look == .color) {
+            var p = MaterialParameters.Texture(t)
+            p.sampler = Tex.clamp
+            flameM.color = .init(tint: look == .line ? UIColor(white: 0.15, alpha: 1) : .white, texture: p)
+        }
+        if let mask = Tex.get("flame_a", raw: true) {
+            var p = MaterialParameters.Texture(mask)
+            p.sampler = Tex.clamp
+            flameM.blending = .transparent(opacity: .init(scale: 1, texture: p))
+        }
+        for (k, x) in [Float(-0.12), 0, 0.12].enumerated() {
+            let h: Float = k == 1 ? 0.36 : 0.26
+            var q = Geo()
+            q.crossTree(at: .zero, width: h * 0.55, height: h, yaw: 0.4)
+            guard let fl = q.entity("flame", flameM) else { continue }
+            fl.position = [x, 0.07, 0.1]
+            fl.components.set(ModelSortGroupComponent(group: sortGroup, order: 17))
+            root.addChild(fl)
+            flames.append((fl, Float(k) * 1.7 + Float.random(in: 0...1, using: &g)))
         }
         near.addChild(root)
+        decorCells.formUnion(frontCells(s, mid: mid, width: 1.5, depth: 1.0))
     }
 
     // MARK: 전시관 먼지 빛
@@ -695,8 +761,9 @@ final class Scenery {
             if e.isEnabled != on { e.isEnabled = on }
         }
         for (e, ph) in flames {
-            let k = 0.85 + 0.15 * sin(t * 9 + ph) * sin(t * 5.3 + ph * 2)
-            e.scale = SIMD3<Float>(1, k, 1)
+            let k = 0.8 + 0.2 * sin(t * 9 + ph) * sin(t * 5.3 + ph * 2)
+            e.scale = SIMD3<Float>(1 + 0.08 * sin(t * 7 + ph), k, 1)
+            e.orientation = simd_quatf(angle: 0.08 * sin(t * 3.1 + ph), axis: [0, 0, 1])
         }
     }
 }

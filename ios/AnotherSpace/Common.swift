@@ -180,12 +180,19 @@ enum Tex {
         return t
     }
 
-    /// 색을 뺀 그림
+    /// 색을 뺀 그림 (투명도는 그대로 — 구름처럼 투명한 그림이 네모 판으로 보이지 않게)
     nonisolated static func gray(_ cg: CGImage) -> CGImage? {
         let w = cg.width, h = cg.height
-        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
-                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = ctx.data else { return nil }
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        for i in 0..<(w * h) {
+            let r = Int(px[i * 4]), g = Int(px[i * 4 + 1]), b = Int(px[i * 4 + 2])
+            let l = UInt8(min(255, (r * 77 + g * 151 + b * 28) >> 8))
+            px[i * 4] = l; px[i * 4 + 1] = l; px[i * 4 + 2] = l
+        }
         return ctx.makeImage()
     }
 

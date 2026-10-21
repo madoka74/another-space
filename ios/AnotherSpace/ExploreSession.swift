@@ -20,10 +20,12 @@ struct ExploreView: View {
             content.add(s.root)
             if let hud = attachments.entity(for: "hud") { s.attachHud(hud) }
             if let card = attachments.entity(for: "docent") { s.attachDocent(card) }
+            if let tp = attachments.entity(for: "theme") { s.attachTheme(tp) }
             s.updateSub = content.subscribe(to: SceneEvents.Update.self) { e in s.tick(Float(e.deltaTime)) }
         } attachments: {
             Attachment(id: "hud") { ExploreHud(s: s) }
             Attachment(id: "docent") { DocentCard(s: s) }
+            Attachment(id: "theme") { ThemePanel(s: s) }
         }
         // 탭은 한 번씩만 받고, 싱글·더블은 앱이 시간으로 가름 (두 번째 탭이 0.4초 안에 오면 더블탭).
         // 보는 곳 어디든 받도록 머리 둘레에 보이지 않는 '탭 받는 상자'를 둠. 열쇠·그림 버튼은 바로 처리
@@ -58,17 +60,12 @@ private struct ExploreHud: View {
                 Text(m).font(.headline).fixedSize(horizontal: false, vertical: true)
             }
             if s.hudMenu {
-                if s.themeOpen, let r = s.room {
-                    ThemePicker(room: r, compact: true) { p, w, t, l in s.setTheme(place: p, weather: w, time: t, look: l) }
-                        .padding(.top, 4)
-                }
                 HStack(spacing: 14) {
                     if s.room != nil {
                         Button {
                             s.toggleTheme()
                         } label: {
-                            Label(s.themeOpen ? "테마 닫기" : (s.unified ? "모든 방 테마 바꾸기" : "테마 바꾸기"),
-                                  systemImage: s.themeOpen ? "chevron.down" : "paintpalette")
+                            Label(s.unified ? "모든 방 테마 바꾸기" : "테마 바꾸기", systemImage: "paintpalette")
                         }
                     }
                     Button {
@@ -81,10 +78,56 @@ private struct ExploreHud: View {
             }
         }
         .padding(22)
-        .frame(width: s.themeOpen ? 740 : 480)          // 테마 칩 9개(장소)가 잘리지 않는 폭
+        .frame(width: 480)
         .glassBackgroundEffect()
-        .transaction { $0.animation = nil }             // 테마 판이 펼쳐질 때 버튼이 미끄러져 내려오듯 움직이지 않게 (바로 그 모양으로)
+        .transaction { $0.animation = nil }
         .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })     // 안내판을 누른 탭은 싱글탭으로 치지 않음
+    }
+}
+
+/// 테마 판: 크기가 늘 같은 판 (칩 9개가 딱 들어가는 폭, 좌우 여백 같게)
+private struct ThemePanel: View {
+    let s: ExploreSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let r = s.room {
+                        Text(r.title).font(.title2.weight(.semibold))
+                        Text(r.name).font(.headline).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                Button {
+                    s.closeHud()
+                } label: {
+                    Image(systemName: "xmark").font(.title3).frame(width: 36, height: 36)
+                }
+                .buttonBorderShape(.circle)
+            }
+            if let r = s.room {
+                ThemePicker(room: r, compact: true) { p, w, t, l in s.setTheme(place: p, weather: w, time: t, look: l) }
+            }
+            HStack(spacing: 14) {
+                Button {
+                    s.toggleTheme()
+                } label: {
+                    Label("테마 닫기", systemImage: "chevron.down")
+                }
+                Button {
+                    s.exit()
+                } label: {
+                    Label("현실로 돌아가기", systemImage: "arrow.uturn.backward")
+                }
+            }
+            .font(.title3)
+        }
+        .padding(24)
+        .frame(width: 652)                              // 칩 60×9 + 사이 8×8 = 604, 좌우 여백 24씩
+        .glassBackgroundEffect()
+        .transaction { $0.animation = nil }
+        .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })
     }
 }
 
@@ -116,6 +159,7 @@ final class ExploreSession {
     @ObservationIgnored private var closeSince: [Int: Float] = [:]  // 막힘이 시작된 때 (0.6초 이어지면 닫힘)
     @ObservationIgnored private var openHold: [Int: Float] = [:]    // 이때까지는 다시 닫힘으로 치지 않음 (방금 문 자리를 지남)
     @ObservationIgnored private var realClosed: Set<Int> = []       // 실제 문이 닫혀 있는 문
+    @ObservationIgnored private var leafSeen: Set<Int> = []         // 닫힌 실제 문이 보이던 문 (그 문이 열리면 바로 열린 공간으로)
     @ObservationIgnored private var solidDoors: Set<Int> = []       // 지금 막혀 보이는 문 (벽 또는 닫힌 실제 문)
     @ObservationIgnored private var leafDoor: Int?                  // 가장 가까이 보이는 닫힌 실제 문
     @ObservationIgnored private var doorUrgent = false        // 실제 닫힌 문 앞 → 문 자리 그물을 더 자주 다시 봄
@@ -136,7 +180,8 @@ final class ExploreSession {
     @ObservationIgnored private var peekDismissed: Int?       // 더블탭으로 닫은 닫힌 문 현실 창 (그 문에서 벗어나면 다시 자동)
     // 탭
     @ObservationIgnored private let tapCatcher = Entity()
-    @ObservationIgnored private var pendingTap: Float?        // 한 번 탭한 때 — 0.4초 안에 또 오면 더블탭
+    @ObservationIgnored private var pendingTap: Float?        // 한 번 탭한 때 — 0.45초 안에 또 오면 더블탭
+    @ObservationIgnored private var beforeTap: (Bool, Float, Bool)?   // 첫 탭 전 안내판 상태 (더블탭이면 되돌림)
     @ObservationIgnored private var lastUITap: Float = -9
     // 안내판
     @ObservationIgnored private var hud: Entity?
@@ -145,11 +190,13 @@ final class ExploreSession {
     @ObservationIgnored private var hudUntil: Float = 0       // 이때까지 보임 (알림 4초, 메뉴판은 마지막으로 만진 뒤 4초)
     @ObservationIgnored private var hudAlert = false          // 안전 알림 (방 밖·너무 빠름) — 계속 보임
     @ObservationIgnored private var hudWasMenu = false
+    @ObservationIgnored private var themePanel: Entity?
     // 그림 설명
     @ObservationIgnored private var docentCard: Entity?
     @ObservationIgnored private var docentShow: Float = 0
     @ObservationIgnored private var themeQuiet: Float = 0     // 테마를 바꾼 직후엔 알림판을 띄우지 않음
     @ObservationIgnored private var badgeT: Float = 0
+    @ObservationIgnored private var decorT: Float = 0
     @ObservationIgnored private let ar = ARKitSession()
     @ObservationIgnored private var world: WorldTrackingProvider?
     @ObservationIgnored private var data: SpaceData?
@@ -319,7 +366,6 @@ final class ExploreSession {
         spaceRoot.addChild(w.world)
         spaceRoot.addChild(w.local)
         worlds[r.id] = w
-        for k in 0..<4 { mats[r.id * 4 + k] = nil }
         vox?.restyle()
         return w
     }
@@ -394,6 +440,12 @@ final class ExploreSession {
 
     func attachHud(_ e: Entity) {
         hud = e
+        e.isEnabled = false
+        root.addChild(e)
+    }
+
+    func attachTheme(_ e: Entity) {
+        themePanel = e
         e.isEnabled = false
         root.addChild(e)
     }
@@ -754,11 +806,6 @@ final class ExploreSession {
         }
         hudAlert = why != nil
         tapCatcher.position = head
-        // 싱글탭 확정: 두 번째 탭 없이 0.4초가 지남
-        if let p = pendingTap, t - p > 0.5 {
-            pendingTap = nil
-            singleTapped()
-        }
 
         placePeek(dt)
         if let wld = worlds[current], let f = fit, let L = layout {
@@ -858,6 +905,13 @@ final class ExploreSession {
             }
             let real = realClosed.contains(i)
             let leafOn = real && near
+            // 문은 한 번만: 닫힌 실제 문(손잡이 문)을 보고 있다가 실제 문을 열면 그대로 열린 공간 (열쇠 문을 또 보이지 않음)
+            if leafOn {
+                leafSeen.insert(i)
+            } else if leafSeen.contains(i) {
+                leafSeen.remove(i)
+                if !real && near && !same && !doorOpen.contains(i) { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
+            }
             if !same {
                 if inside {
                     if !doorOpen.contains(i) && openProg[i] == nil { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
@@ -1021,12 +1075,18 @@ final class ExploreSession {
             }
             cur = c.parent
         }
-        if t - lastUITap < 0.3 { return }                          // 안내판을 누른 탭
-        if let p = pendingTap, t - p <= 0.5 {
+        if t - lastUITap < 0.25 { return }                         // 안내판을 누른 탭
+        // 싱글탭은 기다리지 않고 바로 반응 (탭이 먹혔는지 바로 보이게). 0.45초 안에 두 번째 탭이 오면
+        // 첫 탭이 한 일을 되돌리고 더블탭으로 처리
+        if let p = pendingTap, t - p <= 0.45 {
             pendingTap = nil
+            if let s = beforeTap { hudMenu = s.0; hudUntil = s.1; themeOpen = s.2; hudShow = 0 }
+            beforeTap = nil
             doubleTapped()
         } else {
             pendingTap = t
+            beforeTap = (hudMenu, hudUntil, themeOpen)
+            singleTapped()
         }
     }
 
@@ -1042,8 +1102,11 @@ final class ExploreSession {
 
     /// 싱글탭: 메뉴판 띄우기/닫기. 열쇠 문이 보이는 동안 빈 곳을 탭하면 아무 일도 안 함 (열쇠가 우선)
     private func singleTapped() {
-        if t - lastUITap < 0.5 { return }
-        if hudMenu && hudShow > 0.3 { closeHud(); return }
+        // 떠 있는 메뉴판·테마 판은 닫음 (closeHud 를 쓰지 않음 — 안내판 버튼을 누른 것으로 기록되면 바로 이어지는 두 번째 탭이 무시됨)
+        if themeOpen || (hudMenu && hudShow > 0.3) {
+            hudMenu = false; themeOpen = false; hudUntil = 0
+            return
+        }
         guard !doorShow.values.contains(where: { $0 > 0.3 }) else { return }
         hudMenu = true
         themeOpen = false
@@ -1075,13 +1138,53 @@ final class ExploreSession {
         docent = DocentState(entity: name, pick: hung.pick)
         docentShow = 0
         if let card = docentCard {
-            // 그림 오른쪽 옆, 그림과 같은 벽 앞 (저장 좌표 → 지금 좌표)
-            let p = spaceRoot.convert(position: hung.side, to: root)
-            let n = spaceRoot.convert(direction: hung.normal, to: root)
+            let sp = docentSpot(hung).0
+            // 저장 좌표 → 지금 좌표, 그리고 내 눈을 향하게 (좌우로 돌리고 위아래로 기울임)
+            let p = spaceRoot.convert(position: sp, to: root)
             card.position = p
-            card.orientation = simd_quatf(angle: atan2(n.x, n.z), axis: [0, 1, 0])
+            let to = head - p
+            let yaw = atan2(to.x, to.z)
+            let pitch = atan2(to.y, max(0.05, simd_length(SIMD2<Float>(to.x, to.z))))
+            card.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0]) * simd_quatf(angle: -pitch, axis: [1, 0, 0])
         }
         w.immerse(in: hung.palette)
+    }
+
+    /// 해설 창 자리 (저장 좌표): 그림 오른쪽·왼쪽 옆 중 벽 끝·가구에 걸리지 않고 나에게 가까운 쪽.
+    /// 양쪽 다 막혔으면 그림과 나 사이, 그림 앞쪽에. 높이는 그림 가운데(1.1~1.6m)
+    private func docentSpot(_ h: RoomWorld.Hung) -> (SIMD3<Float>, Bool) {
+        guard let f = fit, let L = layout else { return (h.side, false) }
+        let hs = f.toSaved(head)
+        let blocked = vox?.blockedCells(minH: 0.2) ?? []
+        let y = min(max(h.center.y, L.floorY + 1.1), L.floorY + 1.6)
+        func ok(_ c: SIMD3<Float>) -> Bool {
+            // 창 폭(약 40cm) 양끝과 가운데, 벽에서 10~50cm 앞이 모두 방 안·가구 없음·다른 벽에서 5cm 넘게 떨어져 있어야
+            for s: Float in [-0.22, 0, 0.22] {
+                for o: Float in [0, 0.15, 0.3] {
+                    let q = c + h.right * s + h.normal * o
+                    let pl = L.plane(q.x, q.z)
+                    let here = L.at(x: q.x, z: q.z)
+                    if here.room == 0 || here.wall < 0.05 || blocked.contains(RoomWorld.clutterKey(pl)) { return false }
+                }
+            }
+            return true
+        }
+        var best: (SIMD3<Float>, Float)? = nil
+        for side: Float in [1, -1] {
+            var c = h.center + h.right * side * (h.size.x / 2 + 0.3) + h.normal * 0.12
+            c.y = y
+            guard ok(c) else { continue }
+            let d = simd_distance(c.xz, hs.xz)
+            if best == nil || d < best!.1 { best = (c, d) }
+        }
+        if let b = best { return (b.0, true) }
+        // 그림 앞: 그림에서 나 쪽으로 (벽에서 0.5~1m), 그림을 가리지 않게 내 쪽 옆으로 조금
+        let toMe = hs - h.center
+        let lateral: Float = simd_dot(toMe, h.right) >= 0 ? 1 : -1
+        let away = min(1.0, max(0.5, simd_dot(toMe, h.normal) * 0.5))
+        var c = h.center + h.normal * away + h.right * lateral * (h.size.x / 2 * 0.6)
+        c.y = y
+        return (c, false)
     }
 
     func closeDocent() {
@@ -1097,6 +1200,11 @@ final class ExploreSession {
         card.components.set(OpacityComponent(opacity: docentShow))
         card.isEnabled = docentShow > 0.02
         for (_, w) in worlds { w.tickImmerse(dt) }
+        decorT += dt
+        if decorT > 3, let w = worlds[current], let v = vox {
+            decorT = 0
+            w.recheckDecor(blocked: v.blockedCells(minH: 0.2))
+        }
         badgeT += dt
         if badgeT > 0.4, let w = worlds[current] {
             badgeT = 0
@@ -1141,13 +1249,10 @@ final class ExploreSession {
         }
     }
 
+    /// 가구 재질: 그 방의 지금 세계에서 매번 받음 (예전 세계의 재질이 남아 선 그림 방에 색이 입혀지지 않게)
     private func material(_ room: Int, _ shade: Int) -> RealityKit.Material {
-        let key = room * 4 + shade
-        if let m = mats[key] { return m }
         guard let wld = worlds[room] else { return UnlitMaterial(color: .gray) }   // 방 세계를 아직 만드는 중: 다 만든 뒤 다시 칠함
-        let m = wld.propMaterial(shade)
-        mats[key] = m
-        return m
+        return wld.propMaterial(shade)
     }
 
     // MARK: 안내판
@@ -1155,7 +1260,17 @@ final class ExploreSession {
     /// 나타날 때는 바로 그 자리에 (가까이 나타났다 멀어지지 않게), 그 뒤엔 고개를 크게 돌릴 때만 천천히 따라옴
     private func placeHud(_ dt: Float) {
         guard let hud else { return }
-        let want: Float = (hudAlert || themeOpen || t < hudUntil) ? 1 : 0
+        // 테마 판은 따로 된 판(크기가 늘 같음) — 메뉴판이 커지며 버튼이 미끄러지듯 움직이지 않게, 메뉴판 자리에 바로 바꿔 보임
+        if let tp = themePanel {
+            if tp.isEnabled != themeOpen { tp.isEnabled = themeOpen }
+            if themeOpen {
+                tp.position = hud.position
+                tp.orientation = hud.orientation
+                tp.scale = hud.scale
+            }
+        }
+        let want: Float = (hudAlert || (t < hudUntil && !themeOpen)) ? 1 : 0
+        if themeOpen { hudShow = 0.03 }                         // 메뉴판 자리는 계속 계산하되 보이지는 않게
         let appearing = hudShow < 0.02 && want > 0
         if hudMenu != hudWasMenu { hudWasMenu = hudMenu; if hudShow > 0.02 { hudShow = 0.03 } }
         var f = SIMD3<Float>(fwd.x, 0, fwd.z)
@@ -1185,6 +1300,7 @@ final class ExploreSession {
         if want == 0 && hudShow < 0.02 { hudShow = 0 }
         hud.components.set(OpacityComponent(opacity: hudShow))
         hud.isEnabled = hudShow > 0.02
-        if !hud.isEnabled && hudMenu && want == 0 { hudMenu = false; themeOpen = false }
+        if !hud.isEnabled && hudMenu && want == 0 && !themeOpen { hudMenu = false }
+        if themeOpen { hud.isEnabled = false }
     }
 }

@@ -167,6 +167,9 @@ final class RoomWorld {
         Tex.with(look) { build(d, layout) }
     }
 
+    /// 벽 꾸밈 앞에 새로 가구가 보이면 다른 빈 벽으로 옮김
+    func recheckDecor(blocked: Set<Int64>) { scenery?.relocate(blocked: blocked) }
+
     /// 선 그림이면 검은 선, 아니면 그 색 (창틀·들보·액자·전구 등)
     private func ink(_ c: SIMD3<Float>) -> UnlitMaterial {
         if lineMode { return Ink.line }
@@ -256,7 +259,7 @@ final class RoomWorld {
             local.addChild(paintRoot)
         }
         if dc.stringLights { addStringLights(segs, L, ceilY: ceilY) }
-        if !lineMode { addClouds(ceilY: ceilY) }
+        addClouds(ceilY: ceilY)                      // 선 그림이면 구름 윤곽선 그림(cloud_n_ln)으로
         addWeather(rects, L, floorY: floorY, ceilY: ceilY)
         if lineMode { addOutlines(segs, L, floorY: floorY, ceilY: ceilY) }
         let sc = Scenery(room: room, look: look, tint: tint, center: center, halfSize: halfSize, angle: angle,
@@ -272,32 +275,39 @@ final class RoomWorld {
     private func addOutlines(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         var g = Geo()
         let w: Float = 0.014
+        let off = w / 2 + 0.005                 // 선을 벽·바닥·천장에서 방 안쪽으로 띄움 — 면과 겹쳐 깜빡이거나 옆방 벽에 비쳐 보이지 않게
         let top = ceilY - floorY
         func p3(_ p: SIMD2<Float>, _ y: Float) -> SIMD3<Float> { let f = L.flat(p); return SIMD3<Float>(f.x, floorY + y, f.y) }
         for s in segs {
-            g.stroke(p3(s.a, 0.004), p3(s.b, 0.004), width: w)
-            g.stroke(p3(s.a, top - 0.02), p3(s.b, top - 0.02), width: w)
+            let len = simd_distance(s.a, s.b)
+            guard len > 0.01 else { continue }
+            let dir = (s.b - s.a) / len
+            let inA = s.a + s.n * off, inB = s.b + s.n * off
+            g.stroke(p3(inA, off + 0.006), p3(inB, off + 0.006), width: w)
+            g.stroke(p3(inA, top - 0.02 - off), p3(inB, top - 0.02 - off), width: w)
             if s.window && top > 1.6 {
                 let w0: Float = 0.85, w1 = min(2.15, top - 0.15)
-                let inn = s.n * 0.01
-                g.stroke(p3(s.a + inn, w0), p3(s.b + inn, w0), width: w)
-                g.stroke(p3(s.a + inn, w1), p3(s.b + inn, w1), width: w)
-                g.stroke(p3(s.a + inn, w0), p3(s.a + inn, w1), width: w)
-                g.stroke(p3(s.b + inn, w0), p3(s.b + inn, w1), width: w)
+                g.stroke(p3(inA, w0), p3(inB, w0), width: w)
+                g.stroke(p3(inA, w1), p3(inB, w1), width: w)
+                g.stroke(p3(inA + dir * off, w0), p3(inA + dir * off, w1), width: w)
+                g.stroke(p3(inB - dir * off, w0), p3(inB - dir * off, w1), width: w)
             }
-            // 끝점: 같은 방향으로 이어지는 벽이 없으면 모서리(세로선)
-            for (e, other) in [(s.a, s.b), (s.b, s.a)] {
+            // 끝점: 같은 방향으로 이어지는 벽이 없으면 모서리(세로선) — 방 안쪽·벽 안쪽으로 띄워 세움
+            for (e, other, toward) in [(s.a, s.b, dir), (s.b, s.a, -dir)] {
                 let cont = segs.contains { o in
                     o.n == s.n && (simd_distance(o.a, e) < 0.01 || simd_distance(o.b, e) < 0.01)
                         && simd_distance(o.a, other) > 0.01 && simd_distance(o.b, other) > 0.01
                 }
-                if !cont { g.stroke(p3(e, 0), p3(e, top), width: w) }
+                if !cont {
+                    let q = e + s.n * off + toward * off
+                    g.stroke(p3(q, 0), p3(q, top), width: w)
+                }
             }
         }
         for ds in L.doors where (ds.roomA == room.id || ds.roomB == room.id) && !ds.single {
-            let (ea, eb, _) = ds.edge(for: room.id)
+            let (ea, eb, en) = ds.edge(for: room.id)
             let dh = min(2.05, top - 0.05)
-            if ds.width <= 1.6 { g.stroke(p3(ea, dh), p3(eb, dh), width: w) }
+            if ds.width <= 1.6 { g.stroke(p3(ea + en * off, dh), p3(eb + en * off, dh), width: w) }
         }
         if let e = g.entity("outline", Ink.line) { local.addChild(e) }
     }
