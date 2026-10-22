@@ -3,7 +3,7 @@ import UIKit
 import RealityKit
 import simd
 
-/// 시골 테마의 강아지 '설이' (시베리안 허스키 느낌의 선 그림 카툰). 고양이 방울이와 같은 방식(그림 판이 늘 나를 바라보고,
+/// 시골 테마의 강아지 '설이' (갈색 곱슬 토이 푸들 느낌의 선 그림 카툰 — 큰 머리·늘어진 귀, 다리는 몸과 한 덩어리). 고양이 방울이와 같은 방식(그림 판이 늘 나를 바라보고,
 /// 가까이서 내려다볼 땐 판이 내 눈 쪽으로 젖혀짐)이지만 성격이 다름:
 /// - 활발하게 이곳저곳 돌아다니고(킁킁 냄새 맡으며), 소파·침대처럼 낮은 가구(30~65cm)엔 폴짝 올라가 엎드리기도 함. 늘 내 시야 근처
 /// - 혼자서: 앉아 꼬리 흔들기, 헥헥, 땅 파기, 벌러덩, 엎드리기, 놀자 자세(엉덩이 들기), 우다다, 가끔 아우우 하울링
@@ -25,7 +25,7 @@ final class HomeDog {
     private let look: LookMode
     private var mats: [String: UnlitMaterial] = [:]
     private var pending: [String] = []
-    private static let size: Float = 0.72        // 그림 판 크기 (허스키는 고양이보다 큼)
+    private static let size: Float = 0.72        // 그림 판 크기 (강아지는 고양이보다 조금 큼)
 
     private enum Act {
         case sit, walk, lie, sleep, sniff, dig, roll, bow, jump, bark, howl, pant, tilt, paw, love, fetch, bring, wait,
@@ -121,8 +121,10 @@ final class HomeDog {
         if let mask = Tex.get("glow_a", raw: true) {
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
             sm.blending = .transparent(opacity: .init(scale: 0.3, texture: mp))
+            sm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         } else {
             sm.blending = .transparent(opacity: .init(floatLiteral: 0.15))
+            sm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         if let e = sg.entity("dogShadow", sm) { shadow = e; root.addChild(e) }
         root.position = SIMD3<Float>(p.x, floorY, p.y)
@@ -323,6 +325,7 @@ final class HomeDog {
         panting -= dt
         floorY = c.floorY
         if let n = pending.first { _ = mat(n); pending.removeFirst() }
+        unstick(c)
 
         let me = SIMD2<Float>(c.head.x, c.head.z)
         let to = pos - me
@@ -573,6 +576,18 @@ final class HomeDog {
         }
     }
 
+    /// 바닥에 있는데 그림 판이 가구·벽에 파고드는 자리면(가구가 새로 보였거나 밀려 들어감) 가장 가까운 넉넉한 빈자리로 비켜남
+    private func unstick(_ c: Ctx) {
+        guard elev < 0.02, ![Act.jumpUp, .onTop, .jumpDown, .enter, .leave].contains(act), !c.free(pos) else { return }
+        for r in stride(from: Float(0.1), through: 1.2, by: 0.1) {
+            for k in 0..<16 {
+                let a = Float(k) / 16 * 2 * .pi
+                let q = pos + SIMD2<Float>(cos(a), sin(a)) * r
+                if c.free(q) { pos += (q - pos) * min(1, lastDt * 3); return }
+            }
+        }
+    }
+
     private func stepWalk(_ dt: Float, _ c: Ctx) {
         guard let g = goal else { start(.sit, 1.5); return }
         let v = g - pos
@@ -657,12 +672,11 @@ final class HomeDog {
             return
         }
         if var air = stickAir {
-            air.1.y -= 9.8 * dt
-            var np = air.0 + air.1 * dt
-            if !c.free(SIMD2<Float>(np.x, np.z)) && np.y < floorY + 2 {
-                air.1.x *= -0.35; air.1.z *= -0.35
-                np.x = air.0.x; np.z = air.0.z
-            }
+            var vel = air.1
+            let st = HomeCat.toyStep(air.0, &vel, dt, c, radius: 0.05)
+            var np = st.0
+            if st.1 && simd_length(vel) > 1 { Sfx.play("fire_pop1", in: propRoot, at: np, gain: -26) }   // 벽·가구에 탁 부딪힘
+            air.1 = vel
             stickSpin += dt * min(14, simd_length(air.1) * 2.2)
             if np.y <= floorY + 0.02 {
                 np.y = floorY + 0.02
@@ -727,7 +741,7 @@ final class HomeDog {
         if d > 0.001 { moveDir = v / d }
         show(walkFrame(moveDir))
         jingle(dt)
-        if d < 0.28 && stickAir == nil {
+        if d < 0.46 && stickAir == nil {                          // 가구 곁의 막대도 입이 닿게 (몸은 가구에서 여유를 둠)
             carrying = true
             say("dog_playgrowl", -8)
             start(.bring, 12)

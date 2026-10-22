@@ -177,7 +177,10 @@ final class RoomWorld {
     }
 
     /// 벽 꾸밈 앞에 새로 가구가 보이면 다른 빈 벽으로 옮김
-    func recheckDecor(blocked: Set<Int64>) { scenery?.relocate(blocked: blocked) }
+    func recheckDecor(blocked: Set<Int64>) {
+        scenery?.relocate(blocked: blocked)
+        creek?.refresh(blocked: blocked)          // 계곡 물: 새로 알게 된 가구 자리는 비우고 다시 그림
+    }
 
     /// 선 그림이면 검은 선, 아니면 그 색 (창틀·들보·액자·전구 등)
     private func ink(_ c: SIMD3<Float>) -> UnlitMaterial {
@@ -212,7 +215,7 @@ final class RoomWorld {
         if dc.sea { l.append(("water", "tex")) }
         if dc.city { l.append((night ? "facade_night" : "facade", "tex")) }
         if dc.paintings { for i in 0..<6 { l.append(("art_\(i)", "tex")) } }
-        if r.place == "valley" { l += [("river", "tex"), ("river_hi", "tex"), ("fall", "tex"), ("pebble", "tex"), ("rock", "tex")] }
+        if r.place == "valley" { l += [("river", "tex"), ("river_hi", "tex"), ("fall", "tex"), ("pebble", "tex"), ("rock", "tex"), ("cliff", "tex"), ("ripple", "tex")] }
         if r.place == "valley" { for i in 0..<6 { l.append(("fish_\(i)", "tex")) } }
         if r.place == "sea" { l += [("jelly_bell", "tex"), ("jelly_tent", "tex"), ("jelly_arm", "tex"), ("glow", "tex"), ("spark_dot", "tex")] }
         if r.place == "city" { for i in 0..<16 { l += [(String(format: "neon_%02da", i), "tex"), (String(format: "neon_%02db", i), "tex")] } }
@@ -831,6 +834,7 @@ final class RoomWorld {
                 var p = MaterialParameters.Texture(mask)
                 p.sampler = Tex.band
                 hm.blending = .transparent(opacity: .init(scale: 1, texture: p))
+                hm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
                 if let e = hz.entity("seaHaze", hm) {
                     layer(e, 3)
                     world.addChild(e)
@@ -1007,9 +1011,16 @@ final class RoomWorld {
         let fw = ws[0] * 0.95
         let fH: Float = 26
         let fb = SIMD3<Float>(p0.x, floorY - 0.3, p0.z) - t0 * 0.8
-        var fall = Geo()
+        var fall = Geo(), fallFront = Geo()
+        let lip = fb + SIMD3<Float>(0, fH, 0) - t0 * 1.5            // 폭포가 떨어지기 시작하는 절벽 끝 (가운데)
         fall.quad(fb + n0 * fw / 2, fb - n0 * fw / 2, fb - n0 * fw / 2 + SIMD3<Float>(0, fH, 0) - t0 * 1.5, fb + n0 * fw / 2 + SIMD3<Float>(0, fH, 0) - t0 * 1.5,
                   SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, fH / 7), SIMD2<Float>(0, fH / 7))
+        // 앞쪽 물줄기 한 겹 더 (위는 좁고 아래로 퍼짐, 다른 빠르기로 흘러 물줄기가 겹겹이 보임)
+        let fwb = fw * 1.12, fwt = fw * 0.8
+        fallFront.quad(fb + n0 * fwb / 2 + t0 * 0.35, fb - n0 * fwb / 2 + t0 * 0.35,
+                       lip - n0 * fwt / 2 + t0 * 0.2, lip + n0 * fwt / 2 + t0 * 0.2,
+                       SIMD2<Float>(0.1, 0), SIMD2<Float>(0.9, 0), SIMD2<Float>(0.9, fH / 5), SIMD2<Float>(0.1, fH / 5))
+        addCliff(behind: fb, lip: lip, t0: t0, n0: n0, fw: fw, fH: fH, floorY: floorY, using: &g)
         // 폭포 양옆과 물길 끝을 큰 바위로 감쌈
         for side: Float in [-1, 1] {
             let bs = Float.random(in: 1.6...2.6, using: &g)
@@ -1043,6 +1054,7 @@ final class RoomWorld {
             if let mk = Tex.get("river_hi_a", raw: true) {
                 var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.tiling
                 hm.blending = .transparent(opacity: .init(scale: night ? 0.5 : 0.85, texture: tp))
+                hm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             }
             var hg = water
             hg.pos = hg.pos.map { SIMD3<Float>($0.x, $0.y + 0.004, $0.z) }
@@ -1061,13 +1073,84 @@ final class RoomWorld {
         if let mk = Tex.get("fall_a", raw: true) {
             var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.tiling
             fm.blending = .transparent(opacity: .init(scale: 0.95, texture: tp))
+            fm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         } else if lineMode {
             fm.blending = .transparent(opacity: .init(floatLiteral: 1))
+            fm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         if let e = fall.entity("waterfall", fm) {
             layer(e, 6)
             world.addChild(e)
             flows.append((e, fm, -2.5, 0))
+        }
+        if !lineMode {
+            var ff = Tex.unlit("fall", tint: Worlds.safe(night ? tint * 0.7 : tint * 1.08, min: 0.32))
+            if let mk = Tex.get("fall_a", raw: true) {
+                var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.tiling
+                ff.blending = .transparent(opacity: .init(scale: 0.62, texture: tp))
+            } else {
+                ff.blending = .transparent(opacity: .init(floatLiteral: 0.4))
+            }
+            ff.writesDepth = false
+            if let e = fallFront.entity("waterfallFront", ff) {
+                layer(e, 7)
+                world.addChild(e)
+                flows.append((e, ff, -3.6, 0.3))
+            }
+            // 떨어지는 물줄기 가닥: 절벽 끝에서 쏟아져 내려가며 길게 늘어진 물보라 (중력으로 점점 빨라짐)
+            var dr = ParticleEmitterComponent()
+            dr.emitterShape = .box
+            dr.emitterShapeSize = [fw * 0.85, 0.3, 0.4]
+            dr.birthLocation = .volume
+            dr.birthDirection = .world
+            dr.emissionDirection = [0, -1, 0]
+            dr.speed = 2.2
+            dr.speedVariation = 0.8
+            dr.mainEmitter.birthRate = 90
+            dr.mainEmitter.lifeSpan = 2.3
+            dr.mainEmitter.lifeSpanVariation = 0.2
+            dr.mainEmitter.acceleration = [0, -9.8, 0]
+            dr.mainEmitter.size = 0.22
+            dr.mainEmitter.sizeVariation = 0.1
+            dr.mainEmitter.sizeMultiplierAtEndOfLifespan = 2.2
+            dr.mainEmitter.stretchFactor = 4
+            dr.mainEmitter.spreadingAngle = 0.05
+            dr.mainEmitter.color = .constant(.single(Tex.color([0.93, 0.96, 1], alpha: night ? 0.16 : 0.32)))
+            dr.mainEmitter.opacityCurve = .gradualFadeInOut
+            if let puff = Tex.get("smoke_puff", color: true) { dr.mainEmitter.image = puff }
+            let de = Entity()
+            de.components.set(dr)
+            de.position = lip + t0 * 0.4 - SIMD3<Float>(0, 0.3, 0)
+            de.orientation = simd_quatf(angle: atan2(-n0.z, n0.x), axis: [0, 1, 0])          // 상자 x = 폭포 폭 방향
+            layer(de, 18)
+            world.addChild(de)
+            emitters.append(de)
+            // 폭포 밑 하얀 물거품 (부딪혀 튀어 오르는 물)
+            var fo = ParticleEmitterComponent()
+            fo.emitterShape = .box
+            fo.emitterShapeSize = [fw * 1.05, 0.2, 1.4]
+            fo.birthLocation = .volume
+            fo.birthDirection = .world
+            fo.emissionDirection = [0, 1, 0]
+            fo.speed = 1.4
+            fo.speedVariation = 0.8
+            fo.mainEmitter.spreadingAngle = 0.7
+            fo.mainEmitter.acceleration = [0, -4, 0]
+            fo.mainEmitter.birthRate = 50
+            fo.mainEmitter.lifeSpan = 1.4
+            fo.mainEmitter.size = 0.35
+            fo.mainEmitter.sizeVariation = 0.15
+            fo.mainEmitter.sizeMultiplierAtEndOfLifespan = 2.5
+            fo.mainEmitter.color = .constant(.single(Tex.color([0.97, 0.98, 1], alpha: night ? 0.18 : 0.42)))
+            fo.mainEmitter.opacityCurve = .quickFadeInOut
+            if let puff = Tex.get("smoke_puff", color: true) { fo.mainEmitter.image = puff }
+            let foe = Entity()
+            foe.components.set(fo)
+            foe.position = fb + t0 * 0.9 + SIMD3<Float>(0, 0.1, 0)
+            foe.orientation = de.orientation
+            layer(foe, 18)
+            world.addChild(foe)
+            emitters.append(foe)
         }
         if lineMode {
             for k in 0..<5 {
@@ -1101,6 +1184,56 @@ final class RoomWorld {
         emitters.append(me)
         fallSpot = fb + SIMD3<Float>(0, 2, 0)
         riverNear = pts.min { simd_distance($0, center) < simd_distance($1, center) }
+    }
+
+    /// 폭포 뒤 절벽: 실사 암벽 무늬를 입힌 울퉁불퉁한 바위 벽 (폭이 46m, 폭포 높이보다 조금 높게).
+    /// 가운데 폭포 자리는 깎여 들어가 있고, 양끝은 물길 쪽으로 휘어 감싸며, 꼭대기 윤곽은 들쭉날쭉. 먼 절벽 띠 앞에서 폭포가 바위에 붙어 떨어지게 보임
+    private func addCliff<G: RandomNumberGenerator>(behind fb: SIMD3<Float>, lip: SIMD3<Float>, t0: SIMD3<Float>, n0: SIMD3<Float>,
+                                                    fw: Float, fH: Float, floorY: Float, using g: inout G) {
+        let cw: Float = 46, nx = 46, ny = 26
+        let H0 = fH + 2.5
+        let back = fb - t0 * 0.4
+        let s1 = Float.random(in: 0...10, using: &g), s2 = Float.random(in: 0...10, using: &g)
+        func nz(_ x: Float, _ y: Float) -> Float {
+            (sin(x * 0.31 + s1) * cos(y * 0.27 + s2) * 0.55 + sin(x * 0.83 + y * 0.41 + s2) * 0.3 + sin(x * 2.1 - y * 1.7 + s1) * 0.12 + sin(x * 4.7 + y * 3.9) * 0.05)
+        }
+        func topH(_ x: Float) -> Float {
+            let notch = max(0, 1 - abs(x) / (fw * 0.7))                  // 폭포 자리는 살짝 낮게 패임
+            return H0 + 2.2 * nz(x * 0.7, 3.1) + 1.2 * sin(x * 0.45 + s1) - notch * 1.6
+        }
+        var geo = Geo(), lines = Geo()
+        var grid: [SIMD3<Float>] = []
+        for j in 0...ny {
+            for i in 0...nx {
+                let x = -cw / 2 + cw * Float(i) / Float(nx)
+                let hTop = topH(x)
+                let y = hTop * Float(j) / Float(ny)
+                let curve = x * x / 70                                        // 양끝이 물길 쪽으로 휨
+                let near = min(1, abs(x) / (fw * 1.2))                          // 폭포 바로 뒤는 고르게 (바위가 물줄기 앞으로 튀어나오지 않게)
+                let recess = max(0, 1 - abs(x) / (fw * 0.9)) * 0.3             // 폭포 뒤는 깎여 들어감
+                let lean = (y / H0) * 1.4                                       // 위로 갈수록 조금 뒤로 기움 (폭포 물줄기와 나란히)
+                let d = nz(x, y) * (0.2 + 1.1 * near) - recess - lean
+                grid.append(back + n0 * x + t0 * (curve + d) + SIMD3<Float>(0, y - 0.6, 0))
+            }
+        }
+        let W = nx + 1
+        for j in 0..<ny {
+            for i in 0..<nx {
+                let a = grid[j * W + i], b = grid[j * W + i + 1], c = grid[(j + 1) * W + i + 1], d = grid[(j + 1) * W + i]
+                func uv(_ p: SIMD3<Float>) -> SIMD2<Float> { SIMD2<Float>(simd_dot(p - back, n0) / 7, p.y / 7) }
+                geo.quad(a, b, c, d, uv(a), uv(b), uv(c), uv(d))
+            }
+        }
+        if lineMode {
+            for i in 0..<nx { lines.stroke(grid[ny * W + i], grid[ny * W + i + 1], width: 0.12) }
+            for i in stride(from: 0, through: nx, by: 4) { lines.stroke(grid[i], grid[ny * W + i], width: 0.06) }
+            if let e = lines.entity("cliffLines", Ink.line) { layer(e, 5); world.addChild(e) }
+        }
+        let tx = Tex.get("cliff") != nil ? "cliff" : "rock"
+        if let e = geo.entity("fallCliff", Tex.unlit(tx, tint: Worlds.safe(tint * 0.92, min: 0.22))) {
+            layer(e, 4)
+            world.addChild(e)
+        }
     }
 
     /// 장소마다의 특징 만들기
@@ -1156,12 +1289,16 @@ final class RoomWorld {
             return free(pts)
         }
         // 나무: 그림마다 그물 하나, 먼 것부터 (겹칠 때 가까운 것이 위에)
+        // 숲의 밤(별이 보이는 시간): 별자리가 나무에 가리지 않게 숲 속 빈터처럼 — 나무 꼭대기가 눈높이에서 35도 아래로 보이도록 멀리
+        let skyOpen = room.place == "forest" && (stars?.visible ?? false)
         for set in dc.trees {
             var list: [(SIMD3<Float>, Float, Float, Float)] = []
             for i in 0..<set.count {
                 for _ in 0..<6 {                                          // 집 안에 걸치면 다른 자리로 (6번까지)
-                    let p = around((Float(i) + Float.random(in: 0...0.8, using: &g)) / Float(set.count), Float.random(in: set.d, using: &g), rec, floorY - 0.1)
                     let h = Float.random(in: set.h, using: &g)
+                    var dd = Float.random(in: set.d, using: &g)
+                    if skyOpen { dd = max(dd, (h - 1.6) * 1.45 + Float.random(in: 0...4, using: &g)) }
+                    let p = around((Float(i) + Float.random(in: 0...0.8, using: &g)) / Float(set.count), dd, rec, floorY - 0.1)
                     let w = h * set.aspect * Float.random(in: 0.85...1.15, using: &g)
                     let yaw = Float.random(in: 0...3.14, using: &g)
                     if treeFree(p, w, yaw) && riverGap(p) > 1.2 { list.append((p, h, w, yaw)); break }
@@ -1565,6 +1702,7 @@ final class RoomWorld {
                 m.color = .init(tint: Tex.color(lit * dim, alpha: 1), texture: .init(t))
             }
             m.blending = .transparent(opacity: .init(floatLiteral: 0.85))
+            m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             let e = ModelEntity(mesh: .generatePlane(width: Float.random(in: 60...130), depth: Float.random(in: 40...80)), materials: [m])
             e.orientation = simd_quatf(angle: .pi, axis: [1, 0, 0]) * simd_quatf(angle: Float.random(in: 0...(2 * .pi)), axis: [0, 1, 0])
             e.position = center + SIMD3<Float>(Float.random(in: -160...160), ceilY - center.y + Float.random(in: 55...110), Float.random(in: -160...160))

@@ -6,8 +6,9 @@ import simd
 /// 바다 테마의 특징: 공중을 천천히 유영하는 해파리들.
 /// - 투명한 갓(가장자리 띠·방사형 관·네 잎 무늬가 은은하게 비침)이 숨 쉬듯 오므라들 때마다 위로 조금씩 밀려 오르고, 촉수·입팔은 뒤로 늘어져 물결침
 /// - 갓 속 빛과 둘레 빛무리가 은은하게 발광 (밤일수록 또렷), 공기 중엔 작은 빛 알갱이(바다눈)가 천천히 떠다님
-/// - 방 안: 머리 위 높이(1.75m~천장 30cm 아래)에 작은 해파리 몇 마리 — 머리에 가까워지면 천천히 비켜 감
-/// - 방 밖 바다 위: 큰 해파리들이 멀리서 떠다님
+/// - 방 안: 가구보다 높은 곳(1.35m~천장 22cm 아래)에 손바닥만 한 해파리 2~4마리 — 이리저리·위아래로 천천히 헤엄치고, 머리에 가까워지면 비켜 감
+/// - 방 밖 바다 위: 몇 마리(갓 지름 50cm~1m)가 2~10m 거리에서 천천히 오르내리며 떠다님
+/// - 반투명 재질은 깊이를 쓰지 않음(writesDepth = false) → 뒤의 나무·바위가 네모나게 잘리지 않음
 /// 하늘 세계(포털 너머)에 두어 반투명이어도 현실이 비치지 않고, 방 안 자리여도 포털 너머로 그려짐 (가구보다 높이 떠 있어 겹치지 않음)
 @MainActor
 final class JellySea {
@@ -61,21 +62,21 @@ final class JellySea {
         default: glowK = 0.38
         }
         var g = SeededRNG(seed: UInt64(room.id * 4447 + 19))
-        // 방 안: 바닥 넓이에 따라 3~6마리
+        // 방 안: 바닥 넓이에 따라 2~4마리 (손바닥만 한 크기)
         let area = halfSize.x * halfSize.y * 4
-        let nIn = max(3, min(6, Int(area / 3.5)))
+        let nIn = max(2, min(4, Int(area / 5)))
         for i in 0..<nIn {
             guard let p = insideSpot(&g) else { continue }
-            add(inside: true, at: p, size: Float.random(in: 0.09...0.17, using: &g), color: Self.palette[i % Self.palette.count], &g)
+            add(inside: true, at: p, size: Float.random(in: 0.08...0.14, using: &g), color: Self.palette[i % Self.palette.count], &g)
         }
-        // 방 밖 바다 위: 크게, 멀리
-        for i in 0..<7 {
+        // 방 밖 바다 위: 몇 마리만, 너무 크지 않게 (갓 지름 50cm~1m), 방에서 2~10m
+        for i in 0..<4 {
             for _ in 0..<8 {
                 let a = Float.random(in: 0...(2 * .pi), using: &g)
-                let d = reach + Float.random(in: 3...24, using: &g)
-                let p = SIMD3<Float>(center.x + cos(a) * d, floorY + Float.random(in: 1.2...8, using: &g), center.z + sin(a) * d)
+                let d = reach + Float.random(in: 2...10, using: &g)
+                let p = SIMD3<Float>(center.x + cos(a) * d, floorY + Float.random(in: 1.4...4.5, using: &g), center.z + sin(a) * d)
                 guard !L.walkable(L.plane(p.x, p.z)) else { continue }
-                add(inside: false, at: p, size: Float.random(in: 0.35...1.1, using: &g), color: Self.palette[(i + 2) % Self.palette.count], &g)
+                add(inside: false, at: p, size: Float.random(in: 0.25...0.5, using: &g), color: Self.palette[(i + 2) % Self.palette.count], &g)
                 break
             }
         }
@@ -83,8 +84,8 @@ final class JellySea {
     }
 
     // MARK: 자리
-    private var lo: Float { floorY + min(1.75, ceilY - floorY - 0.45) }      // 눈높이보다 위 (뒤가 벽·천장 창이라 또렷이 그려짐)
-    private var hi: Float { ceilY - 0.3 }
+    private var lo: Float { floorY + min(1.35, ceilY - floorY - 0.7) }       // 가구보다 높이 (뒤가 벽·천장 창이라 또렷이 그려짐)
+    private var hi: Float { ceilY - 0.22 }
 
     private func insideOK(_ p: SIMD3<Float>) -> Bool {
         let c = L.at(x: p.x, z: p.z)
@@ -126,6 +127,7 @@ final class JellySea {
             m.color = .init(tint: ui(col), texture: tp)
             var mp = MaterialParameters.Texture(mk); mp.sampler = Tex.clamp
             m.blending = .transparent(opacity: .init(scale: 0.16 + 0.3 * glowK, texture: mp))
+            m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             if let e = q.entity("jellyHalo", m) { j.e.addChild(e); j.halo = e }
         }
         // 갓: 둘레를 따라 돌린 반구 (안팎 다 보이게), 가장자리→꼭대기 무늬
@@ -169,13 +171,16 @@ final class JellySea {
             if let mk = Tex.get("jelly_bell_a", raw: true) {
                 var mp = MaterialParameters.Texture(mk); mp.sampler = Tex.tiling
                 m.blending = .transparent(opacity: .init(scale: 0.55 + 0.35 * glowK, texture: mp))
+                m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             } else {
                 m.blending = .transparent(opacity: .init(floatLiteral: 0.4))
+                m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             }
             if let e = bell.entity("jellyBell", m) { j.body.addChild(e); j.bell = e }
             // 갓 속 빛 (속이 은은하게 빛남)
             var cm = UnlitMaterial(color: ui(col * 0.6 + SIMD3<Float>(repeating: 0.4)))
             cm.blending = .transparent(opacity: .init(scale: 0.25 + 0.4 * glowK))
+            cm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             let core = ModelEntity(mesh: .generateSphere(radius: s * 0.32), materials: [cm])
             core.position = [0, s * 0.38, 0]
             core.scale = [1, 0.7, 1]
@@ -216,8 +221,10 @@ final class JellySea {
         if let mk = Tex.get(tex + "_a", raw: true) {
             var mp = MaterialParameters.Texture(mk); mp.sampler = Tex.clamp
             m.blending = .transparent(opacity: .init(scale: alpha, texture: mp))
+            m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         } else {
             m.blending = .transparent(opacity: .init(scale: alpha * 0.6))
+            m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         return m
     }
@@ -289,34 +296,47 @@ final class JellySea {
             let relax: Float = ph >= 0.3 ? sin((ph - 0.3) / 0.7 * .pi) * 0.25 : 0
             j.bell?.scale = SIMD3<Float>(1 - 0.16 * squeeze + 0.04 * relax, 1 + 0.12 * squeeze, 1 - 0.16 * squeeze + 0.04 * relax)
             j.core?.scale = SIMD3<Float>(1 - 0.1 * squeeze, 0.7 + 0.08 * squeeze, 1 - 0.1 * squeeze)
-            // 길 찾기: 가끔 새 목표, 목표 쪽으로 천천히
+            // 길 찾기: 가끔 새 목표(높이도 새로) — 그쪽으로 천천히 헤엄쳐 감. 위로는 갓을 오므릴 때마다 밀려 오르고, 쉬는 동안 천천히 가라앉음
             j.retarget -= dt
-            if j.retarget <= 0 || simd_distance(j.pos, j.target) < 0.15 {
-                j.retarget = Float.random(in: 8...16, using: &g)
+            if j.retarget <= 0 || simd_distance(j.pos, j.target) < 0.2 {
+                j.retarget = Float.random(in: 7...13, using: &g)
                 if j.inside {
                     if let p = insideSpot(&g) { j.target = p }
                 } else {
-                    j.target = j.pos + SIMD3<Float>(Float.random(in: -4...4, using: &g), Float.random(in: -1...1, using: &g), Float.random(in: -4...4, using: &g))
-                    j.target.y = min(floorY + 9, max(floorY + 1, j.target.y))
+                    let a = Float.random(in: 0...(2 * .pi), using: &g)
+                    var p = j.pos + SIMD3<Float>(cos(a) * 2.5, Float.random(in: -1.2...1.2, using: &g), sin(a) * 2.5)
+                    let off = SIMD2<Float>(p.x - center.x, p.z - center.z)
+                    let r = simd_length(off)
+                    if r > reach + 11 { p.x = center.x + off.x / r * (reach + 9); p.z = center.z + off.y / r * (reach + 9) }
+                    if L.walkable(L.plane(p.x, p.z)) { p = j.pos }
+                    p.y = min(floorY + 5, max(floorY + 1.2, p.y))
+                    j.target = p
                 }
             }
-            var acc = simd_normalize(j.target - j.pos + SIMD3<Float>(0, 0.0001, 0)) * (j.inside ? 0.012 : 0.03)
-            acc += j.up * squeeze * (j.inside ? 0.09 : 0.25)                 // 오므릴 때 갓 방향으로 밀림
-            acc.y -= j.inside ? 0.012 : 0.025                                // 쉬는 동안 천천히 가라앉음
+            let speed: Float = j.inside ? 0.075 : 0.2
+            let to = j.target - j.pos
+            let hd = SIMD3<Float>(to.x, 0, to.z)
+            let hl = simd_length(hd)
+            var want = hl > 0.001 ? hd / hl * speed * min(1, hl / 0.6) : SIMD3<Float>(0, 0, 0)
+            // 위아래: 목표 높이 쪽으로 + 숨쉬기(오므릴 때 위로 밀림, 쉬면 가라앉음) — 늘 조금씩 오르내림
+            want.y = max(-0.06, min(0.06, to.y * 0.12)) * (j.inside ? 1 : 2.2)
+            want.y += (squeeze * 0.16 - 0.035) * (j.inside ? 1 : 2.4)
             if j.inside, let h = head {
                 let away = j.pos - h
                 let d = simd_length(away)
-                if d < 0.8 {                                                // 머리 가까이 오면 비켜 감
-                    acc += simd_normalize(away + SIMD3<Float>(0, 0.0001, 0)) * (0.8 - d) * 0.6
-                    if d < 0.6 { j.target = j.pos + simd_normalize(away) * 1.2 }
+                if d < 0.9 {                                                // 머리 가까이 오면 비켜 감
+                    want += simd_normalize(away + SIMD3<Float>(0, 0.0001, 0)) * (0.9 - d) * 0.5
+                    if d < 0.65 { j.target = j.pos + simd_normalize(SIMD3<Float>(away.x, 0.2, away.z) + SIMD3<Float>(0.0001, 0, 0)) * 1.2 }
                 }
             }
-            j.vel += acc * dt
-            j.vel *= max(0, 1 - dt * 0.9)
+            j.vel += (want - j.vel) * min(1, dt * 0.9)
             var np = j.pos + j.vel * dt
             if j.inside {
-                if !insideOK(np) { j.vel.x *= -0.5; j.vel.z *= -0.5; np.x = j.pos.x; np.z = j.pos.z; j.retarget = 0 }
+                if !insideOK(np) { j.vel.x *= -0.4; j.vel.z *= -0.4; np.x = j.pos.x; np.z = j.pos.z; j.retarget = 0 }
+                if np.y < lo || np.y > hi { j.vel.y *= -0.3 }
                 np.y = min(hi, max(lo, np.y))
+            } else if L.walkable(L.plane(np.x, np.z)) {
+                np.x = j.pos.x; np.z = j.pos.z; j.retarget = 0
             }
             j.pos = np
             j.e.position = np
@@ -346,7 +366,7 @@ final class JellySea {
             if let h = j.halo, let hp = head {
                 let to = hp - np
                 h.orientation = simd_quatf(angle: atan2(to.x, to.z), axis: [0, 1, 0])
-                h.scale = SIMD3<Float>(repeating: 0.92 + 0.12 * squeeze)
+                h.scale = SIMD3<Float>(repeating: 0.88 + 0.22 * squeeze + 0.05 * sin(t * 0.7 + j.phase * 9))      // 오므릴 때 환해짐 + 느린 숨결
             }
         }
     }

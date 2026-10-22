@@ -435,7 +435,7 @@ def photo_textures():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import fetch_env
     target = {'grass': 92, 'moss': 82, 'pebble': 132, 'sand': 182, 'dirt': 118, 'planks': 128, 'planks_dark': 78,
-              'brick': 118, 'plaster': 218, 'rock': 124, 'mossrock': 100, 'bark': 86}
+              'brick': 118, 'plaster': 218, 'rock': 124, 'mossrock': 100, 'bark': 86, 'cliff': 112}
     for name, i in fetch_env.TEXTURES.items():
         path = fetch_env.tex_path(i)
         if not os.path.exists(path):
@@ -577,11 +577,52 @@ def band_ridge_pines(name, seed, col):
     save_png(name, rgb, a)
 
 
+def _photo_cliff():
+    """받아 둔 실사 암벽 사진 (없으면 None)"""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fetch_env
+        p = fetch_env.tex_path(fetch_env.TEXTURES['cliff'])
+        if os.path.exists(p):
+            return np.asarray(Image.open(p).convert('RGB')).astype(np.float32)
+    except Exception as e:
+        print('  암벽 사진 읽기 실패:', e, flush=True)
+    return None
+
+
 def band_cliffs(name, seed, H=2048):
     W = 4096
     top = ridge(W, seed, 0.3, 0.26, beta=1.8)
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     a = (yy / H >= top[None, :]).astype(float)
+    photo = _photo_cliff()
+    if photo is not None:
+        # 실사 암벽 사진을 띠에 이어 붙임: 사진 한 장 = 띠 높이의 45% (가로·세로 비율 그대로), 이음새는 좌우 뒤집어 이어 보이지 않게
+        tile = int(H * 0.45)
+        im = Image.fromarray(np.clip(photo, 0, 255).astype(np.uint8)).resize((tile, tile), Image.LANCZOS)
+        t = np.asarray(im).astype(np.float32)
+        t2 = np.concatenate([t, t[:, ::-1]], axis=1)
+        t4 = np.concatenate([t2, t2[::-1]], axis=0)
+        reps_x = W // t4.shape[1] + 2
+        reps_y = H // t4.shape[0] + 2
+        big = np.tile(t4, (reps_y, reps_x, 1))
+        # 줄마다 조금씩 옆으로 밀어 같은 무늬가 줄지어 보이지 않게
+        off = (noise1(H, 2.6, seed + 9) * tile * 0.6).astype(int)
+        rgb = np.stack([big[y, off[y]:off[y] + W] for y in range(H)])
+        lum = _lum(rgb).mean()
+        rgb = rgb * (128.0 / max(1.0, lum))
+        # 큰 바위 기둥 그늘 + 아래로 갈수록 어둡게 (골짜기 안쪽) + 꼭대기 풀
+        cols = noise1(W, 2.2, seed + 6)
+        g = np.gradient(np.convolve(np.concatenate([cols[-80:], cols, cols[:80]]), np.ones(121) / 121, 'same')[80:-80]) * W * 0.03
+        rgb = rgb * (0.92 + np.clip(g, -0.16, 0.16))[None, :, None]
+        depth = yy / H - top[None, :]
+        rgb = rgb * (1 - 0.28 * np.clip(depth / 0.7, 0, 1))[..., None]
+        fine = noise(1.3, W, seed + 5, h=H)
+        grass = (depth < 0.025 + 0.03 * fine) & (a > 0)
+        rgb[grass] = lerp(rgb[grass], np.array([66, 88, 48.0]), 0.7)
+        save_png(name, rgb, a)
+        print('  실사 절벽 띠:', name, flush=True)
+        return
     warp = noise(2.8, W, seed + 3, h=H) * 9
     strata = np.sin(yy / H * 2 * np.pi * 9 + warp) * 0.5 + 0.5
     big = noise(3.0, W, seed + 4, h=H)
@@ -1296,6 +1337,7 @@ def sfx():
     misc_sounds(r)
     water_sounds(r)
     neon_sounds(r)
+    splash_sounds(r)
 
 
 def _formant_voice(f0, F, amp, r, breath=0.06, nasal=None):
@@ -1596,6 +1638,33 @@ def water_sounds(r):
     save_wav('fall_loop', _loop(roar, 1.0), -12)
 
 
+def splash_sounds(r):
+    """얕은 물을 걷는 첨벙 소리 네 가지: 발이 물을 차는 '촤'(넓은 잡음) + 물이 출렁이는 낮은 소리 + 떨어지는 물방울(오르는 짧은 음)"""
+    for i in range(1, 5):
+        dur = 0.9
+        buf = np.zeros(int(SR * dur))
+        # 차는 소리: 밝은 잡음이 빠르게 커졌다 사라짐
+        ln = r.uniform(0.12, 0.2)
+        n = r.standard_normal(int(SR * ln))
+        hp = _lowpass(n - _lowpass(n, 700), 7000)
+        env = np.interp(_t(ln), [0, 0.012, ln], [0, 1, 0]) ** 1.6
+        _place(buf, hp * env * 0.9, 0.0)
+        # 출렁임: 낮게 거른 잡음, 조금 늦게
+        ln2 = r.uniform(0.25, 0.4)
+        n2 = r.standard_normal(int(SR * ln2))
+        env2 = np.interp(_t(ln2), [0, 0.06, ln2], [0, 1, 0])
+        _place(buf, _lowpass(n2, 650) * env2 * 1.6, r.uniform(0.02, 0.06))
+        # 물방울: 짧게 위로 미끄러지는 음 여러 개
+        for k in range(r.integers(4, 9)):
+            dl = r.uniform(0.02, 0.06)
+            tt = _t(dl)
+            f0 = r.uniform(700, 2200)
+            ph = 2 * np.pi * np.cumsum(f0 * (1 + 2.2 * tt / dl)) / SR
+            drop = np.sin(ph) * np.exp(-tt * r.uniform(60, 120)) * r.uniform(0.12, 0.35)
+            _place(buf, drop, r.uniform(0.05, 0.5))
+        save_wav(f'splash{i}', buf, -14)
+
+
 def neon_sounds(r):
     """네온사인: 낮게 웅웅거리는 변압기 소리(되풀이) · 깜빡일 때 지직 하는 소리 두 가지"""
     dur = 6.0
@@ -1782,16 +1851,32 @@ def stream_art():
     st = noise(beta=1.8, size=N, seed=1704, aniso=(0.12, 1.0))
     a = np.clip((st - 0.68) * 5.5, 0, 1) ** 1.3
     save_png('river_hi', np.full((N, N, 3), 250.0), a * 0.9)
-    # 폭포: 가로 256 × 세로 512, 세로로 길게 떨어지는 물줄기, 양옆은 투명하게 흩어짐
-    W, H = 256, 512
-    fa = noise(beta=2.0, size=W, h=H, seed=1711, aniso=(0.08, 1.0))
-    fb = noise(beta=1.5, size=W, h=H, seed=1712, aniso=(0.05, 1.0))
+    # 폭포: 가로 512 × 세로 1024 (세로로 이어짐). 하얗게 부서지며 떨어지는 굵은 물줄기 여러 가닥 + 사이사이 가는 물줄기,
+    # 가운데는 빽빽하고 양옆은 가닥이 갈라지며 투명하게 흩어짐. 물줄기 속은 공기 섞인 거품 결 + 그늘진 푸른 회색
+    W, H = 512, 1024
+    rope = noise(beta=2.2, size=W, h=H, seed=1711, aniso=(0.035, 1.0))
+    thin = noise(beta=1.6, size=W, h=H, seed=1712, aniso=(0.02, 1.0))
+    foam = noise(beta=1.1, size=W, h=H, seed=1713, aniso=(0.25, 1.0))
+    sheet = noise(beta=2.8, size=W, h=H, seed=1714, aniso=(0.06, 1.0))
     x = np.linspace(-1, 1, W)[None, :]
-    body = np.clip(1 - np.abs(x) ** 2.2, 0, 1)
-    vv = 0.6 * fa + 0.4 * fb
-    rgb = colorize(vv, [(0, (120, 160, 164)), (0.45, (186, 214, 214)), (0.75, (226, 240, 238)), (1, (252, 255, 254))])
-    a = np.clip(body * (0.55 + (vv - 0.4) * 1.6), 0, 1)
+    body = np.clip(1 - np.abs(x) ** 2.6, 0, 1)
+    edge = np.clip((np.abs(x) - 0.45) / 0.55, 0, 1)                         # 0 가운데 → 1 가장자리
+    strands = np.clip((rope - 0.42) * 3.2, 0, 1) * 0.7 + np.clip((thin - 0.5) * 4, 0, 1) * 0.5
+    dens = body * (0.8 * (1 - edge) + strands * (0.4 + 0.8 * edge))
+    dens = dens * (0.75 + 0.5 * sheet)
+    a = np.clip(dens * 1.25, 0, 1) ** 1.15
+    vv = np.clip(0.45 * rope + 0.25 * thin + 0.3 * foam, 0, 1)
+    rgb = colorize(vv, [(0, (124, 150, 158)), (0.35, (178, 200, 206)), (0.6, (222, 234, 237)), (0.82, (244, 249, 250)), (1, (255, 255, 255))])
+    hi = np.clip((foam - 0.6) * 3, 0, 1)[..., None]
+    rgb = rgb * (1 - hi * 0.4) + 255 * hi * 0.4
     save_png('fall', rgb, a)
+    # 걸을 때 발밑에 퍼지는 물결 고리 (가운데 투명, 고리 두 겹)
+    S = 256
+    yy, xx = np.mgrid[0:S, 0:S].astype(np.float32)
+    d = np.hypot(xx - S / 2 + 0.5, yy - S / 2 + 0.5) / (S / 2)
+    wob = noise(beta=2.0, size=S, seed=1715) * 0.05
+    ring = np.exp(-((d + wob - 0.82) / 0.05) ** 2) + 0.55 * np.exp(-((d + wob - 0.6) / 0.04) ** 2)
+    save_png('ripple', np.full((S, S, 3), 250.0), np.clip(ring, 0, 1) * (d < 1))
 
 
 def jelly_art():
@@ -2207,6 +2292,7 @@ def main():
             prop_rock('rock', [(0, (66, 64, 60)), (0.5, (116, 110, 102)), (1, (166, 160, 150))], 411),
             prop_rock('mossrock', [(0, (40, 56, 34)), (0.5, (88, 104, 70)), (1, (140, 150, 116))], 413),
             prop_rock('basalt', [(0, (28, 30, 34)), (0.5, (58, 60, 64)), (1, (98, 100, 102))], 415),
+            prop_simple('cliff', [(0, (60, 56, 50)), (0.5, (112, 104, 94)), (1, (160, 152, 140))], 427, aniso=(0.35, 1.6)),
             prop_simple('bark', [(0, (52, 38, 28)), (0.5, (98, 74, 52)), (1, (140, 110, 80))], 417, aniso=(3, 0.2)),
             prop_simple('driftwood', [(0, (100, 96, 88)), (0.5, (150, 144, 132)), (1, (196, 190, 176))], 419, aniso=(0.2, 3)),
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),

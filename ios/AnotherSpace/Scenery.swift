@@ -533,6 +533,7 @@ final class Scenery {
                 if look != .line {
                     var glass = UnlitMaterial(color: UIColor(white: 1, alpha: 1))
                     glass.blending = .transparent(opacity: .init(floatLiteral: 0.16))
+                    glass.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
                     let dome = ModelEntity(mesh: .generateSphere(radius: 0.155), materials: [glass])
                     dome.position = cPos + SIMD3<Float>(0, 0.012, 0)
                     dome.scale = [1, 1.05, 1]
@@ -801,6 +802,7 @@ final class Scenery {
             var p = MaterialParameters.Texture(mask)
             p.sampler = Tex.clamp
             flameM.blending = .transparent(opacity: .init(scale: 1, texture: p))
+            flameM.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         for (k, x) in [Float(-0.12), 0, 0.12].enumerated() {
             let h: Float = k == 1 ? 0.36 : 0.26

@@ -28,6 +28,37 @@ final class HomeCat {
         var free: (SIMD2<Float>) -> Bool         // 고양이가 설 수 있는 바닥 (집 방 안, 가구·문 자리 아님)
         var top: (SIMD2<Float>) -> Float?        // 올라앉을 수 있는 가구 윗면 높이 (바닥에서)
         var height: (SIMD2<Float>) -> Float      // 그 자리 가구 높이 (없으면 0)
+        var room: (SIMD2<Float>) -> Bool         // 장난감이 날아다닐 수 있는 곳 (이 테마 방 안, 벽에서 6cm 넘게)
+        var ceil: Float                          // 천장 높이 (바닥에서)
+    }
+
+    /// 날아가는 장난감이 벽·천장·가구에 부딪히는지 (가구는 그 윗면보다 낮을 때만)
+    static func toyHit(_ p: SIMD3<Float>, _ c: Ctx, radius r: Float) -> Bool {
+        let q = SIMD2<Float>(p.x, p.z)
+        if !c.room(q) { return true }
+        return c.height(q) > p.y - c.floorY - r
+    }
+
+    /// 날아가는 장난감 한 걸음: 중력, 천장에서 튕겨 내려옴, 벽·가구에 부딪히면 그 면에서 튕겨 나옴(방 밖으로 나가지 않음).
+    /// 반환: 새 자리, 부딪혔는지
+    static func toyStep(_ p: SIMD3<Float>, _ v: inout SIMD3<Float>, _ dt: Float, _ c: Ctx, radius r: Float) -> (SIMD3<Float>, Bool) {
+        v.y -= 9.8 * dt
+        var np = p + v * dt
+        var hit = false
+        let top = c.floorY + c.ceil - 0.06 - r
+        if np.y > top { np.y = top; v.y = -abs(v.y) * 0.35; hit = true }
+        if toyHit(np, c, radius: r) {
+            let tx = SIMD3<Float>(np.x, np.y, p.z), tz = SIMD3<Float>(p.x, np.y, np.z)
+            var any = false
+            if toyHit(tx, c, radius: r) { v.x = -v.x * 0.45; any = true }
+            if toyHit(tz, c, radius: r) { v.z = -v.z * 0.45; any = true }
+            if !any { v.x = -v.x * 0.45; v.z = -v.z * 0.45 }
+            np.x = p.x; np.z = p.z
+            hit = true
+            // 그래도 갇혀 있으면(가구 위 모서리 등) 위로 살짝 띄움
+            if toyHit(np, c, radius: r) && c.room(SIMD2<Float>(np.x, np.z)) { np.y = c.floorY + c.height(SIMD2<Float>(np.x, np.z)) + r + 0.01 }
+        }
+        return (np, hit)
     }
 
     let root = Entity()                          // 고양이 자리 (저장 좌표, 발밑)
@@ -140,8 +171,10 @@ final class HomeCat {
         if let mask = Tex.get("glow_a", raw: true) {
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
             sm.blending = .transparent(opacity: .init(scale: 0.3, texture: mp))
+            sm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         } else {
             sm.blending = .transparent(opacity: .init(floatLiteral: 0.15))
+            sm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         if let e = sg.entity("catShadow", sm) { shadow = e; root.addChild(e) }
         root.position = SIMD3<Float>(p.x, floorY, p.y)
@@ -407,6 +440,7 @@ final class HomeCat {
         talkT -= dt
         floorY = c.floorY
         if let n = pending.first { _ = mat(n); pending.removeFirst() }            // 그림을 한 프레임에 하나씩 미리 읽음
+        unstick(c)
 
         // 나와의 관계
         let me = SIMD2<Float>(c.head.x, c.head.z)
@@ -700,6 +734,18 @@ final class HomeCat {
         }
     }
 
+    /// 바닥에 있는데 그림 판이 가구·벽에 파고드는 자리면(가구가 새로 보였거나 밀려 들어감) 가장 가까운 넉넉한 빈자리로 비켜남
+    private func unstick(_ c: Ctx) {
+        guard elev < 0.02, ![Act.jumpUp, .onTop, .jumpDown, .enter, .leave].contains(act), !c.free(pos) else { return }
+        for r in stride(from: Float(0.1), through: 1.2, by: 0.1) {
+            for k in 0..<16 {
+                let a = Float(k) / 16 * 2 * .pi
+                let q = pos + SIMD2<Float>(cos(a), sin(a)) * r
+                if c.free(q) { pos += (q - pos) * min(1, lastDt * 3); return }
+            }
+        }
+    }
+
     private func stepWalk(_ dt: Float, _ c: Ctx) {
         guard let g = goal else { start(.sit, 2); return }
         let v = g - pos
@@ -789,12 +835,11 @@ final class HomeCat {
         }
         if var air = ballAir {
             // 날아감: 중력, 벽·가구에 부딪히면 튕겨 나옴, 바닥에 닿으면 통통 튀다 굴러감
-            air.1.y -= 9.8 * dt
-            var np = air.0 + air.1 * dt
-            if !c.free(SIMD2<Float>(np.x, np.z)) && np.y < floorY + 2 {
-                air.1.x *= -0.4; air.1.z *= -0.4
-                np.x = air.0.x; np.z = air.0.z
-            }
+            var vel = air.1
+            let st = Self.toyStep(air.0, &vel, dt, c, radius: 0.047)
+            var np = st.0
+            air.1 = vel
+            if st.1 && simd_length(vel) > 1 { Sfx.play("cup_clink1", in: b, at: .zero, gain: -36) }
             if np.y <= floorY + 0.047 {
                 np.y = floorY + 0.047
                 if air.1.y < -1.2 {
@@ -821,11 +866,14 @@ final class HomeCat {
         let sp = simd_length(ballVel)
         if sp > 0.01 {
             var np = ballPos + ballVel * dt
-            if !c.free(np) {                                    // 벽·가구에 부딪히면 튕김
+            func rollHit(_ q: SIMD2<Float>) -> Bool { Self.toyHit(SIMD3<Float>(q.x, floorY + 0.047, q.y), c, radius: 0.047) }
+            if rollHit(np) {                                    // 벽·가구에 부딪히면 튕김 (방 밖으로 나가지 않음)
                 let tx = SIMD2<Float>(ballPos.x + ballVel.x * dt, ballPos.y)
                 let tz = SIMD2<Float>(ballPos.x, ballPos.y + ballVel.y * dt)
-                if !c.free(tx) { ballVel.x = -ballVel.x * 0.6 }
-                if !c.free(tz) { ballVel.y = -ballVel.y * 0.6 }
+                var any = false
+                if rollHit(tx) { ballVel.x = -ballVel.x * 0.6; any = true }
+                if rollHit(tz) { ballVel.y = -ballVel.y * 0.6; any = true }
+                if !any { ballVel = -ballVel * 0.6 }
                 np = ballPos
             }
             ballPos = np
@@ -879,7 +927,7 @@ final class HomeCat {
             faceToward(ballPos)
             return
         }
-        if d < 0.2 && simd_length(ballVel) < 0.6 {
+        if d < 0.34 && simd_length(ballVel) < 0.6 {                // 가구 곁의 공도 앞발이 닿게 (몸은 가구에서 여유를 둠)
             faceToward(ballPos)
             hitBall()
             start(.swat, 0.45)

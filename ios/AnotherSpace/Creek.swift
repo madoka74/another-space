@@ -3,11 +3,13 @@ import UIKit
 import RealityKit
 import simd
 
-/// 계곡 테마의 특징: 배경 폭포에서 내려온 강물이 갈래로 나뉘어 벽 너머에서 방 안 바닥으로 흘러 들어와,
-/// 방 안의 비어 있는 평평한 바닥에 맑은 웅덩이를 이룸. 그 물속을 여러 크기·여러 빛깔의 작은 물고기들이 헤엄침.
-/// - 물길·웅덩이: 자갈 바닥 + 그 위 맑은 물(물결이 흐름) + 물가 돌. 가구 블록·문이 쓸고 지나가는 자리는 피해 감
-/// - 물고기: 비단잉어·금빛·은빛 피라미·줄무늬·파랑노랑·반점 — 꼬리를 흔들며 천천히 돌다가 가끔 휙. 손을 물 가까이 대면 흩어짐
-/// - 웅덩이에서 졸졸 물소리
+/// 계곡 테마의 특징: 배경 폭포에서 내려온 강물이 갈래로 나뉘어 벽 너머에서 방 안으로 흘러 들어와,
+/// 방의 비어 있는 바닥을 모두 이어 얕고 맑은 물로 천천히 흘러감 (가구 둘레는 비켜 흐름). 반대쪽 벽 너머로 다시 흘러 나감.
+/// - 물: 자갈 바닥 + 그 위 맑은 물(들어온 곳에서 멀어지는 쪽으로 물결이 흐름) + 물살 반짝임 + 물가 돌.
+///   가장자리는 10cm 칸 계단이 보이지 않게 둥글게 다듬음. 가구 블록·문이 쓸고 지나가는 자리는 비움
+/// - 새로 알게 된 가구가 물에 걸치면 그 자리를 비우고 물을 다시 그림 (refresh)
+/// - 물고기: 비단잉어·금빛·은빛 피라미·줄무늬·파랑노랑·반점 — 물 전체를 천천히 돌아다니다 가끔 휙. 손·발이 가까이 오면 흩어짐
+/// - 물속을 걸으면 걸음마다 첨벙 소리 + 발밑에 물결 고리. 들어온 곳 쪽에서 졸졸 물소리
 @MainActor
 final class ValleyCreek {
     let local = Entity()                     // 방 안 (저장 좌표)
@@ -26,271 +28,391 @@ final class ValleyCreek {
         var depth: Float = 0.03
         var size: Float = 0.08
         var wag: Float = 0
+        var goal = SIMD2<Float>(0, 0)
+        var goalT: Float = 0
     }
 
+    private static let steps8: [(Int, Int, Float)] = [(1, 0, 0.1), (-1, 0, 0.1), (0, 1, 0.1), (0, -1, 0.1),
+                                                      (1, 1, 0.1414), (1, -1, 0.1414), (-1, 1, 0.1414), (-1, -1, 0.1414)]
     private var fish: [Fish] = []
     private var flows: [(ModelEntity, UnlitMaterial, Float, Float)] = []
-    private var path: [SIMD2<Float>] = []        // 물길 (저장 좌표 xz), 마지막이 웅덩이 가운데
-    private var pool = SIMD2<Float>(0, 0)
-    private var poolR: Float = 0
-    private let halfW: Float = 0.17
+    private let L: Layout
+    private let roomId: Int
     private let floorY: Float
     private let look: LookMode
+    private let tint: SIMD3<Float>
     private var t: Float = 0
     private var hum: AudioPlaybackController?
+    // 10cm 칸 격자 (평면 좌표)
+    private var u0 = 0, v0 = 0, nu = 0, nv = 0
+    private var water: [Bool] = []
+    private var flowD: [Float] = []           // 들어온 곳에서 물길을 따라 잰 거리 (m)
+    private var entryCell = -1
+    private var waterCells: [Int] = []
+    private var blocked: Set<Int64>
+    private var waterRoot = Entity()
+    private var entry: (SIMD2<Float>, SIMD2<Float>)? = nil      // 들어오는 벽 점·방 안쪽 방향 (평면)
+    private var exitPt: (SIMD2<Float>, SIMD2<Float>)? = nil     // 나가는 벽 점·방 안쪽 방향
+    private let riverNear: SIMD3<Float>?
+    private let riverWidth: Float
+    // 걸음 첨벙
+    private var lastStep: SIMD2<Float>?
+    private var stepGap: Float = 0
+    private var ripples: [(ModelEntity, Float)] = []
+    private var rippleMat: UnlitMaterial?
 
     init(room: RoomRec, layout L: Layout, floorY: Float, blocked: Set<Int64>, riverNear: SIMD3<Float>?, riverWidth: Float, look: LookMode, tint: SIMD3<Float>) {
+        self.L = L
+        self.roomId = room.id
         self.floorY = floorY
         self.look = look
-        // 1) 방 안 빈 바닥 칸 (10cm): 이 방, 벽에서 25cm 넘게, 가구 블록 아님, 문이 쓸고 지나가는 곳 아님
+        self.tint = tint
+        self.blocked = blocked
+        self.riverNear = riverNear
+        self.riverWidth = riverWidth
         let rects = L.rects(room.id)
         guard !rects.isEmpty else { return }
         var lo = rects[0].0, hi = rects[0].1
         for r in rects { lo = simd_min(lo, r.0); hi = simd_max(hi, r.1) }
-        let u0 = Int((lo.x / 0.1).rounded(.down)), v0 = Int((lo.y / 0.1).rounded(.down))
-        let nu = Int(((hi.x - lo.x) / 0.1).rounded(.up)) + 1, nv = Int(((hi.y - lo.y) / 0.1).rounded(.up)) + 1
+        u0 = Int((lo.x / 0.1).rounded(.down)); v0 = Int((lo.y / 0.1).rounded(.down))
+        nu = Int(((hi.x - lo.x) / 0.1).rounded(.up)) + 2; nv = Int(((hi.y - lo.y) / 0.1).rounded(.up)) + 2
         guard nu > 4, nv > 4, nu * nv < 200_000 else { return }
-        func cellP(_ i: Int, _ j: Int) -> SIMD2<Float> { SIMD2<Float>((Float(u0 + i) + 0.5) * 0.1, (Float(v0 + j) + 0.5) * 0.1) }
-        var free = [Bool](repeating: false, count: nu * nv)
-        for j in 0..<nv {
-            for i in 0..<nu {
-                let p = cellP(i, j)
-                let w = L.flat(p)
-                let c = L.at(x: w.x, z: w.y)
-                free[j * nu + i] = c.room == room.id && c.wall > 0.22 && !blocked.contains(RoomWorld.clutterKey(p)) && !Skin.inSwing(L, p)
-            }
-        }
-        // 2) 웅덩이: 막힌 곳에서 가장 먼 칸 (넉넉한 빈 바닥)
-        var dist = [Int](repeating: 0, count: nu * nv)
-        var queue: [Int] = []
-        for k in 0..<(nu * nv) where !free[k] { queue.append(k) }
-        for j in 0..<nv { for i in 0..<nu where (i == 0 || j == 0 || i == nu - 1 || j == nv - 1) && free[j * nu + i] { dist[j * nu + i] = 1; queue.append(j * nu + i) } }
-        var seen = [Bool](repeating: false, count: nu * nv)
-        for k in queue { seen[k] = true }
-        var qi = 0
-        while qi < queue.count {
-            let k = queue[qi]; qi += 1
-            let i = k % nu, j = k / nu
-            for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let a = i + di, b = j + dj
-                guard a >= 0, b >= 0, a < nu, b < nv else { continue }
-                let n = b * nu + a
-                if !seen[n] { seen[n] = true; dist[n] = dist[k] + 1; queue.append(n) }
-            }
-        }
-        guard let best = (0..<(nu * nv)).filter({ free[$0] }).max(by: { dist[$0] < dist[$1] }), dist[best] >= 4 else { return }
-        poolR = min(0.75, Float(dist[best] - 1) * 0.1 - 0.05)
-        guard poolR >= 0.28 else { return }
-        let poolP = cellP(best % nu, best / nu)
-        // 3) 들어오는 곳: 바깥 강에서 가장 가까운 이 방 벽(창·바깥벽) — 거기서 웅덩이까지 빈 바닥을 따라
-        var route: [SIMD2<Float>] = []
-        var entry: SIMD2<Float>? = nil
-        var entryN = SIMD2<Float>(0, 0)
+        // 들어오는 곳: 바깥 강에서 가장 가까운 이 방 바깥벽
         if let rn = riverNear {
             let rp = L.plane(rn.x, rn.z)
-            var bestSeg: (SIMD2<Float>, SIMD2<Float>, Float)? = nil
+            var best: (SIMD2<Float>, SIMD2<Float>, Float)? = nil
             for s in L.walls where s.room == room.id && !s.inner {
                 let ab = s.b - s.a
-                let k = max(0.15, min(simd_length(ab) - 0.15, simd_dot(rp - s.a, simd_normalize(ab))))
-                let q = s.a + simd_normalize(ab) * k
+                let len = simd_length(ab)
+                guard len > 0.5 else { continue }
+                let k = max(0.25, min(len - 0.25, simd_dot(rp - s.a, ab / len)))
+                let q = s.a + ab / len * k
                 let d = simd_distance(q, rp)
-                if bestSeg == nil || d < bestSeg!.2 { bestSeg = (q, s.n, d) }
+                if best == nil || d < best!.2 { best = (q, s.n, d) }
             }
-            if let bs = bestSeg {
-                entry = bs.0
-                entryN = bs.1
-            }
+            if let b = best { entry = (b.0, b.1) }
         }
-        if let e = entry {
-            // 벽 안쪽 첫 빈 칸에서 웅덩이까지 (너비 우선 탐색)
-            var startK: Int? = nil
-            var bestD: Float = 1e9
-            for k in 0..<(nu * nv) where free[k] {
-                let d = simd_distance(cellP(k % nu, k / nu), e)
-                if d < bestD { bestD = d; startK = k }
-            }
-            if let sk = startK, bestD < 0.8 {
-                var prev = [Int](repeating: -1, count: nu * nv)
-                var q2 = [sk]
-                var vis = [Bool](repeating: false, count: nu * nv)
-                vis[sk] = true
-                var qj = 0
-                while qj < q2.count {
-                    let k = q2[qj]; qj += 1
-                    if k == best { break }
-                    let i = k % nu, j = k / nu
-                    for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
-                        let a = i + di, b = j + dj
-                        guard a >= 0, b >= 0, a < nu, b < nv else { continue }
-                        let n = b * nu + a
-                        guard free[n], !vis[n], dist[n] >= 2 || n == best else { continue }
-                        vis[n] = true; prev[n] = k; q2.append(n)
-                    }
-                }
-                if vis[best] {
-                    var cells: [SIMD2<Float>] = []
-                    var k = best
-                    while k != -1 { cells.append(cellP(k % nu, k / nu)); k = prev[k] }
-                    cells.reverse()
-                    route = [e - entryN * 0.02] + cells
-                }
-            }
-        }
-        // 매끄럽게 (계단 모양을 둥글게)
-        if route.count > 3 {
-            for _ in 0..<5 {
-                var r2 = route
-                for i in 1..<(route.count - 1) { r2[i] = (route[i - 1] + route[i] * 2 + route[i + 1]) / 4 }
-                route = r2
-            }
-        }
-        let poolW = L.flat(poolP)
-        pool = poolW
-        path = route.map { L.flat($0) }
-        build(L, tint: tint, entryOut: entry.map { L.flat($0 - entryN * 0.35) }, riverNear: riverNear, riverWidth: riverWidth)
+        guard compute() else { return }
+        rebuild()
+        buildBranches()
         addFish(room.id)
         startSound()
         ok = true
     }
 
+    // MARK: 물 자리 계산
+    private func cellP(_ k: Int) -> SIMD2<Float> { SIMD2<Float>((Float(u0 + k % nu) + 0.5) * 0.1, (Float(v0 + k / nu) + 0.5) * 0.1) }
+    private func cellOf(_ p: SIMD2<Float>) -> Int? {
+        let i = Int((p.x / 0.1).rounded(.down)) - u0, j = Int((p.y / 0.1).rounded(.down)) - v0
+        guard i >= 0, j >= 0, i < nu, j < nv else { return nil }
+        return j * nu + i
+    }
+
+    /// 빈 바닥 칸 → 들어온 곳과 이어진 덩어리 = 물. 물길 거리(흐름 방향)도 계산. 물이 너무 적으면 false
+    private func compute() -> Bool {
+        var free = [Bool](repeating: false, count: nu * nv)
+        // 가구 블록 둘레 한 칸(10cm)도 비움 (물이 가구 속으로 들어가 보이지 않게)
+        var near = Set<Int64>()
+        for k in blocked {
+            let u = Int((k >> 20) & 0xFFFFF) - 100_000, v = Int(k & 0xFFFFF) - 100_000
+            for du in -1...1 { for dv in -1...1 { near.insert(Vox.planeCell(u + du, v + dv)) } }
+        }
+        for k in 0..<(nu * nv) {
+            let p = cellP(k)
+            let w = L.flat(p)
+            let c = L.at(x: w.x, z: w.y)
+            guard c.room == roomId, c.wall > 0.07 else { continue }
+            if near.contains(RoomWorld.clutterKey(p)) || Skin.inSwing(L, p) { continue }
+            if L.doors.contains(where: { $0.zone(p, margin: 0.12) }) { continue }
+            free[k] = true
+        }
+        // 들어오는 칸: 들어오는 벽 점에서 가장 가까운 빈 칸 (없으면 가장 넓은 덩어리의 아무 칸)
+        var start = -1
+        if let e = entry {
+            var bd: Float = 0.7
+            for k in 0..<(nu * nv) where free[k] {
+                let d = simd_distance(cellP(k), e.0)
+                if d < bd { bd = d; start = k }
+            }
+        }
+        func flood(_ s: Int) -> [Int] {
+            var out = [s], seen = Set([s]), qi = 0
+            while qi < out.count {
+                let k = out[qi]; qi += 1
+                let i = k % nu, j = k / nu
+                for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let a = i + di, b = j + dj
+                    guard a >= 0, b >= 0, a < nu, b < nv else { continue }
+                    let n = b * nu + a
+                    if free[n] && !seen.contains(n) { seen.insert(n); out.append(n) }
+                }
+            }
+            return out
+        }
+        var comp: [Int] = []
+        if start >= 0 { comp = flood(start) }
+        if comp.count < 60 {
+            // 들어오는 곳 쪽 덩어리가 작으면 가장 넓은 덩어리로 (들어오는 곳은 그 덩어리에서 강 쪽에 가장 가까운 칸)
+            var seenAll = Set<Int>()
+            var bestC: [Int] = []
+            for k in 0..<(nu * nv) where free[k] && !seenAll.contains(k) {
+                let c = flood(k)
+                seenAll.formUnion(c)
+                if c.count > bestC.count { bestC = c }
+            }
+            comp = bestC
+            if let e = entry, !comp.isEmpty {
+                start = comp.min { simd_distance(cellP($0), e.0) < simd_distance(cellP($1), e.0) }!
+            } else {
+                start = comp.first ?? -1
+            }
+        }
+        guard comp.count >= 50, start >= 0 else { return false }
+        water = [Bool](repeating: false, count: nu * nv)
+        for k in comp { water[k] = true }
+        waterCells = comp
+        entryCell = start
+        // 물길 거리: 들어온 칸에서 (대각선 포함) 가장 짧은 길 → 몇 번 고르게
+        var dist = [Float](repeating: .infinity, count: nu * nv)
+        dist[start] = 0
+        var q = [start], qi = 0
+        while qi < q.count {
+            let k = q[qi]; qi += 1
+            let i = k % nu, j = k / nu
+            for (di, dj, c) in Self.steps8 {
+                let a = i + di, b = j + dj
+                guard a >= 0, b >= 0, a < nu, b < nv else { continue }
+                let n = b * nu + a
+                guard water[n], dist[k] + c < dist[n] - 1e-4 else { continue }
+                dist[n] = dist[k] + c
+                q.append(n)
+            }
+        }
+        for _ in 0..<4 {
+            var d2 = dist
+            for k in comp {
+                let i = k % nu, j = k / nu
+                var s: Float = dist[k] * 2, n: Float = 2
+                for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let a = i + di, b = j + dj
+                    guard a >= 0, b >= 0, a < nu, b < nv, water[b * nu + a], dist[b * nu + a].isFinite else { continue }
+                    s += dist[b * nu + a]; n += 1
+                }
+                d2[k] = s / n
+            }
+            dist = d2
+        }
+        flowD = dist
+        // 나가는 곳: 들어온 곳에서 가장 먼, 바깥벽에 닿은 물 칸
+        var far: (Int, Float)? = nil
+        for k in comp where flowD[k].isFinite {
+            let w = L.flat(cellP(k))
+            if L.at(x: w.x, z: w.y).wall < 0.2, far == nil || flowD[k] > far!.1 { far = (k, flowD[k]) }
+        }
+        exitPt = nil
+        if let f = far, f.1 > 1.2 {
+            let p = cellP(f.0)
+            var best: (SIMD2<Float>, SIMD2<Float>, Float)? = nil
+            for s in L.walls where s.room == roomId && !s.inner {
+                let ab = s.b - s.a
+                let len = simd_length(ab)
+                guard len > 0.3 else { continue }
+                let k = max(0.1, min(len - 0.1, simd_dot(p - s.a, ab / len)))
+                let qp = s.a + ab / len * k
+                let d = simd_distance(qp, p)
+                if best == nil || d < best!.2 { best = (qp, s.n, d) }
+            }
+            if let b = best, b.2 < 0.35 { exitPt = (b.0, b.1) }
+        }
+        return true
+    }
+
+    /// 새로 알게 된 가구(blocked)가 물에 걸치면 그 자리를 비우고 다시 그림
+    func refresh(blocked nb: Set<Int64>) {
+        guard ok, nb != blocked else { return }
+        var hit = false
+        for k in nb where !blocked.contains(k) {
+            let u = Int((k >> 20) & 0xFFFFF) - 100_000, v = Int(k & 0xFFFFF) - 100_000
+            for du in -1...1 {
+                for dv in -1...1 {
+                    if let c = cellOf(SIMD2<Float>((Float(u + du) + 0.5) * 0.1, (Float(v + dv) + 0.5) * 0.1)), water[c] { hit = true }
+                }
+            }
+        }
+        blocked = nb
+        guard hit, compute() else { return }
+        rebuild()
+        for f in fish where !inWater(f.pos, margin: 0) {
+            if let k = waterCells.randomElement() { f.pos = L.flat(cellP(k)) }
+        }
+    }
+
     // MARK: 만들기
-    private func build(_ L: Layout, tint: SIMD3<Float>, entryOut: SIMD2<Float>?, riverNear: SIMD3<Float>?, riverWidth: Float) {
+    /// 물·바닥·물가 돌 그물 (방 안)
+    private func rebuild() {
+        let old = waterRoot
+        flows.removeAll { $0.0.parent === old }
+        old.removeFromParent()
+        waterRoot = Entity()
+        local.addChild(waterRoot)
         let line = look == .line
-        let bedY = floorY + 0.009, waterY = floorY + 0.055
-        var bed = Geo(), water = Geo(), stones = Geo(), lines = Geo()
-        var g = SeededRNG(seed: UInt64(abs(Int(pool.x * 100)) * 7 + abs(Int(pool.y * 100)) + 3))
-        // 물길 띠
-        var vAcc: Float = 0
-        if path.count > 1 {
-            var pl = SIMD2<Float>(0, 0), pr = SIMD2<Float>(0, 0), pv: Float = 0
-            for i in path.indices {
-                let a = path[max(0, i - 1)], b = path[min(path.count - 1, i + 1)]
-                var tdir = b - a
-                tdir = simd_length(tdir) > 1e-4 ? simd_normalize(tdir) : SIMD2<Float>(1, 0)
-                let n = SIMD2<Float>(-tdir.y, tdir.x)
-                let w = halfW * (i == 0 ? 1.15 : 1)
-                let l = path[i] + n * w, r = path[i] - n * w
-                if i > 0 {
-                    vAcc += simd_distance(path[i], path[i - 1])
-                    let v1 = vAcc / 0.9
-                    for (geo, y, uk) in [(0, bedY, Float(2.2)), (1, waterY, Float(1))] {
-                        let a3 = SIMD3<Float>(pl.x, y, pl.y), b3 = SIMD3<Float>(pr.x, y, pr.y), c3 = SIMD3<Float>(r.x, y, r.y), d3 = SIMD3<Float>(l.x, y, l.y)
-                        let uvs = [SIMD2<Float>(0, pv * uk), SIMD2<Float>(1, pv * uk), SIMD2<Float>(1, v1 * uk), SIMD2<Float>(0, v1 * uk)]
-                        if geo == 0 { bed.quad(a3, b3, c3, d3, uvs[0], uvs[1], uvs[2], uvs[3]) } else { water.quad(a3, b3, c3, d3, uvs[0], uvs[1], uvs[2], uvs[3]) }
+        let bedY = floorY + 0.008, waterY = floorY + 0.05
+        // 칸 모서리 점 (nu+1)×(nv+1): 물 칸과 아닌 칸에 함께 닿은 점 = 물가 → 둥글게 다듬음
+        let W = nu + 1
+        func isW(_ i: Int, _ j: Int) -> Bool { i >= 0 && j >= 0 && i < nu && j < nv && water[j * nu + i] }
+        var vp = [SIMD2<Float>](repeating: .zero, count: W * (nv + 1))
+        var edge = [Bool](repeating: false, count: W * (nv + 1))
+        for j in 0...nv {
+            for i in 0...nu {
+                vp[j * W + i] = SIMD2<Float>(Float(u0 + i) * 0.1, Float(v0 + j) * 0.1)
+                let c = [isW(i - 1, j - 1), isW(i, j - 1), isW(i - 1, j), isW(i, j)]
+                let n = c.filter { $0 }.count
+                edge[j * W + i] = n > 0 && n < 4
+            }
+        }
+        var g = SeededRNG(seed: UInt64(roomId * 811 + 5))
+        for _ in 0..<3 {
+            var v2 = vp
+            for j in 0...nv {
+                for i in 0...nu where edge[j * W + i] {
+                    var s = vp[j * W + i], n: Float = 1
+                    for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        let a = i + di, b = j + dj
+                        guard a >= 0, b >= 0, a <= nu, b <= nv, edge[b * W + a] else { continue }
+                        s += vp[b * W + a]; n += 1
                     }
-                    if line {
-                        lines.stroke(SIMD3<Float>(pl.x, waterY, pl.y), SIMD3<Float>(l.x, waterY, l.y), width: 0.01)
-                        lines.stroke(SIMD3<Float>(pr.x, waterY, pr.y), SIMD3<Float>(r.x, waterY, r.y), width: 0.01)
-                    }
-                    pv = v1
-                }
-                pl = l; pr = r
-                if i % 2 == 1 {
-                    for side: Float in [-1, 1] where Float.random(in: 0...1, using: &g) < 0.8 {
-                        let p = path[i] + n * side * (w + Float.random(in: 0.0...0.05, using: &g))
-                        let sz = Float.random(in: 0.03...0.07, using: &g)
-                        stones.rock(at: SIMD3<Float>(p.x, floorY + 0.005, p.y), size: sz, using: &g)
-                    }
+                    v2[j * W + i] = s / n
                 }
             }
+            vp = v2
         }
-        // 웅덩이 (둥근 판, 가장자리는 조금 울퉁불퉁)
-        let segN = 48
-        var ring: [SIMD2<Float>] = []
-        for k in 0..<segN {
-            let a = Float(k) / Float(segN) * 2 * .pi
-            let rr = poolR * (0.92 + 0.08 * sin(a * 3 + 1.3) * cos(a * 2))
-            ring.append(pool + SIMD2<Float>(cos(a), sin(a)) * rr)
+        for k in vp.indices where edge[k] { vp[k] += SIMD2<Float>(Float.random(in: -0.015...0.015, using: &g), Float.random(in: -0.015...0.015, using: &g)) }
+        // 점마다 물길 거리 (닿은 물 칸의 평균)
+        func vd(_ i: Int, _ j: Int) -> Float {
+            var s: Float = 0, n: Float = 0
+            for (a, b) in [(i - 1, j - 1), (i, j - 1), (i - 1, j), (i, j)] where isW(a, b) && flowD[b * nu + a].isFinite { s += flowD[b * nu + a]; n += 1 }
+            return n > 0 ? s / n : 0
         }
-        for k in 0..<segN {
-            let a = ring[k], b = ring[(k + 1) % segN]
-            for (geo, y) in [(0, bedY), (1, waterY)] {
-                let c3 = SIMD3<Float>(pool.x, y, pool.y), a3 = SIMD3<Float>(a.x, y, a.y), b3 = SIMD3<Float>(b.x, y, b.y)
-                let sc: Float = geo == 0 ? 2.2 : 1
-                let ua = (a - pool) / 0.9 * sc, ub = (b - pool) / 0.9 * sc
-                if geo == 0 { bed.quad(c3, a3, b3, c3, .zero, ua, ub, .zero) } else { water.quad(c3, a3, b3, c3, .zero, ua, ub, .zero) }
+        var bed = Geo(), wat = Geo(), stones = Geo(), lines = Geo()
+        for k in waterCells {
+            let i = k % nu, j = k / nu
+            let ids = [j * W + i, j * W + i + 1, (j + 1) * W + i + 1, (j + 1) * W + i]
+            let ps = ids.map { L.flat(vp[$0]) }
+            let ds = [vd(i, j), vd(i + 1, j), vd(i + 1, j + 1), vd(i, j + 1)]
+            let raw = ids.map { vp[$0] }
+            // 바닥 자갈: 평면 좌표 그대로 (흐르지 않음), 물: v = 물길 거리 → 흐름 방향으로 이어짐
+            let bu = raw.map { $0 / 0.45 }
+            let wu = zip(raw, ds).map { SIMD2<Float>(($0.0.x * 0.6 - $0.0.y * 0.8) / 0.9, $0.1 / 0.9) }
+            func p3(_ q: SIMD2<Float>, _ y: Float) -> SIMD3<Float> { SIMD3<Float>(q.x, y, q.y) }
+            bed.quad(p3(ps[0], bedY), p3(ps[1], bedY), p3(ps[2], bedY), p3(ps[3], bedY), bu[0], bu[1], bu[2], bu[3])
+            wat.quad(p3(ps[0], waterY), p3(ps[1], waterY), p3(ps[2], waterY), p3(ps[3], waterY), wu[0], wu[1], wu[2], wu[3])
+            if line {
+                let cs = [(0, 1, (i, j - 1)), (1, 2, (i + 1, j)), (2, 3, (i, j + 1)), (3, 0, (i - 1, j))]
+                for (a, b, n) in cs where !isW(n.0, n.1) { lines.stroke(p3(ps[a], waterY), p3(ps[b], waterY), width: 0.01) }
             }
-            if line { lines.stroke(SIMD3<Float>(a.x, waterY, a.y), SIMD3<Float>(b.x, waterY, b.y), width: 0.012) }
-            if k % 2 == 0 {
-                let out = simd_normalize(a - pool)
-                let p = a + out * Float.random(in: 0.0...0.06, using: &g)
-                stones.rock(at: SIMD3<Float>(p.x, floorY + 0.005, p.y), size: Float.random(in: 0.035...0.09, using: &g), using: &g)
+            // 물가 돌: 물 밖(가구·벽 쪽)과 닿은 칸에 가끔
+            let outside = [(i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)].filter { !isW($0.0, $0.1) }
+            if let o = outside.first, Float.random(in: 0...1, using: &g) < 0.28 {
+                let c = cellP(k), oc = SIMD2<Float>((Float(u0 + o.0) + 0.5) * 0.1, (Float(v0 + o.1) + 0.5) * 0.1)
+                let p = L.flat(c + (oc - c) * Float.random(in: 0.45...0.7, using: &g))
+                stones.rock(at: SIMD3<Float>(p.x, floorY + 0.004, p.y), size: Float.random(in: 0.025...0.06, using: &g), using: &g)
+            }
+            // 물속 자갈 몇 개 (물 밑에 비쳐 보임)
+            if Float.random(in: 0...1, using: &g) < 0.03 {
+                let p = L.flat(cellP(k))
+                stones.rock(at: SIMD3<Float>(p.x, floorY - 0.004, p.y), size: Float.random(in: 0.03...0.07, using: &g), using: &g)
             }
         }
-        if let e = bed.entity("creekBed", Tex.unlit("pebble", tint: Worlds.safe(tint * 0.62, min: 0.25))) { local.addChild(e) }
-        if let e = stones.entity("creekStones", Tex.unlit("rock", tint: Worlds.safe(tint * 0.8, min: 0.3))) { local.addChild(e) }
+        if let e = bed.entity("creekBed", Tex.unlit("pebble", tint: Worlds.safe(tint * 0.6, min: 0.25))) { waterRoot.addChild(e) }
+        if let e = stones.entity("creekStones", Tex.unlit("rock", tint: Worlds.safe(tint * 0.8, min: 0.3))) { waterRoot.addChild(e) }
         if !line {
-            // 맑은 물: 옅게 비치는 물빛 + 위로 흐르는 반짝임 (바닥·물고기가 비쳐 보임)
+            // 맑은 물: 옅게 비치는 물빛(바닥·물고기가 비쳐 보임) + 그 위 물살 반짝임. 천천히 흐름
             var wm = Tex.unlit("river", tint: Worlds.safe(tint, min: 0.35) * SIMD3<Float>(0.75, 1.0, 1.05))
-            wm.blending = .transparent(opacity: .init(floatLiteral: 0.32))
-            if let e = water.entity("creekWater", wm) {
-                local.addChild(e)
-                flows.append((e, wm, 0.25, 0))
+            wm.blending = .transparent(opacity: .init(floatLiteral: 0.3))
+            wm.writesDepth = false
+            if let e = wat.entity("creekWater", wm) {
+                waterRoot.addChild(e)
+                flows.append((e, wm, 0.11, 0))
             }
             var hm = Tex.unlit("river_hi", tint: [1, 1, 1])
             if let mk = Tex.get("river_hi_a", raw: true) {
                 var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.tiling
-                hm.blending = .transparent(opacity: .init(scale: 0.7, texture: tp))
+                hm.blending = .transparent(opacity: .init(scale: 0.6, texture: tp))
+                hm.writesDepth = false
             }
-            var hg = water
+            var hg = wat
             hg.pos = hg.pos.map { SIMD3<Float>($0.x, $0.y + 0.002, $0.z) }
+            hg.uv = hg.uv.map { SIMD2<Float>($0.x * 0.8, $0.y * 1.2) }
             if let e = hg.entity("creekHi", hm) {
-                local.addChild(e)
-                flows.append((e, hm, 0.45, 0.4))
+                waterRoot.addChild(e)
+                flows.append((e, hm, 0.2, 0.4))
             }
         } else if let e = lines.entity("creekLines", Ink.line) {
-            local.addChild(e)
+            waterRoot.addChild(e)
         }
-        // 벽 너머: 큰 강에서 갈라져 이 벽까지 오는 물길 (하늘 세계)
-        if let eo = entryOut, let rn = riverNear {
-            let a = SIMD2<Float>(rn.x, rn.z)
-            var pts: [SIMD2<Float>] = []
-            let n = 24
-            let side = SIMD2<Float>(-(eo - a).y, (eo - a).x) * 0.12
-            var blockedOut = false
-            for i in 0...n {
-                let k = Float(i) / Float(n)
-                let p = a + (eo - a) * k + side * sin(k * .pi)
-                if i < n - 2 && L.walkable(L.plane(p.x, p.y)) { blockedOut = true }
-                pts.append(p)
+    }
+
+    /// 벽 너머: 큰 강에서 갈라져 들어오는 벽까지 오는 물길 + 나가는 벽에서 바깥으로 흘러 나가 땅에 스며드는 물길 (하늘 세계)
+    private func buildBranches() {
+        var g = SeededRNG(seed: UInt64(roomId * 97 + 1))
+        if let e = entry, let rn = riverNear {
+            let out = L.flat(e.0 - e.1 * 0.35)
+            branch(from: SIMD2<Float>(rn.x, rn.z), to: out, w0: riverWidth * 0.3, w1: 0.45, flow: 0.13, &g)
+        }
+        if let x = exitPt {
+            let a = L.flat(x.0 - x.1 * 0.35)
+            var dir = L.flat(x.0 - x.1 * 4) - a
+            dir = simd_length(dir) > 0.01 ? simd_normalize(dir) : SIMD2<Float>(1, 0)
+            branch(from: a, to: a + dir * 7, w0: 0.45, w1: 0.12, flow: 0.13, &g)
+        }
+    }
+
+    private func branch<G: RandomNumberGenerator>(from a: SIMD2<Float>, to eo: SIMD2<Float>, w0: Float, w1: Float, flow: Float, _ g: inout G) {
+        let n = 24
+        let side = SIMD2<Float>(-(eo - a).y, (eo - a).x) * 0.1
+        var pts: [SIMD2<Float>] = []
+        for i in 0...n {
+            let k = Float(i) / Float(n)
+            let p = a + (eo - a) * k + side * sin(k * .pi)
+            // 끝 두세 점(벽 바로 앞) 말고는 집 안을 지나면 그리지 않음
+            if i > 2 && i < n - 2 && L.walkable(L.plane(p.x, p.y)) { return }
+            pts.append(p)
+        }
+        var wg = Geo(), bg = Geo(), rk = Geo()
+        var va: Float = 0
+        var pl = SIMD2<Float>(0, 0), pr = SIMD2<Float>(0, 0), pv: Float = 0
+        for i in pts.indices {
+            let p0 = pts[max(0, i - 1)], p1 = pts[min(pts.count - 1, i + 1)]
+            let td = simd_normalize(p1 - p0)
+            let nn = SIMD2<Float>(-td.y, td.x)
+            let k = Float(i) / Float(n)
+            let w = w0 * (1 - k) + w1 * k
+            let l = pts[i] + nn * w, r = pts[i] - nn * w
+            if i > 0 {
+                va += simd_distance(pts[i], pts[i - 1])
+                let v1 = va / 3.5
+                let y = floorY - 0.013
+                wg.quad(SIMD3<Float>(pl.x, y, pl.y), SIMD3<Float>(pr.x, y, pr.y), SIMD3<Float>(r.x, y, r.y), SIMD3<Float>(l.x, y, l.y),
+                        SIMD2<Float>(0, pv), SIMD2<Float>(1, pv), SIMD2<Float>(1, v1), SIMD2<Float>(0, v1))
+                let yb = floorY - 0.02
+                let bl = pl + simd_normalize(pl - pr) * 0.4, br = pr + simd_normalize(pr - pl) * 0.4
+                let cl = l + simd_normalize(l - r) * 0.4, cr = r + simd_normalize(r - l) * 0.4
+                bg.quad(SIMD3<Float>(bl.x, yb, bl.y), SIMD3<Float>(br.x, yb, br.y), SIMD3<Float>(cr.x, yb, cr.y), SIMD3<Float>(cl.x, yb, cl.y),
+                        SIMD2<Float>(0, pv * 2), SIMD2<Float>(1, pv * 2), SIMD2<Float>(1, v1 * 2), SIMD2<Float>(0, v1 * 2))
+                pv = v1
             }
-            if !blockedOut {
-                var wg = Geo(), bg = Geo(), rk = Geo()
-                var va: Float = 0
-                var pl = SIMD2<Float>(0, 0), pr = SIMD2<Float>(0, 0), pv: Float = 0
-                for i in pts.indices {
-                    let p0 = pts[max(0, i - 1)], p1 = pts[min(pts.count - 1, i + 1)]
-                    let td = simd_normalize(p1 - p0)
-                    let nn = SIMD2<Float>(-td.y, td.x)
-                    let w = (riverWidth * 0.3) * (1 - Float(i) / Float(n)) + halfW * 1.2 * Float(i) / Float(n)
-                    let l = pts[i] + nn * w, r = pts[i] - nn * w
-                    if i > 0 {
-                        va += simd_distance(pts[i], pts[i - 1])
-                        let v1 = va / 3.5
-                        let y = floorY - 0.013
-                        wg.quad(SIMD3<Float>(pl.x, y, pl.y), SIMD3<Float>(pr.x, y, pr.y), SIMD3<Float>(r.x, y, r.y), SIMD3<Float>(l.x, y, l.y),
-                                SIMD2<Float>(0, pv), SIMD2<Float>(1, pv), SIMD2<Float>(1, v1), SIMD2<Float>(0, v1))
-                        let yb = floorY - 0.02
-                        let bl = pl + simd_normalize(pl - pr) * 0.4, br = pr + simd_normalize(pr - pl) * 0.4
-                        let cl = l + simd_normalize(l - r) * 0.4, cr = r + simd_normalize(r - l) * 0.4
-                        bg.quad(SIMD3<Float>(bl.x, yb, bl.y), SIMD3<Float>(br.x, yb, br.y), SIMD3<Float>(cr.x, yb, cr.y), SIMD3<Float>(cl.x, yb, cl.y),
-                                SIMD2<Float>(0, pv * 2), SIMD2<Float>(1, pv * 2), SIMD2<Float>(1, v1 * 2), SIMD2<Float>(0, v1 * 2))
-                        pv = v1
-                    }
-                    pl = l; pr = r
-                    if i % 3 == 1 {
-                        for s: Float in [-1, 1] {
-                            let p = pts[i] + nn * s * (w + 0.15)
-                            rk.rock(at: SIMD3<Float>(p.x, floorY - 0.04, p.y), size: Float.random(in: 0.12...0.3, using: &g), using: &g)
-                        }
-                    }
+            pl = l; pr = r
+            if i % 3 == 1 {
+                for s: Float in [-1, 1] {
+                    let p = pts[i] + nn * s * (w + 0.15)
+                    rk.rock(at: SIMD3<Float>(p.x, floorY - 0.04, p.y), size: Float.random(in: 0.1...0.26, using: &g), using: &g)
                 }
-                if let e = bg.entity("branchBank", Tex.unlit("pebble", tint: Worlds.safe(tint * 0.55, min: 0.2))) { world.addChild(e) }
-                let wm = Tex.unlit("river", tint: Worlds.safe(tint, min: 0.2))
-                if let e = wg.entity("branchWater", wm) { world.addChild(e); flows.append((e, wm, 0.13, 0)) }
-                if let e = rk.entity("branchRocks", Tex.unlit("rock", tint: Worlds.safe(tint * 0.85, min: 0.25))) { world.addChild(e) }
             }
         }
+        if let e = bg.entity("branchBank", Tex.unlit("pebble", tint: Worlds.safe(tint * 0.55, min: 0.2))) { world.addChild(e) }
+        let wm = Tex.unlit("river", tint: Worlds.safe(tint, min: 0.2))
+        if let e = wg.entity("branchWater", wm) { world.addChild(e); flows.append((e, wm, flow, 0)) }
+        if let e = rk.entity("branchRocks", Tex.unlit("rock", tint: Worlds.safe(tint * 0.85, min: 0.25))) { world.addChild(e) }
     }
 
     // MARK: 물고기
@@ -321,8 +443,8 @@ final class ValleyCreek {
     }
 
     private func addFish(_ seed: Int) {
-        let area = Float.pi * poolR * poolR + Float(path.count) * 0.1 * halfW * 2
-        let n = max(5, min(14, Int(area / 0.07)))
+        let area = Float(waterCells.count) * 0.01
+        let n = max(6, min(16, Int(area / 0.35)))
         var g = SeededRNG(seed: UInt64(seed * 733 + 41))
         var mats: [RealityKit.Material] = []
         for i in 0..<6 {
@@ -340,11 +462,12 @@ final class ValleyCreek {
             f.size = big ? Float.random(in: 0.1...0.15, using: &g) : Float.random(in: 0.045...0.09, using: &g)
             f.cruise = Float.random(in: 0.06...0.14, using: &g) * (big ? 0.8 : 1.2)
             f.speed = f.cruise
-            f.depth = Float.random(in: 0.02...0.036, using: &g)
+            f.depth = Float.random(in: 0.015...0.03, using: &g)
             f.head = Float.random(in: 0...(2 * .pi), using: &g)
             f.wag = Float.random(in: 0...6, using: &g)
-            let a = Float.random(in: 0...(2 * .pi), using: &g)
-            f.pos = pool + SIMD2<Float>(cos(a), sin(a)) * poolR * Float.random(in: 0...0.7, using: &g)
+            let k = waterCells[Int(g.next() % UInt64(waterCells.count))]
+            f.pos = L.flat(cellP(k))
+            f.goal = f.pos
             let (bm, tm) = fishMesh(f.size)
             let mat = mats[Int(g.next() % 6)]
             if let bm { f.e.addChild(ModelEntity(mesh: bm, materials: [mat])) }
@@ -364,16 +487,15 @@ final class ValleyCreek {
         }
     }
 
-    /// 물 안인지 (웅덩이 또는 물길, 가장자리 m 안쪽)
+    /// 물 안인지 (저장 좌표 xz, 가장자리에서 margin m 안쪽)
     private func inWater(_ p: SIMD2<Float>, margin: Float) -> Bool {
-        if simd_distance(p, pool) < poolR * 0.92 - margin { return true }
-        guard path.count > 1 else { return false }
-        for i in 0..<(path.count - 1) {
-            let a = path[i], b = path[i + 1], ab = b - a
-            let k = max(0, min(1, simd_dot(p - a, ab) / max(1e-6, simd_length_squared(ab))))
-            if simd_distance(p, a + ab * k) < halfW - margin { return true }
+        let pl = L.plane(p.x, p.y)
+        guard let c = cellOf(pl), water[c] else { return false }
+        guard margin > 0 else { return true }
+        for o in [SIMD2<Float>(margin, 0), SIMD2<Float>(-margin, 0), SIMD2<Float>(0, margin), SIMD2<Float>(0, -margin)] {
+            guard let c2 = cellOf(pl + o), water[c2] else { return false }
         }
-        return false
+        return true
     }
 
     private func startSound() {
@@ -384,15 +506,59 @@ final class ValleyCreek {
         var sa = SpatialAudioComponent()
         sa.gain = -14
         e.components.set(sa)
-        e.position = SIMD3<Float>(pool.x, floorY + 0.1, pool.y)
+        let p = L.flat(entryCell >= 0 ? cellP(entryCell) : SIMD2<Float>(0, 0))
+        e.position = SIMD3<Float>(p.x, floorY + 0.1, p.y)
         local.addChild(e)
         hum = e.playAudio(r)
     }
 
     func stop() { hum?.stop() }
 
+    // MARK: 걸음 첨벙
+    /// 발(머리 아래 바닥)이 물 위에서 걸음 하나만큼(약 45cm) 움직일 때마다 첨벙 소리 + 물결 고리
+    private func steps(_ dt: Float, feet: SIMD3<Float>?) {
+        guard let f = feet else { lastStep = nil; return }
+        let p = SIMD2<Float>(f.x, f.z)
+        guard inWater(p, margin: 0) else { lastStep = nil; return }
+        guard let l = lastStep else { lastStep = p; stepGap = 0.2; return }
+        stepGap += simd_distance(p, l)
+        lastStep = p
+        if stepGap > 0.45 {
+            stepGap = 0
+            Sfx.play("splash\(Int.random(in: 1...4))", in: local, at: SIMD3<Float>(p.x, floorY + 0.05, p.y), gain: -10)
+            ripple(at: p)
+        }
+    }
+
+    private func ripple(at p: SIMD2<Float>) {
+        guard look != .line else { return }
+        if rippleMat == nil {
+            var m = UnlitMaterial(color: UIColor(white: 0.95, alpha: 1))
+            if let mk = Tex.get("ripple_a", raw: true) {
+                var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.clamp
+                m.blending = .transparent(opacity: .init(scale: 0.55, texture: tp))
+            } else {
+                m.blending = .transparent(opacity: .init(floatLiteral: 0.2))
+            }
+            m.writesDepth = false
+            rippleMat = m
+        }
+        guard let m = rippleMat else { return }
+        var q = Geo()
+        let r: Float = 0.5
+        q.quad(SIMD3<Float>(-r, 0, -r), SIMD3<Float>(r, 0, -r), SIMD3<Float>(r, 0, r), SIMD3<Float>(-r, 0, r),
+               SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+        guard let e = q.entity("ripple", m) else { return }
+        e.position = SIMD3<Float>(p.x, floorY + 0.054, p.y)
+        e.scale = SIMD3<Float>(repeating: 0.1)
+        local.addChild(e)
+        ripples.append((e, 0))
+        if ripples.count > 6 { ripples.first?.0.removeFromParent(); ripples.removeFirst() }
+    }
+
     // MARK: 매 프레임
-    func tick(_ dt: Float, hands: [SIMD3<Float>]) {
+    /// hands: 손 자리, feet: 머리 바로 아래 바닥 자리 (저장 좌표)
+    func tick(_ dt: Float, hands: [SIMD3<Float>], feet: SIMD3<Float>? = nil) {
         t += dt
         for i in flows.indices {
             var f = flows[i]
@@ -401,21 +567,38 @@ final class ValleyCreek {
             f.0.model?.materials = [f.1]
             flows[i] = f
         }
+        steps(dt, feet: feet)
+        for i in ripples.indices.reversed() {
+            ripples[i].1 += dt
+            let a = ripples[i].1 / 1.4
+            if a >= 1 { ripples[i].0.removeFromParent(); ripples.remove(at: i); continue }
+            ripples[i].0.scale = SIMD3<Float>(repeating: 0.12 + a * 0.9)
+            ripples[i].0.components.set(OpacityComponent(opacity: (1 - a) * (1 - a)))
+        }
         var g = SystemRandomNumberGenerator()
-        // 손이 물 가까이(물 위 50cm 안) 오면 둘레 물고기가 놀라 흩어짐
-        let wet = hands.filter { $0.y - floorY < 0.5 && inWater(SIMD2<Float>($0.x, $0.z), margin: -0.15) }
+        // 손이 물 가까이(물 위 50cm 안) 오거나 발이 다가오면 둘레 물고기가 놀라 흩어짐
+        var scare = hands.filter { $0.y - floorY < 0.5 && inWater(SIMD2<Float>($0.x, $0.z), margin: 0) }.map { SIMD2<Float>($0.x, $0.z) }
+        if let f = feet { scare.append(SIMD2<Float>(f.x, f.z)) }
         for f in fish {
-            for h in wet {
-                let hp = SIMD2<Float>(h.x, h.z)
+            for hp in scare {
                 let d = simd_distance(hp, f.pos)
-                if d < 0.4 && f.dart <= 0 {
+                if d < 0.45 && f.dart <= 0 {
                     f.dart = Float.random(in: 0.5...0.9, using: &g)
                     let away = f.pos - hp
                     if simd_length(away) > 0.001 { f.head = atan2(away.y, away.x) + Float.random(in: -0.4...0.4, using: &g) }
                 }
             }
-            // 가끔 방향을 바꾸거나 휙 내달림
-            f.turn += (Float.random(in: -1...1, using: &g) * 1.6 - f.turn) * min(1, dt * 0.8)
+            // 물 여기저기로 천천히: 가끔 새 목적지 (물 칸 중 하나)
+            f.goalT -= dt
+            if f.goalT <= 0 || simd_distance(f.pos, f.goal) < 0.15 {
+                f.goalT = Float.random(in: 6...14, using: &g)
+                if let k = waterCells.randomElement(using: &g) { f.goal = L.flat(cellP(k)) }
+            }
+            let tg = f.goal - f.pos
+            var dh = atan2(tg.y, tg.x) - f.head
+            while dh > .pi { dh -= 2 * .pi }
+            while dh < -.pi { dh += 2 * .pi }
+            f.turn += (Float.random(in: -1...1, using: &g) * 1.2 + dh * 0.8 - f.turn) * min(1, dt * 0.8)
             if f.dart <= 0 && Float.random(in: 0...1, using: &g) < dt * 0.04 { f.dart = Float.random(in: 0.3...0.6, using: &g) }
             f.dart -= dt
             let want = f.dart > 0 ? f.cruise * 4.5 : f.cruise * (0.6 + 0.4 * sin(t * 0.3 + f.wag))
@@ -423,22 +606,17 @@ final class ValleyCreek {
             f.head += f.turn * dt * (f.dart > 0 ? 0.3 : 1)
             var dir = SIMD2<Float>(cos(f.head), sin(f.head))
             var np = f.pos + dir * f.speed * dt
-            // 물 밖으로 나가려 하면 물 안쪽(웅덩이 가운데·물길 따라)으로 돌아섬
-            if !inWater(np, margin: f.size * 0.4) {
-                let back = pool - f.pos
-                let tgt = atan2(back.y, back.x)
-                var dh = tgt - f.head
-                while dh > .pi { dh -= 2 * .pi }
-                while dh < -.pi { dh += 2 * .pi }
-                f.head += dh * min(1, dt * 4)
+            // 물 밖으로 나가려 하면 목적지 쪽으로 돌아섬
+            if !inWater(np, margin: f.size * 0.5) {
+                f.head += (dh > 0 ? 1 : -1) * min(abs(dh), dt * 5)
                 dir = SIMD2<Float>(cos(f.head), sin(f.head))
                 np = f.pos + dir * f.speed * dt * 0.3
-                if !inWater(np, margin: 0) { np = f.pos }
+                if !inWater(np, margin: 0) { np = f.pos; f.head += dt * 3 }
             }
             f.pos = np
             f.wag += dt * (6 + f.speed * 60)
-            let bob = sin(t * 1.3 + f.wag * 0.1) * 0.004
-            f.e.position = SIMD3<Float>(np.x, floorY + 0.009 + f.depth + bob, np.y)
+            let bob = sin(t * 1.3 + f.wag * 0.1) * 0.003
+            f.e.position = SIMD3<Float>(np.x, floorY + 0.008 + f.depth + bob, np.y)
             f.e.orientation = simd_quatf(angle: -f.head, axis: [0, 1, 0]) * simd_quatf(angle: sin(f.wag) * 0.08, axis: [0, 1, 0])
             f.tail.orientation = simd_quatf(angle: sin(f.wag) * (0.35 + min(0.4, f.speed * 2)), axis: [0, 1, 0])
         }

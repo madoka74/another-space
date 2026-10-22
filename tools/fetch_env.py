@@ -48,6 +48,7 @@ TEXTURES = {
     'rock': 'aerial_rocks_02',
     'mossrock': 'mossy_rock',
     'bark': 'bark_brown_02',
+    'cliff': 'cliff_side',          # 계곡 폭포 뒤 절벽·절벽 띠 (세로 암벽 사진)
 }
 
 

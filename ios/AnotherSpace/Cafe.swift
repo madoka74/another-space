@@ -275,6 +275,7 @@ final class CafeTables {
         m.roughness = .init(scale: 0.04)
         m.specular = .init(scale: 1)
         m.blending = .transparent(opacity: .init(scale: alpha))
+        m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         return m
     }
 
@@ -537,6 +538,7 @@ final class CafeTables {
         if let mk = Tex.get("flame_a", raw: true) {
             var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.clamp
             fm.blending = .transparent(opacity: .init(scale: 1, texture: tp))
+            fm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         var q = Geo()
         q.crossTree(at: .zero, width: 0.016, height: 0.032, yaw: 0.3)

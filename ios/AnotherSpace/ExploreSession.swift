@@ -1075,21 +1075,65 @@ final class ExploreSession {
         starCard?.isEnabled = false
     }
 
-    /// 정보판: 지금 바라보는 높이 그대로(하늘을 보고 있으면 위쪽), 별자리 반대쪽으로 28도 비켜 — 별자리를 가리지 않고 고개를 내리지 않아도 됨.
-    /// 거리는 0.95m, 그 방향의 벽·천장·닫힌 문이 더 가까우면 그 앞으로 당기고 그만큼 작게(보이는 크기는 같게). 아래 막대로 옮김
+    /// 정보판 자리: 눈높이보다 조금 아래, 별자리 반대쪽으로 28도쯤 비켜 (하늘을 올려다보던 고개를 내리면 바로 읽게).
+    /// 판의 네 귀퉁이·가장자리·옮기기 막대까지 모두 방 안(벽·천장·문·가구에서 6cm 넘게 떨어짐)이고 내 눈에서 가로막는 것이 없는 자리만.
+    /// 천장·벽 너머로 삐져나가면 판이 그 면에 잘려 보였음 → 들어갈 때까지 가까이(그만큼 작게, 보이는 크기는 같게)·옆으로 옮김
     private func placeStarCard(away cdir: SIMD3<Float>) {
         guard let card = starCard else { return }
-        let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-        // 별자리가 시선의 오른쪽이면 왼쪽으로, 왼쪽이면 오른쪽으로
-        let right = simd_normalize(simd_cross(g, SIMD3<Float>(0, 1, 0)))
-        let side: Float = simd_dot(cdir, right) > 0 ? 1 : -1
-        let d = simd_normalize(simd_quatf(angle: side * 0.49, axis: [0, 1, 0]).act(g))
-        let full: Float = 0.95
-        let dist = min(full, max(0.35, clearance(d) - 0.12))
-        card.scale = SIMD3<Float>(repeating: dist / full)
-        card.position = head + d * dist
-        faceDocent(card)
         card.isEnabled = true
+        var g = fwd; g.y = 0
+        g = simd_length(g) > 0.01 ? simd_normalize(g) : SIMD3<Float>(0, 0, -1)
+        let right = simd_normalize(simd_cross(g, SIMD3<Float>(0, 1, 0)))
+        let side: Float = simd_dot(cdir, right) > 0 ? 1 : -1                   // 별자리가 오른쪽이면 왼쪽으로
+        let full: Float = 0.95
+        var hw: Float = 0.25, hh: Float = 0.28
+        card.scale = SIMD3<Float>(repeating: 1)
+        let bb = card.visualBounds(relativeTo: card)
+        if bb.extents.x > 0.05 && bb.extents.y > 0.05 { hw = bb.extents.x / 2; hh = bb.extents.y / 2 }
+        var best: (SIMD3<Float>, Float)? = nil
+        search: for yaw: Float in [0.49, 0.72, 0.3, 0.95, 0.12, 1.25] {
+            let d = simd_normalize(simd_quatf(angle: side * yaw, axis: [0, 1, 0]).act(g))
+            let cr = simd_normalize(simd_cross(d, SIMD3<Float>(0, 1, 0)))
+            var dist = full
+            while dist >= 0.38 {
+                let k = dist / full
+                let c = head + d * dist + SIMD3<Float>(0, -0.1 * k, 0)
+                var ok = clearance(simd_normalize(c - head)) > simd_distance(c, head) + 0.04
+                if ok {
+                    pts: for sx: Float in [-1, -0.5, 0, 0.5, 1] {
+                        for sy: Float in [-1.25, -1, 0, 1] {                  // -1.25 = 아래 옮기기 막대
+                            let q = c + cr * (sx * (hw + 0.04) * k) + SIMD3<Float>(0, sy * (hh + 0.04) * k, 0)
+                            if !spaceFree(q) { ok = false; break pts }
+                        }
+                    }
+                }
+                if ok { best = (c, k); break search }
+                dist -= 0.05
+            }
+        }
+        // 어디에도 다 들어가지 않으면 시선 정면 가장 가까운 자리에 작게
+        let spot = best ?? (head + g * 0.4 + SIMD3<Float>(0, -0.05, 0), 0.4 / full)
+        card.scale = SIMD3<Float>(repeating: spot.1)
+        card.position = spot.0
+        faceDocent(card)
+    }
+
+    /// 지금 좌표의 점이 방 안 빈 곳인지 (벽·천장·바닥·닫힌 문·가구에서 떨어짐)
+    private func spaceFree(_ p: SIMD3<Float>) -> Bool {
+        guard let f = fit, let L = layout else { return true }
+        let q = f.toSaved(p)
+        let h = q.y - L.floorY
+        let pl = L.plane(q.x, q.z)
+        guard L.walkable(pl) else { return false }
+        let here = L.at(x: q.x, z: q.z)
+        if here.room == 0 || here.wall < 0.06 { return false }
+        if h < 0.08 || h > L.ceil[min(255, max(1, here.room))] - 0.07 { return false }
+        for i in solidDoors where i < L.doors.count && L.doors[i].zone(pl, margin: 0.04, side: -0.02) { return false }
+        if let v = vox {
+            let offs: [SIMD2<Float>] = [[0, 0], [0.06, 0], [-0.06, 0], [0, 0.06], [0, -0.06]]
+            for o in offs where v.heightAt(pl + o) + 0.05 > h { return false }
+        }
+        return true
     }
 
     private func themeFeatures(_ dt: Float) {
@@ -1110,7 +1154,7 @@ final class ExploreSession {
         stars?.tick(dt, gaze: gaze)
         // 바다 해파리: 머리 자리(가까이 오면 비켜 감) · 계곡 물고기: 손(물에 대면 흩어짐)
         wld.jelly?.head = f.toSaved(head)
-        wld.creek?.tick(dt, hands: handPts)
+        wld.creek?.tick(dt, hands: handPts, feet: f.toSaved(head))
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
             music.set(true, at: wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))
@@ -1172,14 +1216,16 @@ final class ExploreSession {
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
                               free: { [unowned self] p in self.catFree(p, L, homeRooms) },
                               top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
-                              height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 })
+                              height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 },
+                              room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && homeRooms.contains(a.room) && a.wall > 0.06 },
+                              ceil: L.ceil[min(255, max(1, current))])
         c.tick(dt, ctx)
         if c.hasToy { showTip("ball", "털실 공을 엄지·검지로 집어 흔들거나 던져 보세요. 톡 치면 굴러가요.") }
         if c.done { cat = nil }
     }
 
     // MARK: 시골 강아지
-    /// 시골 테마 방에 있으면 허스키 강아지가 따라다님 (고양이와 같은 방식, 시골이 아닌 방으로 가면 사라짐)
+    /// 시골 테마 방에 있으면 복슬복슬한 갈색 강아지가 따라다님 (고양이와 같은 방식, 시골이 아닌 방으로 가면 사라짐)
     private func dogTick(_ dt: Float) {
         guard let f = fit, let L = layout, let d = data else { return }
         let rm = d.rec.room(current)
@@ -1196,7 +1242,7 @@ final class ExploreSession {
             for a in [Float(0.5), -0.5, 0.3, -0.3, 0] {
                 let v = SIMD2<Float>(fwd2.x * cos(a) - fwd2.y * sin(a), fwd2.x * sin(a) + fwd2.y * cos(a))
                 let p = me + v * 1.8
-                if catFree(p, L, rooms, r: 0.2) {
+                if catFree(p, L, rooms, r: 0.34) {
                     let g = HomeDog(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color)
                     spaceRoot.addChild(g.root)
                     spaceRoot.addChild(g.propRoot)
@@ -1210,9 +1256,11 @@ final class ExploreSession {
         if !here { g.leave() }
         let blocked = vox
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
-                              free: { [unowned self] p in self.catFree(p, L, rooms, r: 0.2) },
+                              free: { [unowned self] p in self.catFree(p, L, rooms, r: 0.34) },
                               top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
-                              height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 })
+                              height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 },
+                              room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && rooms.contains(a.room) && a.wall > 0.06 },
+                              ceil: L.ceil[min(255, max(1, current))])
         g.tick(dt, ctx)
         if g.hasToy { showTip("stick", "막대를 엄지·검지로 집어 던져 보세요. 설이가 물어 와요. 톡 치면 가져다줘요.") }
         if g.done { dog = nil }
@@ -1227,14 +1275,19 @@ final class ExploreSession {
     }
 
     /// 고양이가 설 수 있는 바닥: 집 테마 방 안, 벽에서 12cm 넘게, 둘레 12cm에 가구 없음, 문이 쓸고 지나가는 자리 아님
-    private func catFree(_ p: SIMD2<Float>, _ L: Layout, _ homeRooms: Set<Int>, r: Float = 0.12) -> Bool {
+    /// r: 그림 판이 어느 쪽을 향해도(늘 나를 봄) 가구·벽 속으로 파고들지 않을 만큼의 여유 (판 반폭 + 6cm쯤)
+    private func catFree(_ p: SIMD2<Float>, _ L: Layout, _ homeRooms: Set<Int>, r: Float = 0.27) -> Bool {
         let a = L.at(x: p.x, z: p.y)
         guard a.room != 0, homeRooms.contains(a.room), a.wall > r else { return false }
         let pl = L.plane(p.x, p.y)
         if Skin.inSwing(L, pl) { return false }
         guard let v = vox else { return true }
-        for o in [SIMD2<Float>(0, 0), SIMD2<Float>(r, 0), SIMD2<Float>(-r, 0), SIMD2<Float>(0, r), SIMD2<Float>(0, -r)] {
-            if v.heightAt(pl + o) > 0.05 { return false }
+        if v.heightAt(pl) > 0.05 { return false }
+        for ring in [r * 0.55, r] {
+            for k in 0..<12 {
+                let ang = Float(k) / 12 * 2 * .pi
+                if v.heightAt(pl + SIMD2<Float>(cos(ang), sin(ang)) * ring) > 0.05 { return false }
+            }
         }
         return true
     }

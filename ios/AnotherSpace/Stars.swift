@@ -58,8 +58,8 @@ enum SkyData {
 
 /// 숲 테마의 밤하늘: 오늘 밤(테마 시간에 맞춘 시각) 서울에서 보이는 실제 하늘.
 /// - 별은 아주 많이: 실제 밝은 별들 + 고르지 않은 별자리의 별 + 희미한 별 무리(눈으로 겨우 보이는 별처럼)
-/// - 별자리는 한 번에 3~4개만, 하늘 여기저기 넉넉히 떨어진 것으로 (지평선 위 20도 넘는 것 중 무작위)
-/// - 바라보면 그 별자리의 별만 더 밝고 또렷해짐(선·테두리 없음). 그 상태에서 탭하면 선이 이어지고 별자리 바로 아래 이름, 정보판
+/// - 별자리는 한 번에 3~4개, 하늘 여기저기 떨어진 것으로 (숲 나무 꼭대기보다 넉넉히 위, 머리 바로 위는 피해 지평선 위 42~74도)
+/// - 별자리 선은 늘 흐리게 보여 어디 있는지 찾을 수 있음. 바라보면 별·선이 밝아지고, 탭하면 더 밝게 + 정보판
 /// - 별은 '오려 내기'(가장자리 투명 부분은 아예 그리지 않음)로 그려 별끼리·선과 겹쳐도 네모 판이 비치지 않음.
 ///   밝기 바꾸기·반짝임도 투명도 대신 재질을 바꿔 끼움 (반투명이 되면 다시 네모가 비침)
 /// 밤에 가장 또렷하고, 새벽·해질녘엔 밝은 별만 흐리게, 낮엔 안 보임. 구름이 끼면 흐려졌다 또렷해졌다, 비·눈이면 가려짐.
@@ -79,6 +79,7 @@ final class SkyStars {
         var level = -1
         var reveal: Float = 0
         var picked = false
+        var lineLevel = 0
         init(c: Constellation, dir: SIMD3<Float>, radius: Float, verts: [SIMD3<Float>], segs: [(SIMD3<Float>, SIMD3<Float>)]) {
             self.c = c; self.dir = dir; self.radius = radius; self.verts = verts; self.segs = segs
         }
@@ -88,6 +89,7 @@ final class SkyStars {
     private var groups: [Group] = []
     private var bgEnts: [(ModelEntity, [UnlitMaterial])] = []      // 별 무리, 반짝임 단계별 재질
     private var conMats: [UnlitMaterial] = []                       // 별자리 별: 0 = 평소 … 마지막 = 바라볼 때
+    private var lineMats: [UnlitMaterial] = []                      // 별자리 선: 0 = 평소(흐리게), 1 = 바라볼 때, 2 = 탭해서 고른 것
     private let vis: Float
     private let dimOnly: Bool
     private let cloudy: Bool
@@ -134,6 +136,16 @@ final class SkyStars {
             let f = Float(k) / 3
             conMats.append(starMat(SIMD3<Float>(1, 0.95, 0.82), vis, cut: 0.16 - 0.08 * f))
         }
+        let lineK: [Float] = [0.3, 0.62, 1]
+        for k in lineK {
+            let c: UIColor
+            switch look {
+            case .line: c = UIColor(white: CGFloat(0.6 - 0.48 * k), alpha: 1)
+            case .mono: c = UIColor(white: CGFloat(0.85 * k * vis), alpha: 1)
+            case .color: c = UIColor(red: CGFloat(0.62 * k * vis), green: CGFloat(0.76 * k * vis), blue: CGFloat(1 * k * vis), alpha: 1)
+            }
+            lineMats.append(UnlitMaterial(color: c))
+        }
         let chosen = constellations ? choose(lst) : []
         buildBackground(lst, skip: Set(chosen.map(\.id)))
         for c in chosen { build(c, lst) }
@@ -174,18 +186,27 @@ final class SkyStars {
             let ctr = simd_normalize(sum)
             var rad: Float = 0
             for l in c.lines { for s in l { rad = max(rad, acos(min(1, simd_dot(dir(s.ra, s.dec, lst), ctr)))) } }
-            // 고개를 너무 젖히지 않게: 가운데가 지평선 위 18~52도
-            if ctr.y > 0.31 && ctr.y < 0.79 && up >= 4 && up * 10 >= n * 8 && rad < 0.5 && rad > 0.05 { cands.append((c, ctr)) }
+            // 숲의 나무 꼭대기(눈높이에서 35도 아래) 위로 넉넉히, 머리 바로 위는 피함: 가운데가 지평선 위 42~74도, 모든 별이 36도 위
+            var low: Float = 1
+            for l in c.lines { for s in l { low = min(low, dir(s.ra, s.dec, lst).y) } }
+            if ctr.y > 0.67 && ctr.y < 0.96 && low > 0.59 && n >= 4 && rad < 0.42 && rad > 0.06 { cands.append((c, ctr)) }
         }
+        // 덜 알려진 아주 작은 것보다 모양이 또렷한 것(별이 많은 것)을 먼저, 그 안에서 무작위
         cands.shuffle()
-        for minSep in [Float(0.87), 0.6] {
+        cands.sort { a, b in
+            let na = a.0.lines.reduce(0) { $0 + $1.count }, nb = b.0.lines.reduce(0) { $0 + $1.count }
+            return min(na, 8) > min(nb, 8)
+        }
+        var best: [(Constellation, SIMD3<Float>)] = []
+        for minSep in [Float(0.75), 0.58, 0.45] {
             var out: [(Constellation, SIMD3<Float>)] = []
             for c in cands where out.count < 4 {
                 if out.allSatisfy({ acos(min(1, simd_dot($0.1, c.1))) > minSep }) { out.append(c) }
             }
-            if out.count >= 3 || minSep < 0.7 { return out.map { $0.0 } }
+            if out.count > best.count { best = out }
+            if best.count >= 3 { break }
         }
-        return []
+        return best.map { $0.0 }
     }
 
     private func starQuad(_ g: inout Geo, _ v: SIMD3<Float>, size: Float, r: Float? = nil) {
@@ -296,11 +317,10 @@ final class SkyStars {
             let d = simd_normalize(pb - pa)
             let gap: Float = R * 0.008
             guard simd_distance(pa, pb) > gap * 2.2 else { continue }
-            lines.stroke(pa + d * gap, pb - d * gap, width: R * 0.0018)
+            lines.stroke(pa + d * gap, pb - d * gap, width: R * 0.0024)
         }
-        let lineCol: UIColor = look == .line ? UIColor(white: 0.12, alpha: 1) : (look == .mono ? UIColor(white: 0.85, alpha: 1) : UIColor(red: 0.62, green: 0.76, blue: 1, alpha: 1))
-        if let e = lines.entity("conLines", UnlitMaterial(color: lineCol)) {
-            e.isEnabled = false
+        // 선은 늘 흐리게 보임(어디에 별자리가 있는지 찾을 수 있게), 바라보거나 탭하면 밝게. 불투명 재질만 바꿔 끼움(네모 판 없음)
+        if let e = lines.entity("conLines", lineMats[0]) {
             root.addChild(e)
             g.lines = e
         }
@@ -357,11 +377,8 @@ final class SkyStars {
             if lv != g.level, let e = g.stars { e.model?.materials = [conMats[lv]]; g.level = lv }
             if g.picked { g.reveal = min(1, g.reveal + dt / 0.8) } else if g.reveal > 0 { g.reveal = max(0, g.reveal - dt * 1.5) }
             if let l = g.lines {
-                let on = g.reveal > 0.01
-                if l.isEnabled != on { l.isEnabled = on }
-                if on {
-                    if g.reveal < 0.999 { l.components.set(OpacityComponent(opacity: g.reveal * cl)) } else { l.components.remove(OpacityComponent.self) }
-                }
+                let li = g.picked ? 2 : (g.focus > 0.5 ? 1 : 0)
+                if li != g.lineLevel { l.model?.materials = [lineMats[li]]; g.lineLevel = li }
             }
             if let lb = g.label {
                 lb.components.set(OpacityComponent(opacity: g.reveal * cl))
@@ -400,6 +417,7 @@ final class SkyStars {
         if let mask {
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
             hm.blending = .transparent(opacity: .init(scale: look == .line ? 0.15 : 0.32, texture: mp))
+            hm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         if let e = quad(dist * 0.13).entity("moonHalo", hm) { root.addChild(e) }
         var mm = UnlitMaterial(color: look == .line ? UIColor(white: 0.97, alpha: 1) : .white)

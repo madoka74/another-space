@@ -148,6 +148,7 @@ final class Campfire {
                 m.color = .init(tint: Tex.with(look) { Tex.color([1, 0.45, 0.15]) }, texture: p)
                 var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
                 m.blending = .transparent(opacity: .init(scale: 1, texture: mp))
+                m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             }
             em = q.entity("ember", m)
         }
@@ -168,6 +169,7 @@ final class Campfire {
                 m.color = .init(tint: Tex.with(look) { Tex.color([1, 0.7, 0.45]) }, texture: p)
                 var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
                 m.blending = .transparent(opacity: .init(scale: 1, texture: mp))
+                m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             }
             gl = q.entity("fireGlow", m)
         }
@@ -186,6 +188,7 @@ final class Campfire {
             }
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
             m.blending = .transparent(opacity: .init(scale: line ? 0.85 : 1, texture: mp))
+            m.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
             frameMats.append(m)
         }
         var flameM = UnlitMaterial(color: line ? inkC : Tex.with(look) { Tex.color([1, 0.75, 0.35]) })
@@ -196,6 +199,7 @@ final class Campfire {
         if let mask = Tex.get("flame_a", raw: true) {
             var p = MaterialParameters.Texture(mask); p.sampler = Tex.clamp
             flameM.blending = .transparent(opacity: .init(scale: 1, texture: p))
+            flameM.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         let spots: [(SIMD2<Float>, Float)] = [([0, 0], 0.78), ([0.02, 0.01], 0.66), ([0.09, 0.04], 0.46), ([-0.08, 0.06], 0.44),
                                                ([0.02, -0.09], 0.42), ([-0.06, -0.05], 0.34), ([0.11, -0.06], 0.3), ([-0.11, 0.0], 0.28)]
