@@ -121,6 +121,14 @@ final class RoomWorld {
     private var skyMat: UnlitMaterial?
     private var flashMat: UnlitMaterial?
     private var clouds: [(Entity, SIMD3<Float>)] = []
+    // 계곡 개울·폭포
+    private var riverPts: [SIMD3<Float>] = []
+    private var riverW: [Float] = []
+    private var flows: [(ModelEntity, UnlitMaterial, Float, Float)] = []     // 물 면, 재질, 속도(무늬/초), 지금 어긋남
+    /// 개울에서 방과 가장 가까운 곳 (물소리 자리, 저장 좌표)
+    private(set) var riverNear: SIMD3<Float>?
+    /// 폭포 (물소리 자리)
+    private(set) var fallSpot: SIMD3<Float>?
     private var emitters: [Entity] = []          // 하늘 세계 쪽 비·눈 (그 방 포털 너머로만 보임)
     private var roomEmitters: [Entity] = []      // 방 안 비·눈·바람·반딧불 (실제 공간이라 어디서든 보임 → 지금 방만 켬)
     private var flashLeft: Float = 0
@@ -204,6 +212,7 @@ final class RoomWorld {
         if dc.sea { l.append(("water", "tex")) }
         if dc.city { l.append((night ? "facade_night" : "facade", "tex")) }
         if dc.paintings { for i in 0..<6 { l.append(("art_\(i)", "tex")) } }
+        if r.place == "valley" { l += [("river", "tex"), ("river_hi", "tex"), ("fall", "tex"), ("pebble", "tex"), ("rock", "tex")] }
         if Worlds.cloudCount(r.weather) > 0 { for i in 0..<3 { l.append(("cloud_\(i)", "sky")) } }
         return l
     }
@@ -692,36 +701,56 @@ final class RoomWorld {
         }
     }
 
-    /// 카페: 하늘 대신 짙은 나무 천장 + 1.1m 간격 굵은 들보 (아늑한 실내)
+    /// 카페: 유리 천장 (온실 카페). 하늘·날씨가 그대로 보이고, 1.1m 간격 나무 들보 사이에 가는 철제 살(0.55m)이 유리를 나눔
     private func addCafeCeiling(_ rects: [PRect], _ L: Layout, y: Float) {
         let wood = Worlds.safe(tint * 0.9, min: 0.3)
-        if let m = Self.flatMesh(rects, L, y: y, tile: 1.4) {
-            let e = ModelEntity(mesh: m, materials: [lineMode ? Ink.paper(1) : Tex.unlit("planks_dark", tint: wood)])
-            local.addChild(e)
+        // 아주 옅은 유리 (살짝 비치는 빛)
+        if !lineMode, let m = Self.flatMesh(rects, L, y: y - 0.005, tile: 1) {
+            var gm = UnlitMaterial(color: UIColor(red: 0.85, green: 0.93, blue: 0.95, alpha: 1))
+            gm.blending = .transparent(opacity: .init(floatLiteral: 0.07))
+            local.addChild(ModelEntity(mesh: m, materials: [gm]))
         }
         var g = Geo()
+        var iron = Geo()
         var lines = Geo()
         for r in rects {
+            guard r.1.x - r.0.x > 0.3, r.1.y - r.0.y > 0.3 else { continue }
+            // 들보 (1.1m)
             var v = (r.0.y).rounded(.down) + 0.55
             while v < r.1.y - 0.2 {
-                guard r.1.x - r.0.x > 0.3 else { break }
-                for side: Float in [-0.06, 0.06] {
+                for side: Float in [-0.045, 0.045] {
                     let a = L.flat(SIMD2<Float>(r.0.x, v + side)), b = L.flat(SIMD2<Float>(r.1.x, v + side))
-                    g.wall(SIMD3<Float>(a.x, y, a.y), SIMD3<Float>(b.x, y, b.y), y0: -0.16, y1: 0, u0: 0, u1: (r.1.x - r.0.x) / 1.2, v0: 0, v1: 0.15)
+                    g.wall(SIMD3<Float>(a.x, y, a.y), SIMD3<Float>(b.x, y, b.y), y0: -0.12, y1: 0, u0: 0, u1: (r.1.x - r.0.x) / 1.2, v0: 0, v1: 0.15)
                 }
-                let a0 = L.flat(SIMD2<Float>(r.0.x, v - 0.06)), b0 = L.flat(SIMD2<Float>(r.1.x, v - 0.06))
-                let a1 = L.flat(SIMD2<Float>(r.0.x, v + 0.06)), b1 = L.flat(SIMD2<Float>(r.1.x, v + 0.06))
-                g.quad(SIMD3<Float>(a0.x, y - 0.16, a0.y), SIMD3<Float>(b0.x, y - 0.16, b0.y), SIMD3<Float>(b1.x, y - 0.16, b1.y), SIMD3<Float>(a1.x, y - 0.16, a1.y),
+                let a0 = L.flat(SIMD2<Float>(r.0.x, v - 0.045)), b0 = L.flat(SIMD2<Float>(r.1.x, v - 0.045))
+                let a1 = L.flat(SIMD2<Float>(r.0.x, v + 0.045)), b1 = L.flat(SIMD2<Float>(r.1.x, v + 0.045))
+                g.quad(SIMD3<Float>(a0.x, y - 0.12, a0.y), SIMD3<Float>(b0.x, y - 0.12, b0.y), SIMD3<Float>(b1.x, y - 0.12, b1.y), SIMD3<Float>(a1.x, y - 0.12, a1.y),
                        SIMD2<Float>(0, 0), SIMD2<Float>((r.1.x - r.0.x) / 1.2, 0), SIMD2<Float>((r.1.x - r.0.x) / 1.2, 0.1), SIMD2<Float>(0, 0.1))
                 if lineMode {
                     for (p, q) in [(a0, b0), (a1, b1)] {
-                        lines.stroke(SIMD3<Float>(p.x, y - 0.16, p.y), SIMD3<Float>(q.x, y - 0.16, q.y), width: 0.01)
+                        lines.stroke(SIMD3<Float>(p.x, y - 0.12, p.y), SIMD3<Float>(q.x, y - 0.12, q.y), width: 0.01)
                     }
                 }
                 v += 1.1
             }
+            // 가는 철제 살: 들보 사이 한 줄, 가로로 0.55m마다
+            var w = (r.0.y).rounded(.down) + 1.1
+            while w < r.1.y - 0.1 {
+                let a = L.flat(SIMD2<Float>(r.0.x, w)), b = L.flat(SIMD2<Float>(r.1.x, w))
+                iron.wall(SIMD3<Float>(a.x, y, a.y), SIMD3<Float>(b.x, y, b.y), y0: -0.03, y1: 0, u0: 0, u1: 1)
+                if lineMode { lines.stroke(SIMD3<Float>(a.x, y - 0.03, a.y), SIMD3<Float>(b.x, y - 0.03, b.y), width: 0.006) }
+                w += 1.1
+            }
+            var u = (r.0.x).rounded(.down) + 0.55
+            while u < r.1.x - 0.1 {
+                let a = L.flat(SIMD2<Float>(u, r.0.y)), b = L.flat(SIMD2<Float>(u, r.1.y))
+                iron.wall(SIMD3<Float>(a.x, y, a.y), SIMD3<Float>(b.x, y, b.y), y0: -0.03, y1: 0, u0: 0, u1: 1)
+                if lineMode { lines.stroke(SIMD3<Float>(a.x, y - 0.03, a.y), SIMD3<Float>(b.x, y - 0.03, b.y), width: 0.006) }
+                u += 0.55
+            }
         }
         if let e = g.entity("cafeBeams", lineMode ? Ink.paper(0) : Tex.unlit("planks_dark", tint: wood * 0.7)) { local.addChild(e) }
+        if let e = iron.entity("cafeMuntins", lineMode ? Ink.paper(0) : ink(SIMD3<Float>(0.13, 0.13, 0.13))) { local.addChild(e) }
         if let e = lines.entity("cafeBeamLines", Ink.line) { local.addChild(e) }
     }
 
@@ -839,12 +868,232 @@ final class RoomWorld {
         return SIMD3<Float>(p.x, y, p.y)
     }
 
+    // MARK: 계곡 개울
+    /// 개울 물길: 먼 절벽의 폭포에서 시작해 방 옆 5~6m를 굽이쳐 지나 반대편 절벽 밑으로 사라짐.
+    /// 집 안(걸을 수 있는 곳)에 걸치면 그 자리만 바깥으로 밀어냄
+    private func planRiver(_ L: Layout, _ rec: SpaceRec, floorY: Float) {
+        var g = SeededRNG(seed: UInt64(room.id * 613 + 77))
+        let f0 = Float(g.next() % 1000) / 1000
+        let span: Float = 0.32
+        let n = 64
+        let wig = Float(g.next() % 100) / 100 * 6
+        func clear(_ p: SIMD3<Float>, _ r: Float) -> Bool {
+            for k in 0..<12 {
+                let a = Float(k) / 12 * 2 * .pi
+                for f: Float in [0, 0.5, 1] where !(f == 0 && k > 0) {
+                    let q = p + SIMD3<Float>(cos(a), 0, sin(a)) * r * f
+                    if L.walkable(L.plane(q.x, q.z)) { return false }
+                }
+            }
+            return true
+        }
+        var pts: [SIMD3<Float>] = []
+        var ws: [Float] = []
+        for i in 0...n {
+            let u = Float(i) / Float(n)
+            var d: Float = 5.5 + 27 * pow(abs(2 * u - 1), 1.7) + 0.9 * sin(u * 11 + wig)
+            let w: Float = 2.4 + 1.2 * sin(u * .pi) + 0.4 * sin(u * 17 + wig)
+            var p = around(f0 + span * u, d, rec, floorY)
+            while d < 36 && !clear(p, w / 2 + 1.2) { d += 0.8; p = around(f0 + span * u, d, rec, floorY) }
+            pts.append(p)
+            ws.append(w)
+        }
+        // 네모 둘레를 따라 꺾인 곳을 둥글게
+        for _ in 0..<4 {
+            var q = pts
+            for i in 1..<(pts.count - 1) { q[i] = (pts[i - 1] + pts[i] * 2 + pts[i + 1]) / 4 }
+            pts = q
+        }
+        // 둥글게 하다 집 안으로 들어온 곳은 다시 밀어냄
+        for i in pts.indices where !clear(pts[i], ws[i] / 2 + 1.0) {
+            var dir = pts[i] - center
+            dir.y = 0
+            dir = simd_length(dir) > 0.01 ? simd_normalize(dir) : SIMD3<Float>(1, 0, 0)
+            var k = 0
+            while k < 30 && !clear(pts[i], ws[i] / 2 + 1.0) { pts[i] += dir * 0.5; k += 1 }
+        }
+        riverPts = pts
+        riverW = ws
+    }
+
+    /// 물길 가장자리까지 거리 (물 위면 음수)
+    private func riverGap(_ p: SIMD3<Float>) -> Float {
+        guard riverPts.count > 1 else { return 1e9 }
+        var best: Float = 1e9
+        let q = SIMD2<Float>(p.x, p.z)
+        for i in 0..<(riverPts.count - 1) {
+            let a = SIMD2<Float>(riverPts[i].x, riverPts[i].z), b = SIMD2<Float>(riverPts[i + 1].x, riverPts[i + 1].z)
+            let ab = b - a
+            let t = max(0, min(1, simd_dot(q - a, ab) / max(1e-6, simd_length_squared(ab))))
+            best = min(best, simd_distance(q, a + ab * t) - (riverW[i] + (riverW[i + 1] - riverW[i]) * t) / 2)
+        }
+        return best
+    }
+
+    private func addRiver<G: RandomNumberGenerator>(floorY: Float, using g: inout G) {
+        let pts = riverPts, ws = riverW
+        guard pts.count > 2 else { return }
+        var water = Geo(), bank = Geo(), stones = Geo(), lines = Geo()
+        var vAcc: Float = 0
+        var prevL = SIMD3<Float>(0, 0, 0), prevR = SIMD3<Float>(0, 0, 0), prevBL = SIMD3<Float>(0, 0, 0), prevBR = SIMD3<Float>(0, 0, 0)
+        var prevV: Float = 0
+        let wy = floorY - 0.012, by = floorY - 0.022
+        for i in pts.indices {
+            let a = pts[max(0, i - 1)], b = pts[min(pts.count - 1, i + 1)]
+            var t = b - a
+            t.y = 0
+            t = simd_normalize(t)
+            let nrm = SIMD3<Float>(-t.z, 0, t.x)
+            let p = SIMD3<Float>(pts[i].x, 0, pts[i].z)
+            let hw = ws[i] / 2
+            let l = p + nrm * hw, r = p - nrm * hw
+            let bl = p + nrm * (hw + 1.1), br = p - nrm * (hw + 1.1)
+            if i > 0 {
+                vAcc += simd_distance(pts[i], pts[i - 1])
+                let v0 = prevV, v1 = vAcc / 3.5
+                water.quad(SIMD3<Float>(prevL.x, wy, prevL.z), SIMD3<Float>(prevR.x, wy, prevR.z), SIMD3<Float>(r.x, wy, r.z), SIMD3<Float>(l.x, wy, l.z),
+                           SIMD2<Float>(0, v0), SIMD2<Float>(1, v0), SIMD2<Float>(1, v1), SIMD2<Float>(0, v1))
+                bank.quad(SIMD3<Float>(prevBL.x, by, prevBL.z), SIMD3<Float>(prevBR.x, by, prevBR.z), SIMD3<Float>(br.x, by, br.z), SIMD3<Float>(bl.x, by, bl.z),
+                          SIMD2<Float>(0, v0 * 2.5), SIMD2<Float>(ws[i] / 1.4 + 1.6, v0 * 2.5), SIMD2<Float>(ws[i] / 1.4 + 1.6, v1 * 2.5), SIMD2<Float>(0, v1 * 2.5))
+                if lineMode {
+                    lines.stroke(SIMD3<Float>(prevL.x, wy + 0.02, prevL.z), SIMD3<Float>(l.x, wy + 0.02, l.z), width: 0.06)
+                    lines.stroke(SIMD3<Float>(prevR.x, wy + 0.02, prevR.z), SIMD3<Float>(r.x, wy + 0.02, r.z), width: 0.06)
+                    if i % 3 == 0 {                                            // 물살 선
+                        let o = Float.random(in: -0.25...0.25, using: &g)
+                        let c0 = (prevL + prevR) / 2 + nrm * o * hw, c1 = (l + r) / 2 + nrm * o * hw
+                        lines.stroke(SIMD3<Float>(c0.x, wy + 0.02, c0.z), SIMD3<Float>(c0.x + (c1.x - c0.x) * 0.6, wy + 0.02, c0.z + (c1.z - c0.z) * 0.6), width: 0.035)
+                    }
+                }
+                prevV = v1
+            }
+            prevL = l; prevR = r; prevBL = bl; prevBR = br
+            // 물가 돌 (양쪽 번갈아), 가끔 물속 바위
+            if i % 2 == 0 && i > 2 && i < pts.count - 2 {
+                let side: Float = (i / 2) % 2 == 0 ? 1 : -1
+                let sz = Float.random(in: 0.25...0.8, using: &g)
+                let off = hw + Float.random(in: 0.1...0.9, using: &g)
+                let along = Float.random(in: -0.6...0.6, using: &g)
+                let at = SIMD3<Float>(p.x, floorY - 0.05, p.z) + nrm * side * off + t * along
+                stones.rock(at: at, size: sz, using: &g)
+                if Float.random(in: 0...1, using: &g) < 0.22 {
+                    let across = Float.random(in: -hw * 0.6...hw * 0.6, using: &g)
+                    let bs = Float.random(in: 0.25...0.5, using: &g)
+                    stones.rock(at: SIMD3<Float>(p.x, floorY - 0.12, p.z) + nrm * across, size: bs, using: &g)
+                }
+            }
+        }
+        // 폭포: 물길 시작 바로 뒤, 물길 쪽을 향해 선 물줄기 (높이 26m)
+        let p0 = pts[0]
+        var t0 = pts[1] - pts[0]
+        t0.y = 0
+        t0 = simd_normalize(t0)
+        let n0 = SIMD3<Float>(-t0.z, 0, t0.x)
+        let fw = ws[0] * 0.95
+        let fH: Float = 26
+        let fb = SIMD3<Float>(p0.x, floorY - 0.3, p0.z) - t0 * 0.8
+        var fall = Geo()
+        fall.quad(fb + n0 * fw / 2, fb - n0 * fw / 2, fb - n0 * fw / 2 + SIMD3<Float>(0, fH, 0) - t0 * 1.5, fb + n0 * fw / 2 + SIMD3<Float>(0, fH, 0) - t0 * 1.5,
+                  SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, fH / 7), SIMD2<Float>(0, fH / 7))
+        // 폭포 양옆과 물길 끝을 큰 바위로 감쌈
+        for side: Float in [-1, 1] {
+            let bs = Float.random(in: 1.6...2.6, using: &g)
+            stones.rock(at: fb + n0 * side * (fw / 2 + 1.4) + t0 * 0.4, size: bs, using: &g)
+        }
+        let pe = pts[pts.count - 1]
+        var te = pts[pts.count - 1] - pts[pts.count - 2]
+        te.y = 0
+        te = simd_normalize(te)
+        let ne = SIMD3<Float>(-te.z, 0, te.x)
+        for k in -1...1 {
+            let bs = Float.random(in: 1.3...2.2, using: &g)
+            stones.rock(at: SIMD3<Float>(pe.x, floorY - 0.2, pe.z) + ne * Float(k) * 1.6 + te * 0.6, size: bs, using: &g)
+        }
+        let rockTint = Worlds.safe(tint * 0.85, min: 0.25)
+        if let e = bank.entity("riverBank", Tex.unlit("pebble", tint: Worlds.safe(tint * 0.55, min: 0.2))) {
+            layer(e, 5)
+            world.addChild(e)
+        }
+        let night = room.time == "night"
+        let wTint: SIMD3<Float> = night ? tint * 0.55 : tint
+        let wm = Tex.unlit("river", tint: Worlds.safe(wTint, min: 0.2))
+        if let e = water.entity("river", wm) {
+            layer(e, 5)
+            world.addChild(e)
+            flows.append((e, wm, 0.45, 0))
+        }
+        if !lineMode {
+            let hiTint: SIMD3<Float> = night ? SIMD3<Float>(0.6, 0.65, 0.75) : SIMD3<Float>(1, 1, 1)
+            var hm = Tex.unlit("river_hi", tint: hiTint)
+            if let mk = Tex.get("river_hi_a", raw: true) {
+                var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.tiling
+                hm.blending = .transparent(opacity: .init(scale: night ? 0.5 : 0.85, texture: tp))
+            }
+            var hg = water
+            hg.pos = hg.pos.map { SIMD3<Float>($0.x, $0.y + 0.004, $0.z) }
+            hg.uv = hg.uv.map { SIMD2<Float>($0.x * 0.7, $0.y * 1.3) }
+            if let e = hg.entity("riverHi", hm) {
+                layer(e, 6)
+                world.addChild(e)
+                flows.append((e, hm, 0.9, 0.3))
+            }
+        }
+        if let e = stones.entity("riverRocks", Tex.unlit("rock", tint: rockTint)) {
+            layer(e, 5)
+            world.addChild(e)
+        }
+        var fm = Tex.unlit("fall", tint: Worlds.safe(night ? tint * 0.6 : tint, min: 0.3))
+        if let mk = Tex.get("fall_a", raw: true) {
+            var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.tiling
+            fm.blending = .transparent(opacity: .init(scale: 0.95, texture: tp))
+        } else if lineMode {
+            fm.blending = .transparent(opacity: .init(floatLiteral: 1))
+        }
+        if let e = fall.entity("waterfall", fm) {
+            layer(e, 6)
+            world.addChild(e)
+            flows.append((e, fm, -2.5, 0))
+        }
+        if lineMode {
+            for k in 0..<5 {
+                let x = -fw / 2 + fw * Float(k) / 4
+                lines.stroke(fb + n0 * x, fb + n0 * x + SIMD3<Float>(0, fH, 0) - t0 * 1.5, width: 0.08)
+            }
+            if let e = lines.entity("riverLines", Ink.line) { layer(e, 7); world.addChild(e) }
+        }
+        // 폭포 밑 물보라 (하얀 물안개가 피어오름)
+        var mist = ParticleEmitterComponent()
+        mist.emitterShape = .box
+        mist.emitterShapeSize = [fw, 0.6, 1.5]
+        mist.birthLocation = .volume
+        mist.birthDirection = .world
+        mist.emissionDirection = [0, 1, 0]
+        mist.speed = 0.7
+        mist.speedVariation = 0.4
+        mist.mainEmitter.birthRate = 14
+        mist.mainEmitter.lifeSpan = 4
+        mist.mainEmitter.size = 1.2
+        mist.mainEmitter.sizeMultiplierAtEndOfLifespan = 3
+        mist.mainEmitter.color = .constant(.single(lineMode ? UIColor(white: 0.5, alpha: 0.12) : Tex.color([0.95, 0.97, 1], alpha: night ? 0.1 : 0.22)))
+        if lineMode { mist.mainEmitter.blendMode = .alpha }
+        mist.mainEmitter.opacityCurve = .gradualFadeInOut
+        if let puff = Tex.get("smoke_puff", color: true) { mist.mainEmitter.image = puff }
+        let me = Entity()
+        me.components.set(mist)
+        me.position = fb + SIMD3<Float>(0, 0.4, 0) + t0 * 0.8
+        layer(me, 18)
+        world.addChild(me)
+        emitters.append(me)
+        fallSpot = fb + SIMD3<Float>(0, 2, 0)
+        riverNear = pts.min { simd_distance($0, center) < simd_distance($1, center) }
+    }
+
     /// 나무·바위·텐트·건물.
     /// 집 안(어느 방이든 걸을 수 있는 곳)에 걸치는 자리는 피함: 포털 너머 세계의 물건은 방 안에 있어도
     /// 다른 방 포털(문 너머 벽 등)을 통해 그려져서, 복도·문 앞에 나무·덤불이 떠 있는 것처럼 보임
     private func addThings(_ dc: Decor, rec: SpaceRec, _ L: Layout, floorY: Float) {
         var g = SeededRNG(seed: UInt64(room.id * 7919 + room.place.count * 31 + 3))
         func free(_ pts: [SIMD3<Float>]) -> Bool { !pts.contains { L.walkable(L.plane($0.x, $0.z)) } }
+        if room.place == "valley" { planRiver(L, rec, floorY: floorY) }
         // 십자 나무의 두 판 자리 (판 양옆 25cm까지)
         func treeFree(_ p: SIMD3<Float>, _ w: Float, _ yaw: Float) -> Bool {
             var pts: [SIMD3<Float>] = []
@@ -876,7 +1125,7 @@ final class RoomWorld {
                     let h = Float.random(in: set.h, using: &g)
                     let w = h * set.aspect * Float.random(in: 0.85...1.15, using: &g)
                     let yaw = Float.random(in: 0...3.14, using: &g)
-                    if treeFree(p, w, yaw) { list.append((p, h, w, yaw)); break }
+                    if treeFree(p, w, yaw) && riverGap(p) > 1.2 { list.append((p, h, w, yaw)); break }
                 }
             }
             list.sort { simd_distance($0.0, center) > simd_distance($1.0, center) }
@@ -893,11 +1142,12 @@ final class RoomWorld {
                 for _ in 0..<6 {
                     let p = around((Float(i) + Float.random(in: 0...0.9, using: &g)) / Float(rk.count), Float.random(in: rk.d, using: &g), rec, floorY)
                     let size = Float.random(in: rk.size, using: &g)
-                    if roundFree(p, size * 1.2 + 0.15) { geo.rock(at: p, size: size, using: &g); break }
+                    if roundFree(p, size * 1.2 + 0.15) && riverGap(p) > size * 0.7 { geo.rock(at: p, size: size, using: &g); break }
                 }
             }
             if let e = geo.entity("rocks", Tex.unlit(rk.tex, tint: Worlds.safe(tint * shades[1], min: 0.25))) { world.addChild(e) }
         }
+        if !riverPts.isEmpty { addRiver(floorY: floorY, using: &g) }
         var tentLines = Geo()
         defer { if let e = tentLines.entity("tentLines", Ink.line) { world.addChild(e) } }
         if dc.tents {
@@ -1370,6 +1620,13 @@ final class RoomWorld {
             waterOff += dt * speed
             if waterOff > 6 { waterOff -= 6 }
             w.position = SIMD3<Float>(waterOff, 0, waterOff * 0.4)
+        }
+        for i in flows.indices {
+            var f = flows[i]
+            f.3 = (f.3 - f.2 * dt / 3.5).truncatingRemainder(dividingBy: 1)
+            f.1.textureCoordinateTransform.offset = SIMD2<Float>(0, f.3)
+            f.0.model?.materials = [f.1]
+            flows[i] = f
         }
         if flashLeft > 0 {
             flashLeft -= dt

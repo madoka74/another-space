@@ -1114,7 +1114,9 @@ def sfx():
     save_wav('scan', buf, -8)
     fire_sounds(r)
     cat_sounds(r)
+    dog_sounds(r)
     misc_sounds(r)
+    water_sounds(r)
 
 
 def _formant_voice(f0, F, amp, r, breath=0.06, nasal=None):
@@ -1333,6 +1335,88 @@ def fire_sounds(r):
         save_wav(f'fire_pop{i}', buf, -8)
 
 
+def dog_sounds(r):
+    """시골 강아지 설이 (허스키): 멍(짧고 굵게)·왈(높게)·아우우 하울링·낑낑·헥헥(되풀이)·킁킁·신난 낑·놀자 그르릉, 이름표 짤랑"""
+    def voice(name, dur, f0pts, f1, f2, f3, peak, noise=0.2, nas=0.0, roll=0.0):
+        n = int(SR * dur)
+        f0 = _contour(n, f0pts)
+        F = [(_contour(n, f1), 220), (_contour(n, f2), 280), (_contour(n, f3), 360)]
+        env = np.interp(np.linspace(0, 1, n), [0, 0.06, 0.55, 1], [0, 1, 0.75, 0])
+        if roll > 0:
+            t = _t(dur)
+            env *= 1 - roll * (0.5 + 0.5 * np.sin(2 * np.pi * 30 * t))
+        nasal = np.full(n, nas)
+        x = _formant_voice(f0, F, env, r, breath=noise, nasal=nasal if nas > 0 else None)
+        save_wav(name, x, peak)
+    # 멍 (짧고 굵은 짖음) 3가지
+    for i in range(1, 4):
+        b = r.uniform(240, 330)
+        voice(f'dog_bark{i}', r.uniform(0.16, 0.22), [(0, b * 1.4), (0.25, b * 1.2), (1, b * 0.8)],
+              [(0, 650), (0.3, 800), (1, 500)], [(0, 1300), (1, 1100)], [(0, 2500), (1, 2300)], -4, noise=0.45)
+    # 왈 (높고 짧게, 신나서)
+    for i in range(1, 3):
+        b = r.uniform(520, 680)
+        voice(f'dog_yip{i}', r.uniform(0.09, 0.13), [(0, b), (0.4, b * 1.25), (1, b * 0.9)],
+              [(0, 700), (1, 800)], [(0, 1700), (1, 1500)], [(0, 3000), (1, 2800)], -8, noise=0.25)
+    # 아우우 하울링 (길게 오르내림)
+    voice('dog_howl', 2.6, [(0, 330), (0.25, 520), (0.55, 560), (0.8, 500), (1, 380)],
+          [(0, 500), (0.2, 750), (0.6, 600), (1, 420)], [(0, 1100), (0.3, 1200), (0.7, 900), (1, 800)], [(0, 2500), (1, 2300)], -8, noise=0.08)
+    # 낑낑 (높게 떨림)
+    voice('dog_whine', 0.9, [(0, 900), (0.3, 1150), (0.6, 1000), (1, 1250)], [(0, 600), (1, 650)], [(0, 1800), (1, 2000)],
+          [(0, 3200), (1, 3300)], -14, noise=0.12, nas=0.4)
+    # 놀자 그르릉 (장난)
+    voice('dog_playgrowl', 0.8, [(0, 140), (0.5, 170), (1, 130)], [(0, 500), (1, 520)], [(0, 1100), (1, 1000)], [(0, 2400), (1, 2300)],
+          -12, noise=0.3, roll=0.9)
+    # 헥헥 (되풀이 4초)
+    dur = 4.0
+    n = int(SR * dur)
+    t = _t(dur)
+    h = r.standard_normal(n)
+    h = _lowpass(h - _lowpass(h, 700), 4000)
+    rate = 3.2
+    ph = (t * rate) % 1.0
+    env = np.where(ph < 0.45, np.sin(ph / 0.45 * np.pi) ** 2, 0.35 * np.sin((ph - 0.45) / 0.55 * np.pi) ** 2)
+    save_wav('dog_pant', _loop(h * env, 0.3), -18)
+    # 킁킁 (냄새 맡기)
+    buf = np.zeros(int(SR * 0.8))
+    for k in range(3):
+        nn = int(SR * 0.08)
+        x = r.standard_normal(nn)
+        x = _lowpass(x - _lowpass(x, 1500), 6000) * np.sin(np.linspace(0, np.pi, nn)) ** 2
+        _place(buf, x, 0.05 + k * 0.17)
+    save_wav('dog_sniff', buf, -16)
+    # 이름표 짤랑 (걸을 때)
+    for i in range(1, 3):
+        buf = np.zeros(int(SR * 0.4))
+        for k in range(r.integers(1, 3)):
+            _place(buf, _bell(r.uniform(3000, 3800), 0.3, 16, partials=((1, 1), (2.7, 0.5), (5.2, 0.2))) * r.uniform(0.5, 1), k * r.uniform(0.03, 0.07))
+        save_wav(f'dog_tag{i}', buf, -22)
+
+
+def water_sounds(r):
+    """계곡 물소리: 졸졸 흐르는 개울(되풀이) · 멀리 떨어지는 폭포(되풀이)"""
+    dur = 10.0
+    n = int(SR * dur)
+    t = _t(dur)
+    base = _lowpass(r.standard_normal(n), 1800)
+    base = base - _lowpass(base, 200)
+    base *= 0.35 * (0.8 + 0.2 * np.sin(2 * np.pi * 0.17 * t))
+    buf = base.copy()
+    at = 0.0
+    while at < dur - 0.1:                                          # 보글보글 물방울 (짧게 오르는 음)
+        at += r.exponential(1 / 22)
+        ln = r.uniform(0.015, 0.05)
+        tt = _t(ln)
+        f = r.uniform(500, 1600)
+        bub = np.sin(2 * np.pi * np.cumsum(f * (1 + 2.5 * tt / ln)) / SR) * np.exp(-tt * 70) * r.uniform(0.1, 0.4)
+        _place(buf, bub, at)
+    save_wav('stream_loop', _loop(buf, 1.0), -12)
+    b = np.cumsum(r.standard_normal(n)) * 0.02
+    b -= _lowpass(b, 6)
+    roar = _lowpass(b, 900) + 0.3 * _lowpass(r.standard_normal(n), 3000)
+    save_wav('fall_loop', _loop(roar, 1.0), -12)
+
+
 def misc_sounds(r):
     """별자리 반짝(맑은 종 두 음), 카페 에스프레소 머신 스팀, 잔 부딪히는 소리"""
     buf = np.zeros(int(SR * 2.4))
@@ -1461,7 +1545,9 @@ def fire_art():
     yy, xx = np.mgrid[0:S2, 0:S2].astype(float)
     d = np.hypot(xx - S2 / 2, yy - S2 / 2) / (S2 / 2)
     nz = noise(beta=1.8, size=S2, seed=921)
-    a = np.clip((1 - d) * 1.3 - (nz - 0.5) * 0.9, 0, 1) ** 1.5
+    a = np.clip((1 - d) * 1.25 - (nz - 0.5) * 0.6, 0, 1) ** 1.8
+    a = np.asarray(Image.fromarray((a * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(4))) / 255.0   # 가장자리 부드럽게 (덩어리 테두리가 안 보이게)
+    a *= np.clip((1 - d) * 3, 0, 1)
     rgba = np.concatenate([np.full((S2, S2, 3), 245.0), (a * 255)[..., None]], axis=-1)
     os.makedirs(os.path.join(OUT, 'tex'), exist_ok=True)
     Image.fromarray(rgba.astype(np.uint8), 'RGBA').save(os.path.join(OUT, 'tex', 'smoke_puff.png'), optimize=True)
@@ -1480,6 +1566,32 @@ def fire_art():
     glow = np.asarray(Image.fromarray((glow * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.6))) / 255
     rgb = rgb * (1 - glow[..., None]) + np.array([255, 110, 30]) * glow[..., None]
     save_jpg('charlog', rgb)
+
+
+def stream_art():
+    """계곡 개울·폭포: 흐르는 물(길이 방향 v로 이어짐), 물 위 반짝임(투명), 떨어지는 폭포 물줄기(세로로 이어짐, 양옆 투명)"""
+    N = 512
+    # 개울: 물길 방향(세로)으로 늘어진 물결 + 깊은 곳은 짙은 청록, 얕은 곳·물살은 밝게
+    big = noise(beta=2.6, size=N, seed=1701, aniso=(0.35, 1.0))
+    mid = noise(beta=2.0, size=N, seed=1702, aniso=(0.2, 1.0))
+    fine = noise(beta=1.4, size=N, seed=1703, aniso=(0.15, 1.0))
+    v = 0.5 * big + 0.32 * mid + 0.18 * fine
+    rgb = colorize(v, [(0, (18, 52, 58)), (0.35, (34, 84, 88)), (0.6, (62, 122, 120)), (0.8, (118, 168, 160)), (0.92, (196, 222, 214)), (1, (236, 246, 242))])
+    save_jpg('river', rgb)
+    # 반짝이는 물살 (드문드문 흰 줄)
+    st = noise(beta=1.8, size=N, seed=1704, aniso=(0.12, 1.0))
+    a = np.clip((st - 0.68) * 5.5, 0, 1) ** 1.3
+    save_png('river_hi', np.full((N, N, 3), 250.0), a * 0.9)
+    # 폭포: 가로 256 × 세로 512, 세로로 길게 떨어지는 물줄기, 양옆은 투명하게 흩어짐
+    W, H = 256, 512
+    fa = noise(beta=2.0, size=W, h=H, seed=1711, aniso=(0.08, 1.0))
+    fb = noise(beta=1.5, size=W, h=H, seed=1712, aniso=(0.05, 1.0))
+    x = np.linspace(-1, 1, W)[None, :]
+    body = np.clip(1 - np.abs(x) ** 2.2, 0, 1)
+    vv = 0.6 * fa + 0.4 * fb
+    rgb = colorize(vv, [(0, (120, 160, 164)), (0.45, (186, 214, 214)), (0.75, (226, 240, 238)), (1, (252, 255, 254))])
+    a = np.clip(body * (0.55 + (vv - 0.4) * 1.6), 0, 1)
+    save_png('fall', rgb, a)
 
 
 def street_shops(night=False):
@@ -1620,7 +1732,7 @@ def line_art():
 
 def line_folder(folder, sky=False):
     for fn in sorted(os.listdir(folder)):
-        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid') or fn.startswith('cat_') or fn.startswith('fire_') or fn.startswith('emote_'):
+        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid') or fn.startswith('cat_') or fn.startswith('dog_') or fn.startswith('fire_') or fn.startswith('stream_') or fn.startswith('fall_') or fn.startswith('emote_'):
             continue
         name = fn[:-6]
         m = Image.open(os.path.join(folder, fn)).convert('L')
@@ -1653,6 +1765,8 @@ def _cat():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import cat_art
     cat_art.cat_sprites(os.path.join(OUT, 'tex'))
+    import dog_art
+    dog_art.dog_sprites(os.path.join(OUT, 'tex'))
 
 
 def _fetch_art():
@@ -1697,7 +1811,7 @@ def main():
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
-            people(), menu_board(), flame(), fire_art(), street_shops(), street_shops(night=True)),
+            people(), menu_board(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True)),
         'sfx': lambda: sfx(),
         'cat': lambda: _cat(),
         'jazz': lambda: _jazz(),

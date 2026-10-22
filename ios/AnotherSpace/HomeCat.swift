@@ -34,6 +34,9 @@ final class HomeCat {
     let ballRoot = Entity()                      // 털실 공 (저장 좌표)
     private(set) var done = false
     private let card = ModelEntity()
+    private let rim = ModelEntity()              // 바라보면 은은하게 비치는 테두리 빛 (톡 칠 수 있다는 표시)
+    private var rimMats: [String: UnlitMaterial] = [:]
+    private var rimAmt: Float = 0
     private let bubble = ModelEntity()
     private var shadow: ModelEntity?
     private let look: LookMode
@@ -119,8 +122,14 @@ final class HomeCat {
         card.name = "homecat"
         card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.42, 0.36, 0.12]).offsetBy(translation: [0, 0.18, 0])]))
         card.components.set(InputTargetComponent())
-        card.components.set(HoverEffectComponent())                 // 바라보면 은은하게 빛남 (톡 칠 수 있다는 표시)
+        card.components.set(HoverEffectComponent())
         root.addChild(card)
+        // 테두리 빛: 같은 그림 모양을 조금 크게, 뒤에 따뜻한 빛으로
+        if let m = g.mesh("catRim") { rim.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
+        rim.scale = SIMD3<Float>(repeating: 1.09)
+        rim.position = [0, -0.02, -0.004]
+        rim.isEnabled = false
+        card.addChild(rim)
         // 말풍선 판 (16cm)
         var bq = Geo()
         let b: Float = 0.16
@@ -172,6 +181,35 @@ final class HomeCat {
         guard n != shown else { return }
         shown = n
         card.model?.materials = [mat(n)]
+        if rim.isEnabled { rim.model?.materials = [rimMat(n)] }
+    }
+
+    private func rimMat(_ n: String) -> UnlitMaterial {
+        if let m = rimMats[n] { return m }
+        var m = UnlitMaterial(color: look == .line ? UIColor(white: 0.45, alpha: 1) : UIColor(red: 1, green: 0.93, blue: 0.72, alpha: 1))
+        if let a = Tex.get(n + "_a", raw: true) {
+            var p = MaterialParameters.Texture(a); p.sampler = Tex.clamp
+            m.blending = .transparent(opacity: .init(scale: 1, texture: p))
+        }
+        rimMats[n] = m
+        return m
+    }
+
+    /// 바라보는 동안 테두리 빛이 은은하게 (머리가 향한 방향 기준)
+    private func tickRim(_ dt: Float, _ c: Ctx) {
+        let ctr = SIMD3<Float>(pos.x, floorY + elev + 0.2, pos.y) - c.head
+        let d = simd_length(ctr)
+        let tol = max(0.1, atan(0.24 / max(0.3, d)))
+        let on = d < 5 && acos(min(1, max(-1, simd_dot(ctr / max(0.01, d), c.gaze)))) < tol && act != .leave
+        rimAmt += ((on ? 1 : 0) - rimAmt) * min(1, dt * 7)
+        let vis = rimAmt > 0.02
+        if rim.isEnabled != vis {
+            rim.isEnabled = vis
+            if vis { rim.model?.materials = [rimMat(shown)] }
+        }
+        if vis { rim.components.set(OpacityComponent(opacity: rimAmt * (0.62 + 0.1 * sin(t * 3)))) }
+        // 처음 바라보면 귀를 쫑긋 — 앉아 있으면 나를 마주 봄
+        if on && rimAmt < 0.3 && (act == .sit || act == .loaf) && !frontal && act == .sit { frontal = true }
     }
 
     private func loop(_ frames: [String], fps: Float) -> String {
@@ -539,6 +577,7 @@ final class HomeCat {
         }
         tickBall(dt, c)
         tickBubble(dt)
+        tickRim(dt, c)
         place(c)
     }
 

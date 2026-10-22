@@ -180,6 +180,7 @@ class Tune:
         self.choruses = choruses            # 머리를 몇 번
         self.solo = solo                    # 이어서 즉흥 몇 코러스
         self.blues = blues
+        self.key_center = key_center        # 오르골: 옮길 반음 수
 
 
 def chords_at(bars, meter):
@@ -511,6 +512,191 @@ def tunes():
     return T
 
 
+# ───────── 오르골 ─────────
+# 카페 배경음: 재즈 트리오 대신 오르골 (쇠빗살을 핀이 튕기는 소리). 저작권이 끝난 옛 곡·전통곡만.
+# 빗살 하나 = 끝이 붙들린 쇠막대 → 배음이 1 : 6.27 : 17.55 (정수배가 아니라 맑고 투명한 소리), 높은 음일수록 빨리 사라짐
+
+def tine(f, vel, rng, ln=None):
+    """오르골 빗살 한 번 튕김"""
+    tau = float(np.clip(3.2 * (440.0 / f) ** 0.75, 0.35, 4.0))     # 낮은 음은 길게, 높은 음은 짧게
+    if ln is None:
+        ln = min(6 * tau, 7.0)
+    n = int(SR * ln)
+    t = _t(n)
+    det = rng.uniform(0.15, 0.5)                                    # 빗살이 살짝 맥놀이
+    x = np.sin(2 * np.pi * f * t) * 0.8 + np.sin(2 * np.pi * (f + det) * t + rng.uniform(0, 6)) * 0.2
+    x *= np.exp(-t / tau)
+    for ratio, amp, dk in ((6.27, 0.22, 7.0), (17.55, 0.06, 18.0)):
+        if f * ratio < SR / 2 - 500:
+            x += amp * np.sin(2 * np.pi * f * ratio * t + rng.uniform(0, 6)) * np.exp(-t / tau * dk)
+    # 핀이 빗살을 튕기는 딸깍
+    cn = int(SR * 0.006)
+    click = rng.standard_normal(cn) * np.exp(-np.linspace(0, 6, cn))
+    click = click - np.convolve(click, np.ones(4) / 4, mode='same')
+    x[:cn] += click * 0.12
+    a = int(SR * 0.0015)
+    x[:a] *= np.linspace(0, 1, a)
+    return x * vel
+
+
+def render_box(tune, seed):
+    rng = np.random.default_rng(seed)
+    meter = tune.meter
+    spb = 60.0 / tune.bpm
+    form = chords_at(tune.bars, meter)
+    reps = tune.choruses
+    chs = form * reps
+    nb = len(chs)
+    # 박 → 초: 끝 두 마디는 태엽이 풀리듯 천천히 (리타르단도)
+    slow0 = max(0, nb - meter * 2)
+
+    def T(b):
+        if b <= slow0:
+            return b * spb
+        k = (b - slow0) / max(1, nb - slow0)
+        return slow0 * spb + (b - slow0) * spb * (1 + 0.45 * k * k)
+    total = T(nb + meter) + 6.0
+    n = int(SR * total)
+    acc = np.zeros(n)
+    mel_buf = np.zeros(n)
+    tr = tune.key_center or 0                                       # 오르골 음역으로 옮김
+
+    def put(buf, x, at):
+        place(buf, x, at + rng.uniform(-0.004, 0.004))
+    # 반주: 마디마다 화음을 낮은 음역에서 펼침 (근음 → 5음 → 3음 …)
+    for bi in range(nb // meter):
+        for half in range(2 if meter == 4 else 1):
+            beat0 = bi * meter + half * 2
+            sym = chs[min(nb - 1, beat0)]
+            r, q = parse(sym)
+            iv = QUAL.get(q, (0, 4, 7))
+            root = 48 + ((r - 48) % 12) + tr
+            while root > 55:
+                root -= 12
+            tones = [root, root + 7, root + 12 + iv[1], root + 12 + iv[2] if len(iv) > 2 else root + 19]
+            if meter == 3:
+                pat = [(0, tones[0], 0.62), (1, tones[1], 0.4), (1.5, tones[2], 0.34), (2, tones[3], 0.36), (2.5, tones[2], 0.3)]
+            else:
+                pat = [(0, tones[0], 0.6), (0.5, tones[1], 0.36), (1, tones[2], 0.34), (1.5, tones[3], 0.3)]
+            for (b, m, v) in pat:
+                put(acc, tine(mtof(m), v * rng.uniform(0.9, 1.05), rng), T(beat0 + b))
+    # 멜로디: 긴 음은 오르골처럼 한 번 더 살짝 튕김, 박 첫 음엔 한 옥타브 아래를 겹쳐 두께
+    for c in range(reps):
+        for (b, ln, m) in tune.melody:
+            bb = c * len(form) + b
+            if bb < 0 or bb >= nb:
+                continue
+            mm = m + tr + 12
+            v = 0.85 * rng.uniform(0.92, 1.05)
+            put(mel_buf, tine(mtof(mm), v, rng), T(bb))
+            if abs(bb - round(bb)) < 1e-6 and int(round(bb)) % meter == 0 and ln >= 1:
+                put(mel_buf, tine(mtof(mm - 12), 0.32, rng), T(bb) + 0.012)
+            if ln >= 2:
+                put(mel_buf, tine(mtof(mm), 0.38, rng), T(bb + ln / 2))
+    # 마지막 으뜸화음 (넓게 펼쳐 끝맺음)
+    r0, q0 = parse(tune.bars[-1][-1])
+    iv = QUAL.get(q0, (0, 4, 7))
+    root = 48 + ((r0 - 48) % 12) + tr
+    while root > 55:
+        root -= 12
+    for k, m in enumerate([root, root + 7, root + 12, root + 12 + iv[1], root + 19, root + 24]):
+        put(acc, tine(mtof(m), 0.45, rng), T(nb) + k * 0.09)
+
+    def norm(x):
+        return x / (np.sqrt(np.mean(x ** 2)) + 1e-9)
+    out = 0.55 * norm(acc) + 0.9 * norm(mel_buf)
+    # 나무 상자 울림: 아주 짧은 잔향 + 높은 소리 살짝 깎기
+    ir_n = int(SR * 0.6)
+    ir = rng.standard_normal(ir_n) * np.exp(-_t(ir_n) * 9)
+    ir = np.convolve(ir, np.ones(8) / 8, mode='same')
+    wet = np.fft.irfft(np.fft.rfft(out, n + ir_n) * np.fft.rfft(ir, n + ir_n), n + ir_n)[:n]
+    out = out + norm(wet) * 0.18
+    out = np.convolve(out, np.array([0.25, 0.5, 0.25]), mode='same')
+    # 끝 소리가 다 사라진 뒤 자름
+    end = int(SR * (T(nb) + 5.0))
+    out = out[:end]
+    fade = int(SR * 1.5)
+    out[-fade:] *= np.linspace(1, 0, fade) ** 2
+    return out / (np.max(np.abs(out)) + 1e-9) * 0.85
+
+
+def box_tunes():
+    T = []
+    # 브람스 자장가 (1868) — C, 3박
+    BL = B('C', 'C', 'C', 'F', 'C', 'G7', 'G7', 'G7', 'C', 'F', 'C', 'F', 'C', 'F', 'C', 'G7', 'C')
+    BLm = mel([(None, 2), (64, 0.5), (64, 0.5),
+               (67, 2), (64, 0.5), (64, 0.5), (67, 2), (64, 0.5), (67, 0.5), (72, 1), (71, 1.5), (69, 0.5), (69, 1), (67, 1), (62, 0.5), (64, 0.5),
+               (65, 1), (62, 1), (62, 0.5), (64, 0.5), (65, 2), (62, 0.5), (65, 0.5), (71, 0.5), (69, 0.5), (67, 1), (71, 1), (72, 2), (60, 0.5), (60, 0.5),
+               (72, 2), (69, 0.5), (65, 0.5), (67, 2), (64, 0.5), (60, 0.5), (65, 1), (67, 1), (69, 1), (67, 2), (60, 0.5), (60, 0.5),
+               (72, 2), (69, 0.5), (65, 0.5), (67, 2), (64, 0.5), (60, 0.5), (65, 1), (64, 1), (62, 1), (60, 3)])
+    T.append(Tune('lullaby', 76, 3, 'box', BL, melody=BLm, choruses=2, key_center=0))
+    # 반짝반짝 작은 별 (프랑스 민요, 모차르트 변주곡 주제) — C, 4박
+    TW = B(('C', 'C'), ('F', 'C'), ('F', 'C'), ('G7', 'C'), ('C', 'F'), ('C', 'G7'), ('C', 'F'), ('C', 'G7'), ('C', 'C'), ('F', 'C'), ('F', 'C'), ('G7', 'C'))
+    seq = [60, 60, 67, 67, 69, 69, (67, 2), 65, 65, 64, 64, 62, 62, (60, 2), 67, 67, 65, 65, 64, 64, (62, 2), 67, 67, 65, 65, 64, 64, (62, 2),
+           60, 60, 67, 67, 69, 69, (67, 2), 65, 65, 64, 64, 62, 62, (60, 2)]
+    TWm = mel([x if isinstance(x, tuple) else (x, 1) for x in seq])
+    T.append(Tune('twinkle', 92, 4, 'box', TW, melody=TWm, choruses=2, key_center=0))
+    # 환희의 송가 (베토벤 9번, 1824) — C, 4박
+    OD = B('C', 'G7', 'C', ('C', 'G7'), 'C', 'G7', 'C', ('G7', 'C'), ('G7', 'C'), ('G7', 'C'), ('G7', 'C'), ('C', 'G7'), 'C', 'G7', 'C', ('G7', 'C'))
+    a = [(64, 1), (64, 1), (65, 1), (67, 1), (67, 1), (65, 1), (64, 1), (62, 1), (60, 1), (60, 1), (62, 1), (64, 1)]
+    ODm = mel(a + [(64, 1.5), (62, 0.5), (62, 2)] + a + [(62, 1.5), (60, 0.5), (60, 2)]
+              + [(62, 1), (62, 1), (64, 1), (60, 1), (62, 1), (64, 0.5), (65, 0.5), (64, 1), (60, 1),
+                 (62, 1), (64, 0.5), (65, 0.5), (64, 1), (62, 1), (60, 1), (62, 1), (55, 2)]
+              + a + [(62, 1.5), (60, 0.5), (60, 2)])
+    T.append(Tune('ode', 100, 4, 'box', OD, melody=ODm, choruses=2, key_center=0))
+    # 엘리제를 위하여 (베토벤, 1810) — A단조, 1박 = 8분음표
+    FE = B('Am', 'E7', 'Am', 'E7', 'Am', 'E7', 'Am', 'E7', 'Am')
+    b1 = [(76, 0.5), (75, 0.5), (76, 0.5), (71, 0.5), (74, 0.5), (72, 0.5)]
+    FEm = mel([(None, 2), (76, 0.5), (75, 0.5)] + b1
+              + [(69, 1), (None, 0.5), (60, 0.5), (64, 0.5), (69, 0.5), (71, 1), (None, 0.5), (64, 0.5), (68, 0.5), (71, 0.5),
+                 (72, 1), (None, 0.5), (64, 0.5), (76, 0.5), (75, 0.5)] + b1
+              + [(69, 1), (None, 0.5), (60, 0.5), (64, 0.5), (69, 0.5), (71, 1), (None, 0.5), (64, 0.5), (72, 0.5), (71, 0.5), (69, 3)])
+    T.append(Tune('elise', 132, 3, 'box', FE, melody=FEm, choruses=3, key_center=-12))
+    # 짐노페디 1번 (사티, 1888) — 느린 3박, Gmaj7 / Dmaj7 흔들림
+    GY = B(*(['Gmaj7', 'Dmaj7'] * 10 + ['Gmaj7', 'D']))
+    ph = [(None, 1), (78, 1), (81, 1), (79, 1), (78, 1), (73, 1), (71, 1), (73, 1), (74, 1), (69, 3)]
+    GYm = mel([(None, 6)] + ph + [(66, 3), (None, 3), (None, 3)] + [(None, 3)] + ph + [(73, 3), (78, 3), (76, 3), (None, 3)]
+              + [(74, 3), (73, 3), (71, 3), (74, 3)])
+    T.append(Tune('gymnopedie', 72, 3, 'box', GY, melody=GYm, choruses=1, key_center=-12))
+    # 파헬벨 카논 (1680년대) — D, 2박마다 화음
+    CA = B(('D', 'A'), ('Bm', 'F#m'), ('G', 'D'), ('G', 'A'))
+    c1 = [(78, 2), (76, 2), (74, 2), (73, 2), (71, 2), (69, 2), (71, 2), (73, 2)]
+    c2 = [(74, 2), (73, 2), (71, 2), (69, 2), (67, 2), (66, 2), (67, 2), (64, 2)]
+    c3 = [(74, 1), (78, 1), (81, 1), (79, 1), (78, 1), (74, 1), (78, 1), (76, 1), (74, 1), (71, 1), (74, 1), (81, 1), (79, 1), (83, 1), (81, 1), (79, 1)]
+    CAm = mel(c1 + c2 + c3 + c1 + [(74, 8)])
+    T.append(Tune('canon', 84, 4, 'box', CA * 4 + B('D', 'D'), melody=CAm, choruses=1, key_center=-12))
+    # 그린슬리브스 (전통곡) — A단조, 3박
+    GA = B('Am', 'C', 'G', 'Em', 'Am', 'E7', 'E7', 'Am', 'Am', 'C', 'G', 'Em', 'Am', 'E7', 'Am', 'Am',
+           'C', 'G', 'G', 'Em', 'Am', 'E7', 'E7', 'Am', 'C', 'G', 'G', 'Em', 'Am', 'E7', 'Am', 'Am')
+    GAm = mel([(None, 2), (69, 1),
+               (72, 2), (74, 1), (76, 1.5), (77, 0.5), (76, 1), (74, 2), (71, 1), (67, 1.5), (69, 0.5), (71, 1),
+               (72, 2), (69, 1), (69, 1.5), (68, 0.5), (69, 1), (71, 2), (68, 1), (64, 2), (69, 1),
+               (72, 2), (74, 1), (76, 1.5), (77, 0.5), (76, 1), (74, 2), (71, 1), (67, 1.5), (69, 0.5), (71, 1),
+               (72, 1.5), (71, 0.5), (69, 1), (68, 1.5), (66, 0.5), (68, 1), (69, 3), (69, 2), (None, 1),
+               (79, 3), (79, 1.5), (78, 0.5), (76, 1), (74, 2), (71, 1), (67, 1.5), (69, 0.5), (71, 1),
+               (72, 2), (69, 1), (69, 1.5), (68, 0.5), (69, 1), (71, 2), (68, 1), (64, 3),
+               (79, 3), (79, 1.5), (78, 0.5), (76, 1), (74, 2), (71, 1), (67, 1.5), (69, 0.5), (71, 1),
+               (72, 1.5), (71, 0.5), (69, 1), (68, 1.5), (66, 0.5), (68, 1), (69, 3)])
+    T.append(Tune('greensleeves', 96, 3, 'box', GA, melody=GAm, choruses=1, key_center=-12))
+    # 어메이징 그레이스 (전통곡) — G, 3박
+    AG = B('G', 'G', 'G', 'D7', 'G', 'G7', 'C', 'G', 'G', 'Em', 'D7', 'D7', 'G', 'C', 'G', 'G')
+    AGm = mel([(None, 2), (62, 1),
+               (67, 2), (71, 0.5), (67, 0.5), (71, 2), (69, 1), (67, 2), (64, 1), (62, 2), (62, 1),
+               (67, 2), (71, 0.5), (67, 0.5), (71, 2), (69, 1), (74, 3), (74, 2), (71, 1),
+               (74, 2), (71, 0.5), (67, 0.5), (71, 2), (69, 1), (67, 2), (64, 1), (62, 2), (62, 1),
+               (67, 2), (71, 0.5), (67, 0.5), (71, 2), (69, 1), (67, 3)])
+    T.append(Tune('grace', 66, 3, 'box', AG, melody=AGm, choruses=2, key_center=0))
+    # 성자들의 행진 (전통곡) — F, 느긋하게
+    SA = B('F', 'F', 'F', 'F', 'F', 'F', 'C7', 'C7', 'F', 'F7', 'Bb', 'Bbm6', 'F', 'C7', 'F', 'F')
+    SAm = mel([(None, 1), (65, 1), (69, 1), (70, 1),
+               (72, 4), (None, 1), (65, 1), (69, 1), (70, 1), (72, 4), (None, 1), (65, 1), (69, 1), (70, 1),
+               (72, 2), (69, 2), (65, 2), (69, 2), (67, 4), (None, 1), (69, 1), (69, 1), (67, 1),
+               (65, 3), (65, 1), (69, 2), (72, 2), (72, 2), (70, 2), (None, 2), (69, 1), (70, 1),
+               (72, 2), (69, 2), (65, 2), (67, 2), (65, 4)])
+    T.append(Tune('saints', 104, 4, 'box', SA, melody=SAm, choruses=2, key_center=-5))
+    return T
+
+
 def save_wav(path, x):
     with wave.open(path, 'wb') as w:
         w.setnchannels(1)
@@ -523,8 +709,8 @@ def make_all(out):
     os.makedirs(out, exist_ok=True)
     items = []
     conv = shutil.which('afconvert')
-    for i, tu in enumerate(tunes()):
-        x = render(tu, 5000 + i)
+    for i, tu in enumerate(box_tunes()):
+        x = render_box(tu, 5000 + i)
         base = os.path.join(out, f'jazz_{i:02d}')
         save_wav(base + '.wav', x)
         ext = 'wav'
@@ -534,7 +720,7 @@ def make_all(out):
                 os.remove(base + '.wav')
                 ext = 'm4a'
         items.append({'file': f'jazz_{i:02d}', 'ext': ext, 'dur': round(len(x) / SR, 2), 'name': tu.name})
-        print('재즈:', tu.name, round(len(x) / SR, 1), '초', flush=True)
+        print('오르골:', tu.name, round(len(x) / SR, 1), '초', flush=True)
     with open(os.path.join(out, 'jazz.json'), 'w') as f:
         json.dump(items, f, ensure_ascii=False)
 

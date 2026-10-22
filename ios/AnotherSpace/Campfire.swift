@@ -40,6 +40,9 @@ final class Campfire {
     private var ember: ModelEntity?
     private let remains = Entity()          // 돌·장작·숯 (꺼질 때 천천히 사라짐)
     private var fireE = Entity(), sparkE = Entity(), smokeE = Entity(), steamE = Entity()
+    /// 천장 너머(하늘 세계)로 이어 오르는 연기: 방 안 연기는 천장에 닿기 전에 옅어지고, 같은 자리 천장 위에서 다시 피어 하늘로 흩어짐
+    private let skySmokeE = Entity()
+    private var skyRate: Float = 0
     private var amt: Float = 0
     private var t: Float = 0
     private var dieT: Float = 0
@@ -51,7 +54,7 @@ final class Campfire {
     private var baseRates: (Float, Float, Float, Float) = (0, 0, 0, 0)  // 불·불티·연기·김 (처음 정한 양)
 
     /// base: 불 자리 바닥 (저장 좌표), windDir: 바람이 부는 쪽 (저장 좌표 수평)
-    init(at base: SIMD3<Float>, room: RoomRec, look: LookMode, windDir: SIMD3<Float>) {
+    init(at base: SIMD3<Float>, room: RoomRec, look: LookMode, windDir: SIMD3<Float>, ceilH: Float = 2.5, sky: Entity? = nil) {
         self.look = look
         let w = room.weather, tm = room.time
         wetFire = ["drizzle", "rain", "storm"].contains(w)
@@ -283,25 +286,61 @@ final class Campfire {
         smoke.emitterShapeSize = [0.1, 0.05, 0.1]
         smoke.birthDirection = .world
         smoke.emissionDirection = [0, 1, 0]
-        smoke.speed = 0.38
-        smoke.speedVariation = 0.12
+        smoke.speed = 0.34
+        smoke.speedVariation = 0.1
         smoke.mainEmitter.birthRate = mr
-        smoke.mainEmitter.lifeSpan = 7
+        // 천장(하늘로 열린 창)에 닿기 전에 옅어지게: 천장 25cm 아래까지 오를 시간만큼만 삶 → 창에 걸려 잘리거나 뭉치지 않음
+        let rise = max(0.6, ceilH - 0.55 - 0.25)
+        smoke.mainEmitter.lifeSpan = Double(min(4.2, max(1.6, rise / 0.4)))
+        smoke.mainEmitter.lifeSpanVariation = 0.4
         smoke.mainEmitter.size = 0.12
-        smoke.mainEmitter.sizeMultiplierAtEndOfLifespan = 7
-        smoke.mainEmitter.acceleration = drift * 0.45 + SIMD3<Float>(0, 0.03, 0)
-        smoke.mainEmitter.noiseStrength = 0.18
+        smoke.mainEmitter.sizeMultiplierAtEndOfLifespan = 3.6
+        smoke.mainEmitter.acceleration = drift * 0.45 + SIMD3<Float>(0, 0.02, 0)
+        smoke.mainEmitter.noiseStrength = 0.16
         smoke.mainEmitter.noiseScale = 1.2
         smoke.mainEmitter.noiseAnimationSpeed = 0.25
         let smokeCol: UIColor = line ? UIColor(white: 0.45, alpha: 0.18) : Tex.with(look) { Tex.color(smokeC, alpha: smokeA) }
         smoke.mainEmitter.color = .constant(.single(smokeCol))
         smoke.mainEmitter.blendMode = .alpha
-        smoke.mainEmitter.opacityCurve = .gradualFadeInOut
+        smoke.mainEmitter.opacityCurve = .quickFadeInOut
         let puff = Tex.get("smoke_puff", color: true)
         if let puff {
             smoke.mainEmitter.image = puff
             smoke.mainEmitter.angularSpeed = 0.4
             smoke.mainEmitter.angularSpeedVariation = 0.6
+        }
+        // 하늘 쪽: 천장 바로 위에서 이어 피어 바람 따라 옅게 퍼지며 사라짐 (한곳에 뭉치지 않게 크게 퍼뜨리고 아주 옅게)
+        if let sky {
+            var ss = ParticleEmitterComponent()
+            ss.emitterShape = .sphere
+            ss.emitterShapeSize = [0.25, 0.1, 0.25]
+            ss.birthDirection = .world
+            ss.emissionDirection = [0, 1, 0]
+            ss.speed = 0.4
+            ss.speedVariation = 0.15
+            skyRate = mr * 0.7
+            ss.mainEmitter.birthRate = skyRate
+            ss.mainEmitter.lifeSpan = 9
+            ss.mainEmitter.lifeSpanVariation = 2
+            ss.mainEmitter.size = 0.45
+            ss.mainEmitter.sizeMultiplierAtEndOfLifespan = 7
+            ss.mainEmitter.acceleration = drift * 0.9 + SIMD3<Float>(0, 0.015, 0)
+            ss.mainEmitter.noiseStrength = 0.35
+            ss.mainEmitter.noiseScale = 0.6
+            ss.mainEmitter.noiseAnimationSpeed = 0.2
+            let skyCol: UIColor = line ? UIColor(white: 0.45, alpha: 0.1) : Tex.with(look) { Tex.color(smokeC, alpha: smokeA * 0.55) }
+            ss.mainEmitter.color = .constant(.single(skyCol))
+            ss.mainEmitter.blendMode = .alpha
+            ss.mainEmitter.opacityCurve = .gradualFadeInOut
+            if let puff {
+                ss.mainEmitter.image = puff
+                ss.mainEmitter.angularSpeed = 0.25
+                ss.mainEmitter.angularSpeedVariation = 0.4
+            }
+            ss.isEmitting = false
+            skySmokeE.components.set(ss)
+            skySmokeE.position = base + SIMD3<Float>(0, ceilH + 0.15, 0)
+            sky.addChild(skySmokeE)
         }
         smoke.isEmitting = false
 
@@ -403,6 +442,7 @@ final class Campfire {
         setRate(sparkE, 0, on: false)
         if var pe = emberE.components[ParticleEmitterComponent.self] { pe.isEmitting = false; emberE.components.set(pe) }
         setRate(smokeE, baseRates.2 * 3 + 6, on: true)            // 꺼지며 연기가 확 오름
+        setRate(skySmokeE, skyRate * 3 + 4, on: true)
         setRate(steamE, baseRates.3 > 0 ? baseRates.3 * 1.5 : 8, on: true)
         loop?.fade(to: -60, duration: 2.5)
         hiss?.fade(to: -60, duration: 2.5)
@@ -415,6 +455,7 @@ final class Campfire {
         dying = false
         remains.components.set(OpacityComponent(opacity: 1))
         setRate(smokeE, baseRates.2, on: true)
+        setRate(skySmokeE, skyRate, on: true)
         setRate(steamE, baseRates.3, on: true)
         setRate(fireE, baseRates.0, on: true)
         setRate(sparkE, baseRates.1, on: true)
@@ -433,6 +474,7 @@ final class Campfire {
                 setRate(fireE, baseRates.0, on: true)
                 setRate(sparkE, baseRates.1, on: true)
                 setRate(smokeE, baseRates.2, on: true)
+                setRate(skySmokeE, skyRate, on: true)
                 setRate(steamE, baseRates.3, on: true)
                 if var pe = emberE.components[ParticleEmitterComponent.self] { pe.isEmitting = true; emberE.components.set(pe) }
             }
@@ -456,9 +498,12 @@ final class Campfire {
             }
             let fadeR = max(0, 1 - max(0, dieT - 1.0) / 3.5)
             remains.components.set(OpacityComponent(opacity: fadeR))
+            if dieT > 3.0 && dieT - dt <= 3.0 { setRate(skySmokeE, 0, on: false) }
             if dieT > 8.5 {
                 loop?.stop(); hiss?.stop()
                 root.removeFromParent()
+                let sk = skySmokeE                                // 하늘 연기는 마저 흩어진 뒤 정리
+                Task { try? await Task.sleep(for: .seconds(11)); sk.removeFromParent() }
                 done = true
                 return
             }
@@ -507,6 +552,7 @@ final class Campfire {
     func remove() {
         loop?.stop(); hiss?.stop()
         root.removeFromParent()
+        skySmokeE.removeFromParent()
         done = true
     }
 }

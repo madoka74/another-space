@@ -169,6 +169,8 @@ final class ExploreSession {
     @ObservationIgnored private var realHits: [Int: [UUID: Set<Int>]] = [:]   // 문 → 그물 덩어리마다 막힌 칸
     @ObservationIgnored private var cover: [Int: Float] = [:]       // 문틀 안쪽이 막힌 비율
     @ObservationIgnored private var closeSince: [Int: Float] = [:]  // 막힘이 시작된 때 (0.6초 이어지면 닫힘)
+    @ObservationIgnored private var doorSeenAt: [Int: Float] = [:]  // 그 문 자리를 그물·평면으로 마지막에 새로 본 때
+    @ObservationIgnored private var nearAt: [Int: Float] = [:]      // 그 문 1m 안에 들어온 때
     @ObservationIgnored private var openHold: [Int: Float] = [:]    // 이때까지는 다시 닫힘으로 치지 않음 (방금 문 자리를 지남)
     @ObservationIgnored private var realClosed: Set<Int> = []       // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var doorPlanes: [UUID: (Int, Bool)] = [:]   // 문으로 알아본 평면 → (문 번호, 문 자리를 가로막고 있는지)
@@ -266,10 +268,14 @@ final class ExploreSession {
     @ObservationIgnored private var starsKey = ""
     @ObservationIgnored private var starCard: Entity?
     @ObservationIgnored private let music = CafeMusic()
+    @ObservationIgnored private let waterSound = WaterSound()
     @ObservationIgnored private var tables: CafeTables?
     @ObservationIgnored private var tablesKey = ""
+    @ObservationIgnored private var tablePlanes: [UUID: CafeTables.Table] = [:]
     // 집 고양이
     @ObservationIgnored private var cat: HomeCat?
+    @ObservationIgnored private var dog: HomeDog?
+    @ObservationIgnored private var dogLook: LookMode?
     @ObservationIgnored private var catLook: LookMode?
     @ObservationIgnored private var stillT: Float = 0
     @ObservationIgnored private var handPts: [SIMD3<Float>] = []        // 손바닥 가운데 (저장 좌표)
@@ -294,6 +300,7 @@ final class ExploreSession {
         root.addChild(spaceRoot)
         root.addChild(player.root)
         spaceRoot.addChild(music.root)
+        spaceRoot.addChild(waterSound.root)
         let v = VoxelWorld(L)
         v.material = { [unowned self] r, s in self.material(r, s) }
         v.sun = { [unowned self] r in self.info?.sun[min(255, max(0, r))] ?? SIMD3<Float>(0, 1, 0) }
@@ -343,8 +350,9 @@ final class ExploreSession {
         let m = SceneReconstructionProvider(modes: [.classification])
         world = w
         var providers: [any DataProvider] = [w, m]
-        // 세운 평면(문으로 알아본 면): 그물보다 빨리 바뀌어 실제 문이 열리고 닫히는 걸 바로 알 수 있음
-        let planes = PlaneDetectionProvider.isSupported ? PlaneDetectionProvider(alignments: [.vertical]) : nil
+        // 세운 평면(문으로 알아본 면): 그물보다 빨리 바뀌어 실제 문이 열리고 닫히는 걸 바로 알 수 있음.
+        // 누운 평면 중 '탁자'로 알아본 면: 카페 차림을 정확한 높이에 올림
+        let planes = PlaneDetectionProvider.isSupported ? PlaneDetectionProvider(alignments: [.vertical, .horizontal]) : nil
         if let planes { providers.append(planes) }
         // 손: 닫힌 문짝을 잡고 당기거나 미는 순간을 바로 알아챔 (그물·평면은 문이 다 열리고도 몇 초 늦음)
         if HandTrackingProvider.isSupported && auth[.handTracking] == .allowed {
@@ -474,8 +482,10 @@ final class ExploreSession {
     func stop() {
         fire?.remove(); fire = nil
         music.remove()
+        waterSound.remove()
         tables?.remove(); tables = nil
         cat?.remove(); cat = nil
+        dog?.remove(); dog = nil
         updateSub?.cancel()
         ar.stop()
         player.stopAll()
@@ -489,7 +499,9 @@ final class ExploreSession {
         ended = true
         fire?.remove(); fire = nil
         cat?.remove(); cat = nil
+        dog?.remove(); dog = nil
         music.remove()
+        waterSound.remove()
         tables?.remove(); tables = nil
         player.stopAll()
         AppModel.shared.finish()
@@ -644,6 +656,17 @@ final class ExploreSession {
     private func watchPlanes(_ p: PlaneDetectionProvider) async {
         for await u in p.anchorUpdates {
             let a = u.anchor
+            if a.alignment == .horizontal {
+                if u.event != .removed, a.classification == .table, let f = fit {
+                    let m = a.originFromAnchorTransform * a.geometry.extent.anchorFromExtentTransform
+                    let c = f.toSaved(simd_make_float3(m.columns.3))
+                    let ax = f.dirToSaved(simd_make_float3(m.columns.0))
+                    tablePlanes[a.id] = CafeTables.Table(c: c, w: a.geometry.extent.width, d: a.geometry.extent.height, yaw: atan2(-ax.z, ax.x))
+                } else {
+                    tablePlanes[a.id] = nil
+                }
+                continue
+            }
             guard a.classification == .door || doorPlanes[a.id] != nil else { continue }
             guard let f = fit, let L = layout else { continue }
             let was = doorPlanes[a.id]
@@ -663,13 +686,14 @@ final class ExploreSession {
                     break
                 }
             }
-            if let n = now { doorPlanes[a.id] = n } else { doorPlanes[a.id] = nil }
+            if let n = now { doorPlanes[a.id] = n; doorSeenAt[n.0] = t } else { doorPlanes[a.id] = nil }
             if let n = now, n.1 {
                 // 문 자리를 가로막은 문 면 → 닫힘 (그물을 기다리지 않음). 방금 손·그물로 열림을 알았으면 그동안은 늦게 온 평면을 믿지 않음
                 if t > (openHold[n.0] ?? 0) && !realClosed.contains(n.0) { realClosed.insert(n.0) }
                 closeSince[n.0] = nil
-            } else if let w = was, w.1 {
-                // 가로막고 있던 문 면이 젖혀지거나 사라짐 → 바로 열림
+            } else if let w = was, w.1, u.event == .updated {
+                // 가로막고 있던 문 면이 젖혀지거나 자리를 벗어남 → 바로 열림.
+                // (평면이 사라지는 것만으로는 열림으로 치지 않음: 비전프로가 평면을 합치거나 다시 만들 때도 사라졌다 새로 생김)
                 realClosed.remove(w.0)
                 realHits[w.0] = [:]
                 closeSince[w.0] = nil
@@ -954,6 +978,7 @@ final class ExploreSession {
         placeDocent(dt)
         campTick(dt)
         catTick(dt)
+        dogTick(dt)
         themeFeatures(dt)
     }
 
@@ -971,13 +996,13 @@ final class ExploreSession {
         starCard?.isEnabled = false
     }
 
-    /// 정보판: 내 앞 1m, 눈높이보다 조금 아래, 시선에서 오른쪽으로 비켜 (하늘의 별자리를 가리지 않게)
+    /// 정보판: 지금 바라보는 곳(하늘을 보고 있으면 하늘 쪽) 1m 앞, 시선에서 오른쪽으로 25도 비켜 — 별자리를 가리지 않고 고개를 내리지 않아도 됨
     private func placeStarCard() {
         guard let card = starCard else { return }
-        var f = SIMD3<Float>(fwd.x, 0, fwd.z)
-        f = simd_length(f) > 0.01 ? simd_normalize(f) : SIMD3<Float>(0, 0, -1)
-        let right = SIMD3<Float>(-f.z, 0, f.x)
-        card.position = head + f * 0.95 + right * 0.32 - SIMD3<Float>(0, 0.18, 0)
+        let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
+        let turn = simd_quatf(angle: -0.44, axis: [0, 1, 0])
+        let d = simd_normalize(turn.act(g))
+        card.position = head + d * 1.0
         faceDocent(card)
         card.isEnabled = true
     }
@@ -985,11 +1010,14 @@ final class ExploreSession {
     private func themeFeatures(_ dt: Float) {
         guard let f = fit, let L = layout, let d = data, ready, let rm = d.rec.room(current), let wld = worlds[current] else {
             music.set(false)
+            waterSound.set(false, stream: nil, fall: nil)
             return
         }
         let gaze = f.dirToSaved(fwd)
-        // 시골 별자리
-        if rm.place == "village" {
+        // 계곡: 개울·폭포 물소리
+        waterSound.set(rm.place == "valley" && fade > 0.5, stream: wld.riverNear, fall: wld.fallSpot)
+        // 숲 밤하늘 별자리
+        if rm.place == "forest" {
             let key = "\(rm.id)-\(rm.time)-\(rm.weather)-\(rm.lookMode.rawValue)"
             if stars == nil || key != starsKey || stars?.root.parent !== wld.world {
                 stars?.root.removeFromParent()
@@ -1005,7 +1033,7 @@ final class ExploreSession {
             stars = nil
             if starPick != nil { closeStars() }
         }
-        // 카페: 천장 스피커에서 재즈, 탁자 위 차림
+        // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
             music.set(true, at: wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))
             let key = "\(rm.id)-\(rm.time)-\(rm.lookMode.rawValue)"
@@ -1016,10 +1044,8 @@ final class ExploreSession {
                 tables = tb
                 tablesKey = key
             }
-            let v = vox
             let rid = rm.id
-            tables?.tick(dt, head: f.toSaved(head), floorY: L.floorY,
-                         top: { p in v?.flatTop(L.plane(p.x, p.y)) },
+            tables?.tick(dt, head: f.toSaved(head), floorY: L.floorY, tables: tablePlanes,
                          inRoom: { p in L.at(x: p.x, z: p.y).room == rid })
         } else {
             music.set(false)
@@ -1070,14 +1096,53 @@ final class ExploreSession {
         if c.done { cat = nil }
     }
 
+    // MARK: 시골 강아지
+    /// 시골 테마 방에 있으면 허스키 강아지가 따라다님 (고양이와 같은 방식, 시골이 아닌 방으로 가면 사라짐)
+    private func dogTick(_ dt: Float) {
+        guard let f = fit, let L = layout, let d = data else { return }
+        let rm = d.rec.room(current)
+        let here = ready && introDone && fade > 0.5 && rm?.place == "village"
+        let rooms = Set(d.rec.rooms.filter { $0.place == "village" }.map(\.id))
+        let hs = f.toSaved(head)
+        var fw = f.dirToSaved(fwd)
+        let gaze = simd_length(fw) > 0.01 ? simd_normalize(fw) : SIMD3<Float>(0, 0, -1)
+        fw.y = 0
+        let fwd2 = simd_length(fw) > 0.01 ? simd_normalize(SIMD2<Float>(fw.x, fw.z)) : SIMD2<Float>(0, -1)
+        if let g = dog, let rm, dogLook != rm.lookMode, here { g.remove(); dog = nil }
+        if here && dog == nil {
+            let me = SIMD2<Float>(hs.x, hs.z)
+            for a in [Float(0.5), -0.5, 0.3, -0.3, 0] {
+                let v = SIMD2<Float>(fwd2.x * cos(a) - fwd2.y * sin(a), fwd2.x * sin(a) + fwd2.y * cos(a))
+                let p = me + v * 1.8
+                if catFree(p, L, rooms, r: 0.2) {
+                    let g = HomeDog(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color)
+                    spaceRoot.addChild(g.root)
+                    spaceRoot.addChild(g.propRoot)
+                    dog = g
+                    dogLook = rm?.lookMode
+                    break
+                }
+            }
+        }
+        guard let g = dog else { return }
+        if !here { g.leave() }
+        let blocked = vox
+        let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
+                              free: { [unowned self] p in self.catFree(p, L, rooms, r: 0.2) },
+                              top: { _ in nil },
+                              height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 })
+        g.tick(dt, ctx)
+        if g.done { dog = nil }
+    }
+
     /// 고양이가 설 수 있는 바닥: 집 테마 방 안, 벽에서 12cm 넘게, 둘레 12cm에 가구 없음, 문이 쓸고 지나가는 자리 아님
-    private func catFree(_ p: SIMD2<Float>, _ L: Layout, _ homeRooms: Set<Int>) -> Bool {
+    private func catFree(_ p: SIMD2<Float>, _ L: Layout, _ homeRooms: Set<Int>, r: Float = 0.12) -> Bool {
         let a = L.at(x: p.x, z: p.y)
-        guard a.room != 0, homeRooms.contains(a.room), a.wall > 0.12 else { return false }
+        guard a.room != 0, homeRooms.contains(a.room), a.wall > r else { return false }
         let pl = L.plane(p.x, p.y)
         if Skin.inSwing(L, pl) { return false }
         guard let v = vox else { return true }
-        for o in [SIMD2<Float>(0, 0), SIMD2<Float>(0.12, 0), SIMD2<Float>(-0.12, 0), SIMD2<Float>(0, 0.12), SIMD2<Float>(0, -0.12)] {
+        for o in [SIMD2<Float>(0, 0), SIMD2<Float>(r, 0), SIMD2<Float>(-r, 0), SIMD2<Float>(0, r), SIMD2<Float>(0, -r)] {
             if v.heightAt(pl + o) > 0.05 { return false }
         }
         return true
@@ -1159,7 +1224,7 @@ final class ExploreSession {
         cands.sort { $0.1 < $1.1 }
         guard let pick = cands.first(where: { free($0.0, $0.2) }) else { return }      // 앞에 빈 바닥이 없으면 피우지 않음
         let wd = simd_quatf(angle: -w.angle, axis: [0, 1, 0]).act(SIMD3<Float>(1, 0, 0.35))
-        let cf = Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd)
+        let cf = Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd, ceilH: rm.ceil, sky: w.world)
         spaceRoot.addChild(cf.root)
         fire = cf
     }
@@ -1236,7 +1301,10 @@ final class ExploreSession {
                 same = ra.place == rb.place && ra.weather == rb.weather && ra.time == rb.time && ra.lookMode == rb.lookMode
             }
             let dist = ds.dist(p)
-            if dist < Self.doorReach { nearDoors.insert(i) } else if dist > Self.doorReach + 0.2 { nearDoors.remove(i) }
+            if dist < Self.doorReach {
+                if !nearDoors.contains(i) { nearAt[i] = t }
+                nearDoors.insert(i)
+            } else if dist > Self.doorReach + 0.2 { nearDoors.remove(i) }
             let near = nearDoors.contains(i)
             let inside = ds.inside(p)
             let side = ds.side(p)
@@ -1319,7 +1387,12 @@ final class ExploreSession {
                 if !near || facing { passed.remove(i) }
             }
             // 열쇠 문: 다른 세계 사이, 실제 문은 열려 있고, 아직 안 열었고, 문 밖 1m 안 — 서 있는 쪽 방에만
-            let want: Float = (!same && !inside && near && !real && !doorOpen.contains(i) && !passed.contains(i)) || prog != nil ? 1 : 0
+            // 다가온 뒤에 그 문 자리를 새로 본 기록(그물·평면)이 있어야 열쇠 문을 띄움 — 닫힌 문을 아직 못 알아본 채로 열쇠가 먼저 나오지 않게.
+            // (새 기록이 오지 않으면 2.5초 뒤엔 띄움) 기다리는 동안은 문 자리 그물을 자주 다시 봄
+            let fresh = (doorSeenAt[i] ?? -100) > (nearAt[i] ?? 0) - 0.3 || t - (nearAt[i] ?? 0) > 2.5
+            let keyCase = !same && !inside && near && !real && !doorOpen.contains(i) && !passed.contains(i)
+            if keyCase && !fresh { urgent = true }
+            let want: Float = (keyCase && fresh) || prog != nil ? 1 : 0
             var sh = doorShow[i] ?? 0
             sh += (want - sh) * min(1, dt * 4)
             if abs(sh - want) < 0.01 { sh = want }
@@ -1393,6 +1466,7 @@ final class ExploreSession {
             realHits[i, default: [:]][id] = nh
         }
         for i in touched where i < L.doors.count {
+            doorSeenAt[i] = t
             var all = Set<Int>()
             for (_, e) in realHits[i] ?? [:] { all.formUnion(e) }
             let cols = max(1, Int(((L.doors[i].width - 0.16) / 0.1).rounded(.up)))
@@ -1413,9 +1487,9 @@ final class ExploreSession {
     }
 
     /// 손으로 실제 문 열기 알아채기 (닫혀 있다고 아는 문만):
-    /// - 손(손바닥 가운데)이 문짝 15cm 안, 손잡이 높이(0.6~1.5m)에 0.2초 넘게 닿았다가
+    /// - 손(손바닥 가운데)이 문짝 15cm 안, 손잡이 자리(높이 0.7~1.35m, 한짝 문은 가운데 빼고)에 0.2초 넘게 닿았다가
     /// - 문짝에서 20cm 넘게 멀어지며 당기거나(손잡이 높이 그대로, 문 폭 안), 문짝 너머 반대편으로 8cm 넘게 밀고 들어가면 → 바로 열림.
-    /// 잘못 알아챈 경우(손만 대고 뗌)는 6초 뒤 그물이 다시 닫힘으로 돌려놓음 (그물은 문이 다 열리고도 몇 초 늦게 따라오므로 그 전엔 닫지 않음)
+    /// 잘못 알아챈 경우(손만 대고 뗌)는 3.5초 뒤 그물·평면이 다시 닫힘으로 돌려놓음 (그물은 문이 다 열리고도 몇 초 늦게 따라오므로 그 전엔 닫지 않음)
     private func handDoors(_ L: Layout, _ f: Fit) {
         guard let hp = hands, hp.state == .running else { return }
         let la = hp.latestAnchors
@@ -1439,7 +1513,10 @@ final class ExploreSession {
                 let hgt: Float = sp.y - L.floorY
                 let a: Float = ds.alongU ? pp.x : pp.y
                 let s: Float = ds.alongU ? pp.y : pp.x
-                guard hgt > 0.55, hgt < 1.6, s > ds.s0 - 0.1, s < ds.s1 + 0.1 else { continue }
+                guard hgt > 0.7, hgt < 1.35, s > ds.s0 - 0.1, s < ds.s1 + 0.1 else { continue }
+                // 손잡이 자리만: 한짝 문은 가운데 40%를 뺌 (문 앞에서 메뉴·열쇠를 누르는 손짓을 문 여는 걸로 착각하지 않게)
+                let wd: Float = ds.s1 - ds.s0
+                if wd <= 1.2 && abs(s - (ds.s0 + ds.s1) / 2) < wd * 0.2 { continue }
                 let side: Float = a < (lo + hi) / 2 ? -1 : 1
                 let gap: Float = a < lo ? lo - a : (a > hi ? a - hi : 0)
                 if gap < 0.15 && (touch == nil || gap < touch!.0) { touch = (gap, side) }
@@ -1456,7 +1533,7 @@ final class ExploreSession {
                     realHits[i] = [:]
                     closeSince[i] = nil
                     coverPeak[i] = nil
-                    openHold[i] = max(openHold[i] ?? 0, t + 6)
+                    openHold[i] = max(openHold[i] ?? 0, t + 3.5)
                     grip[i] = nil
                 } else if t - g.2 > 1.5 {
                     grip[i] = nil
@@ -1482,6 +1559,16 @@ final class ExploreSession {
             if c.name == "homecat" {
                 pendingTap = nil
                 cat?.poke()
+                return
+            }
+            if c.name == "homedog" {
+                pendingTap = nil
+                dog?.poke()
+                return
+            }
+            if c.name == "dogstick" {
+                pendingTap = nil
+                if let f = fit { dog?.throwStick(from: f.toSaved(head)) }
                 return
             }
             if c.name == "catball" {
