@@ -57,8 +57,7 @@ struct Decor {
                        Trees(tex: "tree_pine", count: 10, h: 12...20, d: 3...18)]
             d.rocks = Rocks(tex: "mossrock", count: 7, size: 0.4...1.2, d: 1.5...10)
         case "valley":
-            d.bands = [Band(tex: "pano_peaks", radius: 270, height: 92, base: -6, aspect: 0, layer: 0),
-                       Band(tex: "mid_cliffs", radius: 40, relative: true, height: 48, base: -2, aspect: 2, layer: 2)]
+            d.bands = [Band(tex: "pano_peaks", radius: 270, height: 92, base: -6, aspect: 0, layer: 0)]     // 둘레 절벽은 입체로 (addCliffRing)
             d.trees = [Trees(tex: "tree_pine", count: 6, h: 6...11, d: 4...22)]
             d.rocks = Rocks(tex: "rock", count: 16, size: 0.6...3, d: 1...24)
         case "sea":
@@ -216,7 +215,7 @@ final class RoomWorld {
         if dc.sea { l.append(("water", "tex")) }
         if dc.city { l.append((night ? "facade_night" : "facade", "tex")) }
         if dc.paintings { for i in 0..<6 { l.append(("art_\(i)", "tex")) } }
-        if r.place == "valley" { l += [("river", "tex"), ("river_hi", "tex"), ("fall", "tex"), ("pebble", "tex"), ("rock", "tex"), ("cliff", "tex"), ("ripple", "tex")] }
+        if r.place == "valley" { l += [("river", "tex"), ("river_hi", "tex"), ("fall", "tex"), ("pebble", "tex"), ("rock", "tex"), ("cliff", "tex"), ("ripple", "tex"), ("grass", "tex"), ("pine_branch", "tex"), ("bark", "tex")] }
         if r.place == "valley" { for i in 0..<6 { l.append(("fish_\(i)", "tex")) } }
         if r.place == "sea" { l += [("jelly_bell", "tex"), ("jelly_tent", "tex"), ("jelly_arm", "tex"), ("glow", "tex"), ("spark_dot", "tex")] }
         if r.place == "city" { for i in 0..<16 { l += [(String(format: "neon_%02da", i), "tex"), (String(format: "neon_%02db", i), "tex")] } }
@@ -783,14 +782,11 @@ final class RoomWorld {
         addCafeSpeaker(rects, L, y: y)
     }
 
-    /// 카페 음악이 나오는 스피커: 방 가운데에서 가장 가까운 천장 들보 아래에 쇠 받침으로 매단 나무 상자 스피커 (방 가운데 쪽을 보며 아래로 기울어짐).
-    /// 음악에 맞춰 울림판(콘)이 살짝 떨리고, 소리 물결이 앞으로 은은하게 퍼짐
+    /// 카페 음악이 나오는 스피커: 방 가운데에서 가장 가까운 천장 들보 아랫면에 바로 붙은 둥근 천장 스피커 (아래를 향함).
+    /// 음악이 나오는 동안 울림판이 은근히 떨림
     private(set) var speakerSpot: SIMD3<Float>?
     private var speakerCone: Entity?
     private var speakerBody: Entity?
-    private var speakerWaves: [(ModelEntity, Float)] = []
-    private var waveMat: UnlitMaterial?
-    private var waveT: Float = 0
     private var spT: Float = 0
     var musicOn = false
 
@@ -818,98 +814,55 @@ final class RoomWorld {
         let toC = SIMD2<Float>(center.x - w2.x, center.z - w2.y)
         if simd_dot(face, toC) < 0 { face = -face }
         root.orientation = simd_quatf(angle: atan2(face.x, face.y), axis: [0, 1, 0])
-        let metal = lineMode ? Ink.line : ink(SIMD3<Float>(0.16, 0.16, 0.17))
-        let woodM = lineMode ? Ink.paper(0) : Tex.unlit("walnut", tint: Worlds.safe(tint, min: 0.35))
-        let cloth = lineMode ? Ink.paper(1) : ink(SIMD3<Float>(0.2, 0.18, 0.17))
-        let coneM = lineMode ? Ink.line : ink(SIMD3<Float>(0.08, 0.08, 0.08))
-        // 받침: 들보에 붙은 판 + 내려오는 막대
-        let plate = ModelEntity(mesh: .generateBox(width: 0.12, height: 0.012, depth: 0.12), materials: [metal])
-        plate.position = [0, -0.006, 0]
-        root.addChild(plate)
-        let rod = ModelEntity(mesh: .generateCylinder(height: 0.1, radius: 0.012), materials: [metal])
-        rod.position = [0, -0.06, 0]
-        root.addChild(rod)
-        // 상자 (아래로 25도 기울여 방을 봄)
+        // 천장(들보 아랫면)에 바로 붙인 둥근 천장 스피커: 아래를 향함 — 얇은 테두리 통 + 아래쪽 촘촘한 망 + 망 너머 울림판
+        let rimM = lineMode ? Ink.paper(0) : ink(SIMD3<Float>(0.86, 0.85, 0.82))
+        let gridM = lineMode ? Ink.paper(1) : ink(SIMD3<Float>(0.24, 0.24, 0.25))
+        let coneM = lineMode ? Ink.line : ink(SIMD3<Float>(0.1, 0.1, 0.1))
         let body = Entity()
-        body.position = [0, -0.23, 0]
-        body.orientation = simd_quatf(angle: 0.44, axis: [1, 0, 0])
         root.addChild(body)
-        let box = ModelEntity(mesh: .generateBox(width: 0.34, height: 0.24, depth: 0.22, cornerRadius: 0.02), materials: [woodM])
-        body.addChild(box)
-        let grille = ModelEntity(mesh: .generateBox(width: 0.3, height: 0.2, depth: 0.004, cornerRadius: 0.01), materials: [cloth])
-        grille.position = [0, 0, 0.111]
+        let can = ModelEntity(mesh: .generateCylinder(height: 0.08, radius: 0.13), materials: [rimM])
+        can.position = [0, -0.04, 0]
+        body.addChild(can)
+        let flange = ModelEntity(mesh: .generateCylinder(height: 0.012, radius: 0.15), materials: [rimM])
+        flange.position = [0, -0.006, 0]
+        body.addChild(flange)
+        let grille = ModelEntity(mesh: .generateCylinder(height: 0.004, radius: 0.118), materials: [gridM])
+        grille.position = [0, -0.082, 0]
         body.addChild(grille)
         let cone = Entity()
-        cone.position = [0, 0, 0.114]
-        let disc = ModelEntity(mesh: .generateCylinder(height: 0.004, radius: 0.075), materials: [coneM])
-        disc.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
-        cone.addChild(disc)
-        let cap = ModelEntity(mesh: .generateSphere(radius: 0.022), materials: [lineMode ? Ink.paper(0) : ink(SIMD3<Float>(0.3, 0.28, 0.26))])
-        cap.position = [0, 0, 0.004]
-        cap.scale = [1, 1, 0.5]
+        cone.position = [0, -0.086, 0]
+        let cap = ModelEntity(mesh: .generateSphere(radius: 0.035), materials: [coneM])
+        cap.scale = [1, 0.35, 1]
         cone.addChild(cap)
         body.addChild(cone)
-        let joint = ModelEntity(mesh: .generateBox(width: 0.06, height: 0.05, depth: 0.04), materials: [metal])
-        joint.position = [0, 0.13, 0]
-        body.addChild(joint)
         if lineMode {
             var l = Geo()
-            let hx: Float = 0.17, hy: Float = 0.12, hz: Float = 0.11
-            let c: [SIMD3<Float>] = [[-hx, -hy, -hz], [hx, -hy, -hz], [hx, hy, -hz], [-hx, hy, -hz], [-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]]
-            for (i, j) in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)] { l.stroke(c[i], c[j], width: 0.006) }
-            for k in 0..<20 {
-                let a0 = Float(k) / 20 * 2 * .pi, a1 = Float(k + 1) / 20 * 2 * .pi
-                l.stroke(SIMD3<Float>(cos(a0) * 0.075, sin(a0) * 0.075, 0.116), SIMD3<Float>(cos(a1) * 0.075, sin(a1) * 0.075, 0.116), width: 0.005)
+            for (rr, y) in [(Float(0.15), Float(-0.004)), (0.13, -0.082), (0.08, -0.085)] {
+                for k in 0..<28 {
+                    let a0 = Float(k) / 28 * 2 * .pi, a1 = Float(k + 1) / 28 * 2 * .pi
+                    l.stroke(SIMD3<Float>(cos(a0) * rr, y, sin(a0) * rr), SIMD3<Float>(cos(a1) * rr, y, sin(a1) * rr), width: 0.005)
+                }
             }
             if let e = l.entity("speakerLines", Ink.line) { body.addChild(e) }
         }
         local.addChild(root)
         speakerCone = cone
         speakerBody = body
-        speakerSpot = root.convert(position: SIMD3<Float>(0, -0.23, 0.12), to: local)
-        // 소리 물결 재질 (물결 고리 그림을 오려 냄)
-        var m = UnlitMaterial(color: lineMode ? UIColor(white: 0.07, alpha: 1) : Tex.color(SIMD3<Float>(1, 0.9, 0.7)))
-        if let mk = Tex.get("ripple_a", raw: true) {
-            var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.clamp
-            m.blending = .transparent(opacity: .init(scale: lineMode ? 1 : 0.35, texture: tp))
-            if lineMode { m.opacityThreshold = 0.4 }
-        }
-        m.writesDepth = false
-        waveMat = m
+        speakerSpot = root.convert(position: SIMD3<Float>(0, -0.1, 0), to: local)
     }
 
-    /// 스피커: 음악이 나오는 동안 울림판이 박자처럼 떨리고, 앞으로 소리 물결 고리가 퍼짐
+    /// 스피커: 음악이 나오는 동안 울림판이 은근히 떨림 (소리 물결은 그리지 않음)
     private func tickSpeaker(_ dt: Float) {
         guard let cone = speakerCone, let body = speakerBody else { return }
         spT += dt
         let t = spT
         if musicOn {
-            let beat = pow(max(0, sin(t * 2 * .pi * 1.6)), 6) * 0.06 + 0.012 * sin(t * 47) + 0.008 * sin(t * 83)
-            cone.scale = SIMD3<Float>(1 + beat * 0.4, 1 + beat * 0.4, 1 + beat * 6)
-            body.position = SIMD3<Float>(0.0008 * sin(t * 61), -0.23 + 0.0006 * sin(t * 73), 0)
-            waveT -= dt
-            if waveT <= 0, let m = waveMat {
-                waveT = 0.62
-                var q = Geo()
-                q.card(.zero, SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 1, 0), w: 1, h: 1)
-                if let e = q.entity("soundWave", m) {
-                    e.position = [0, 0, 0.13]
-                    e.scale = SIMD3<Float>(repeating: 0.12)
-                    body.addChild(e)
-                    speakerWaves.append((e, 0))
-                }
-            }
+            // 오르골에 맞게 아주 살짝: 울림판이 은근히 떨리고 통이 미세하게 울림
+            let beat = pow(max(0, sin(t * 2 * .pi * 1.2)), 4) * 0.025 + 0.004 * sin(t * 37)
+            cone.scale = SIMD3<Float>(1 + beat * 0.6, 0.35 + beat * 2, 1 + beat * 0.6)
+            body.position = SIMD3<Float>(0, 0.00025 * sin(t * 53), 0)
         } else {
-            cone.scale = SIMD3<Float>(repeating: 1)
-        }
-        for i in speakerWaves.indices.reversed() {
-            speakerWaves[i].1 += dt
-            let a = speakerWaves[i].1 / 1.8
-            if a >= 1 { speakerWaves[i].0.removeFromParent(); speakerWaves.remove(at: i); continue }
-            let e = speakerWaves[i].0
-            e.scale = SIMD3<Float>(repeating: 0.12 + a * 0.8)
-            e.position = [0, 0, 0.13 + a * 0.5]
-            e.components.set(OpacityComponent(opacity: (1 - a) * (1 - a)))
+            cone.scale = SIMD3<Float>(1, 0.35, 1)
         }
     }
 
@@ -1423,6 +1376,69 @@ final class RoomWorld {
         }
     }
 
+    /// 계곡 둘레 절벽: 얇은 그림 띠 대신 두께가 있는 입체 암벽 — 울퉁불퉁 앞뒤로 튀어나온 바위 면(실사 암벽 무늬),
+    /// 위로 갈수록 조금 뒤로 기울고, 꼭대기는 들쭉날쭉한 능선에서 바깥으로 이어진 평평한 윗면(풀·흙)이라 옆에서 봐도 종이처럼 얇지 않음
+    private func addCliffRing(R: Float, floorY: Float) {
+        let N = 140, M = 14
+        let base = R + 40
+        var g = SeededRNG(seed: UInt64(room.id * 389 + 21))
+        let s1 = Float.random(in: 0...10, using: &g), s2 = Float.random(in: 0...10, using: &g)
+        func nz(_ a: Float, _ y: Float) -> Float {
+            sin(a * 7 + s1) * 0.5 + sin(a * 17 + y * 0.13 + s2) * 0.3 + sin(a * 41 - y * 0.27 + s1) * 0.14 + sin(a * 93 + y * 0.6) * 0.06
+        }
+        func topH(_ a: Float) -> Float { 34 + 9 * sin(a * 3 + s2) + 6 * nz(a, 40) }
+        func pt(_ a: Float, _ y: Float, _ H: Float) -> SIMD3<Float> {
+            let k = y / H
+            let r = base + 3.2 * nz(a, y) + 5 * k * k + (k > 0.92 ? (k - 0.92) * 20 : 0)      // 위로 갈수록 뒤로, 맨 위는 둥글게 넘어감
+            return SIMD3<Float>(center.x + cos(a) * r, floorY - 2 + y, center.z + sin(a) * r)
+        }
+        var wall = Geo(), top = Geo(), lines = Geo()
+        var arc: Float = 0
+        for i in 0..<N {
+            let a0 = Float(i) / Float(N) * 2 * .pi, a1 = Float(i + 1) / Float(N) * 2 * .pi
+            let H0 = topH(a0), H1 = topH(a1)
+            let seg = base * (a1 - a0)
+            for j in 0..<M {
+                let f0 = Float(j) / Float(M), f1 = Float(j + 1) / Float(M)
+                let p00 = pt(a0, H0 * f0, H0), p10 = pt(a1, H1 * f0, H1), p11 = pt(a1, H1 * f1, H1), p01 = pt(a0, H0 * f1, H0)
+                wall.quad(p00, p10, p11, p01, SIMD2<Float>(arc / 9, H0 * f0 / 9), SIMD2<Float>((arc + seg) / 9, H1 * f0 / 9),
+                          SIMD2<Float>((arc + seg) / 9, H1 * f1 / 9), SIMD2<Float>(arc / 9, H0 * f1 / 9))
+            }
+            // 윗면: 능선에서 바깥으로 14m 이어지는 거의 평평한 땅
+            let t0 = pt(a0, H0, H0), t1 = pt(a1, H1, H1)
+            let o0 = SIMD3<Float>(center.x + cos(a0) * (base + 22), t0.y + 1.5, center.z + sin(a0) * (base + 22))
+            let o1 = SIMD3<Float>(center.x + cos(a1) * (base + 22), t1.y + 1.5, center.z + sin(a1) * (base + 22))
+            top.quad(t0, t1, o1, o0, SIMD2<Float>(t0.x, t0.z) / 4, SIMD2<Float>(t1.x, t1.z) / 4, SIMD2<Float>(o1.x, o1.z) / 4, SIMD2<Float>(o0.x, o0.z) / 4)
+            if lineMode {
+                lines.stroke(t0, t1, width: 0.22)
+                if i % 7 == 0 {
+                    var prev = pt(a0, 0, H0)
+                    for j in 1...M {
+                        let p = pt(a0 + 0.004 * sin(Float(j) * 1.7), H0 * Float(j) / Float(M), H0)
+                        if j % 3 != 0 { lines.stroke(prev, p, width: 0.12) }
+                        prev = p
+                    }
+                }
+            }
+            arc += seg
+        }
+        let tx = Tex.get("cliff") != nil ? "cliff" : "rock"
+        if let e = wall.entity("cliffRing", Tex.unlit(tx, tint: Worlds.safe(tint * 0.85, min: 0.2))) { layer(e, 2); world.addChild(e) }
+        if let e = top.entity("cliffTop", Tex.unlit("grass", tint: Worlds.safe(tint * 0.7, min: 0.2))) { layer(e, 2); world.addChild(e) }
+        if lineMode, let e = lines.entity("cliffRingLines", Ink.line) { layer(e, 3); world.addChild(e) }
+        // 능선 위 듬성듬성 소나무 (입체)
+        var tr = Geo(), lv = Geo()
+        for _ in 0..<26 {
+            let a = Float.random(in: 0...(2 * .pi), using: &g)
+            let H = topH(a)
+            let p = pt(a, H, H) + SIMD3<Float>(cos(a), 0, sin(a)) * Float.random(in: 2...10, using: &g) + SIMD3<Float>(0, 0.6, 0)
+            let h = Float.random(in: 7...13, using: &g)
+            Geo.pineTree(&tr, &lv, at: p, height: h, width: h * 0.45, using: &g)
+        }
+        if let e = tr.entity("ridgeTrunks", lineMode ? Ink.line : Tex.unlit("bark", tint: Worlds.safe(tint * 0.7, min: 0.2))) { layer(e, 3); world.addChild(e) }
+        if let e = lv.entity("ridgePines", Tex.cutout("pine_branch", tint: Worlds.safe(tint * 0.85, min: 0.2), sampler: Tex.clamp)) { layer(e, 3); world.addChild(e) }
+    }
+
     /// 장소마다의 특징 만들기
     private func addFeature(_ L: Layout, segs: [WallSeg], floorY: Float, ceilY: Float) {
         switch room.place {
@@ -1455,7 +1471,7 @@ final class RoomWorld {
     private func addThings(_ dc: Decor, rec: SpaceRec, _ L: Layout, floorY: Float) {
         var g = SeededRNG(seed: UInt64(room.id * 7919 + room.place.count * 31 + 3))
         func free(_ pts: [SIMD3<Float>]) -> Bool { !pts.contains { L.walkable(L.plane($0.x, $0.z)) } }
-        if room.place == "valley" { planRiver(L, rec, floorY: floorY) }
+        if room.place == "valley" { planRiver(L, rec, floorY: floorY); addCliffRing(R: simd_length(halfSize), floorY: floorY) }
         // 십자 나무의 두 판 자리 (판 양옆 25cm까지)
         func treeFree(_ p: SIMD3<Float>, _ w: Float, _ yaw: Float) -> Bool {
             var pts: [SIMD3<Float>] = []

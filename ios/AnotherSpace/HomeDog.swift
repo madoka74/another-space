@@ -748,8 +748,12 @@ final class HomeDog {
             return
         }
         if actT > actDur { start(.sit, 2); return }
-        let np = pos + moveDir * min(max(0, d - 0.22), 1.9 * dt)
-        if c.free(np) { pos = np }
+        // 곧장 못 가면(가구에 막힘) 옆으로 비켜 돌아감
+        let step = min(max(0, d - 0.22), 1.9 * dt)
+        for ang in [Float(0), 0.6, -0.6, 1.2, -1.2, 1.8, -1.8] {
+            let dv = SIMD2<Float>(moveDir.x * cos(ang) - moveDir.y * sin(ang), moveDir.x * sin(ang) + moveDir.y * cos(ang))
+            if c.free(pos + dv * step) { pos += dv * step; break }
+        }
         faceToward(target)
     }
 
@@ -856,7 +860,7 @@ final class HomeDog {
         opts.append((0.25, { [unowned self] in say("dog_howl", -8); emote("note", 2.4); start(.howl, 2.6); return true }))
         opts.append((0.9, { [unowned self] in zoomies(c); return true }))
         // 막대를 물고 와서 발치에 놓음 (놀자는 뜻)
-        opts.append((0.9, { [unowned self] in
+        opts.append((stick == nil ? 2.6 : 3.2, { [unowned self] in          // 막대 놀이는 자주
             if stick == nil { makeStick(near: pos) }
             start(carrying ? .bring : .fetch, 10)
             return true

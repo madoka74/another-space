@@ -221,6 +221,9 @@ final class ExploreSession {
     @ObservationIgnored private var docentCard: Entity?
     @ObservationIgnored private var bars: [String: Entity] = [:]     // 창마다 아래 옮기기 막대
     @ObservationIgnored private var pinchClosed = [false, false]
+    @ObservationIgnored private var pendingSystem = true
+    @ObservationIgnored private var lastFwd: SIMD3<Float>?
+    @ObservationIgnored private var turnSpeed: Float = 0
     @ObservationIgnored private var pinchOpenAt: [Float] = [-9, -9]
     @ObservationIgnored private var pinchCloseAt: [Float] = [-9, -9]
     @ObservationIgnored private var handTapAt: Float?
@@ -926,7 +929,9 @@ final class ExploreSession {
     /// 시선 정면 60cm(벽·닫힌 문이 더 가까우면 그 앞)에 현실을 보여 주는 원. 크기는 거리에 맞춰 보이는 크기가 같게.
     /// 더블탭으로 켜고 끔. 닫힌 실제 문 앞(1m 안)이면 저절로 켜지고, 문이 열리거나 문에서 벗어나면 꺼짐
     private func placePeek(_ dt: Float) {
-        let auto = leafDoor != nil && leafDoor != peekDismissed
+        // 닫힌 실제 문 앞에서 저절로 여는 현실 창은 문 쪽을 '바라볼 때'만 — 고개를 숙여 바닥·소파를 볼 땐 열지 않음
+        // (예전엔 수평 방향만 따져서, 문 근처에서 아래를 보면 바닥 위에 현실 창이 떠 현실이 겹쳐 보였음)
+        let auto = leafDoor != nil && leafDoor != peekDismissed && fwd.y > -0.42
         let target: Float = (freePeek || auto) ? 1 : 0
         peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 6 : 16))
         let on = peekAmt > 0.01
@@ -959,9 +964,18 @@ final class ExploreSession {
 
         if fit == nil, poses.isEmpty, !aligning, t > nextAlign, let d = data { startAlign(d) }
 
-        // 좌표 맞춤이 조금 바뀌면 순간 이동하지 않고 부드럽게 따라감 (크게 틀어졌을 때만 바로)
-        if let tg = fitTarget, let cur = fit, tg != cur {
-            let nf = tg.differs(cur, meters: 0.6, radians: 0.3) ? tg : cur.lerp(tg, min(1, dt * 2.5))
+        // 고개 돌리는 빠르기 (도/초) — 좌표 맞춤 보정을 언제 할지 정하는 데 씀
+        if let lf = lastFwd, dt > 0 {
+            let a = acos(min(1, max(-1, simd_dot(simd_normalize(lf), simd_normalize(fwd))))) / dt * 180 / .pi
+            turnSpeed += (a - turnSpeed) * min(1, dt * 10)
+        }
+        lastFwd = fwd
+        // 좌표 맞춤 보정: 크게 틀어졌을 때만 바로. 작은 보정은 고개를 돌리는 동안에만 조금씩 (눈이 알아채지 못할 때) —
+        // 가만히 보거나 걸어가는 동안 세계 전체가 미세하게 미끄러지면 초점이 안 맞거나 겹쳐 보이고 어지러웠음. 1cm·0.3도 안의 차이는 무시
+        if let tg = fitTarget, let cur = fit, tg != cur, tg.differs(cur, meters: 0.01, radians: 0.005) {
+            var k = min(1, max(0, (turnSpeed - 25) / 60))                // 25도/초 넘게 돌릴 때부터, 85도/초면 최대
+            if tg.differs(cur, meters: 0.08, radians: 0.03) { k = max(k, 0.25) }    // 8cm 넘게 어긋났으면 가만히 있어도 천천히
+            let nf = tg.differs(cur, meters: 0.6, radians: 0.3) ? tg : cur.lerp(tg, min(1, dt * 4 * k))
             fit = nf
             spaceRoot.transform = nf.transform
             if let sf = skinFit, nf.differs(sf, meters: 0.12, radians: 0.04) {
@@ -1665,7 +1679,11 @@ final class ExploreSession {
             if d < 0.009 && t - pinchOpenAt[i] < 0.3 { pinchClosed[i] = true; pinchCloseAt[i] = t }
         } else if d > 0.02 {
             pinchClosed[i] = false
-            if t - pinchCloseAt[i] < 0.5 { handTapAt = t }
+            // 눈앞(시선 60도 안, 허리보다 위)에서 한 손짓만 — 무릎·소파 위에 둔 손가락이 저절로 붙었다 떨어지는 것은 탭이 아님
+            let toH = tp - head
+            let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
+            let inView = simd_length(toH) > 0.05 && simd_dot(simd_normalize(toH), g) > 0.5 && tp.y > head.y - 0.7
+            if inView && t - pinchCloseAt[i] < 0.5 { handTapAt = t }
         }
     }
 
@@ -1781,13 +1799,14 @@ final class ExploreSession {
         }
         // 싱글탭은 기다리지 않고 바로 반응 (탭이 먹혔는지 바로 보이게). 0.45초 안에 두 번째 탭이 오면
         // 첫 탭이 한 일을 되돌리고 더블탭으로 처리
-        if let p = pendingTap, t - p <= 0.45 {
+        if let p = pendingTap, t - p <= 0.45, system || pendingSystem {
             pendingTap = nil
             if let s = beforeTap { hudMenu = s.0; hudUntil = s.1; themeOpen = s.2; hudShow = 0 }
             beforeTap = nil
             doubleTapped()
         } else {
             pendingTap = t
+            pendingSystem = system                                    // 손 추적으로만 받은 탭 둘로는 현실 창(더블탭)을 열지 않음
             beforeTap = (hudMenu, hudUntil, themeOpen)
             singleTapped()
         }

@@ -39,7 +39,9 @@ final class HomeCat {
         return c.height(q) > p.y - c.floorY - r
     }
 
-    /// 날아가는 장난감 한 걸음: 중력, 천장에서 튕겨 내려옴, 벽·가구에 부딪히면 그 면에서 튕겨 나옴(방 밖으로 나가지 않음).
+    /// 날아가는 장난감 한 걸음: 중력, 천장에서 튕겨 내려옴, 벽·가구 옆면에 부딪히면 그 면에서 튕겨 나옴(방 밖으로 나가지 않음).
+    /// 가구 윗면에 떨어지면 거기서 한 번 통 튀고 내 쪽으로 미끄러져 내려옴 (예전엔 윗면에서 계속 튕기며 공중 상태로 남아
+    /// 빙글빙글 돌기만 하고 강아지·고양이가 쫓아가지 않았음). 벽 속에 끼면 내 쪽으로 빼냄.
     /// 반환: 새 자리, 부딪혔는지
     static func toyStep(_ p: SIMD3<Float>, _ v: inout SIMD3<Float>, _ dt: Float, _ c: Ctx, radius r: Float) -> (SIMD3<Float>, Bool) {
         v.y -= 9.8 * dt
@@ -47,6 +49,18 @@ final class HomeCat {
         var hit = false
         let top = c.floorY + c.ceil - 0.06 - r
         if np.y > top { np.y = top; v.y = -abs(v.y) * 0.35; hit = true }
+        let q = SIMD2<Float>(np.x, np.z)
+        var toMe = SIMD2<Float>(c.head.x - np.x, c.head.z - np.z)
+        toMe = simd_length(toMe) > 0.01 ? simd_normalize(toMe) : SIMD2<Float>(0, 0)
+        // 가구 윗면에 위에서 떨어짐
+        let fh = c.room(q) ? c.height(q) : 0
+        if fh > 0.05 && np.y - r <= c.floorY + fh && p.y - r >= c.floorY + fh - 0.04 {
+            np.y = c.floorY + fh + r
+            v.y = v.y < -1.6 ? -v.y * 0.3 : 0
+            v.x = v.x * 0.55 + toMe.x * 0.55
+            v.z = v.z * 0.55 + toMe.y * 0.55
+            return (np, v.y > 0)
+        }
         if toyHit(np, c, radius: r) {
             let tx = SIMD3<Float>(np.x, np.y, p.z), tz = SIMD3<Float>(p.x, np.y, np.z)
             var any = false
@@ -55,8 +69,11 @@ final class HomeCat {
             if !any { v.x = -v.x * 0.45; v.z = -v.z * 0.45 }
             np.x = p.x; np.z = p.z
             hit = true
-            // 그래도 갇혀 있으면(가구 위 모서리 등) 위로 살짝 띄움
-            if toyHit(np, c, radius: r) && c.room(SIMD2<Float>(np.x, np.z)) { np.y = c.floorY + c.height(SIMD2<Float>(np.x, np.z)) + r + 0.01 }
+            // 그래도 벽·가구 속이면 내 쪽으로 조금씩 빼냄
+            if toyHit(np, c, radius: r) {
+                np.x += toMe.x * 0.06; np.z += toMe.y * 0.06
+                v.x = toMe.x * 0.4; v.z = toMe.y * 0.4
+            }
         }
         return (np, hit)
     }
@@ -937,8 +954,14 @@ final class HomeCat {
         show(walkFrame(moveDir))
         jingle(dt)
         let speed: Float = running ? 1.5 : 0.6
-        let np = pos + moveDir * min(max(0, d - 0.15), speed * dt)
-        if c.free(np) { pos = np } else if !c.free(ballPos) { start(.sit, 2) }
+        // 곧장 못 가면(가구에 막힘) 옆으로 비켜 돌아감
+        let step = min(max(0, d - 0.15), speed * dt)
+        var moved = false
+        for ang in [Float(0), 0.6, -0.6, 1.2, -1.2, 1.8, -1.8] {
+            let dv = SIMD2<Float>(moveDir.x * cos(ang) - moveDir.y * sin(ang), moveDir.x * sin(ang) + moveDir.y * cos(ang))
+            if c.free(pos + dv * step) { pos += dv * step; moved = true; break }
+        }
+        if !moved && actT > 3 { start(.sit, 2) }
         faceToward(ballPos)
     }
 
@@ -982,7 +1005,7 @@ final class HomeCat {
         opts.append((2.4, { [unowned self] in jumpUpSomewhere(c) }))
         opts.append((1.0, { [unowned self] in scratchSomewhere(c) }))
         // 털실 공 놀이: 공이 보이면 노려보다 덮침, 없으면 꺼내 옴
-        opts.append((1.8, { [unowned self] in
+        opts.append((ball == nil ? 3.2 : 4.5, { [unowned self] in          // 털실 공 놀이는 자주 (공이 있으면 더 자주)
             guard makeBall(near: pos, c) else { return false }
             if simd_distance(ballPos, pos) > 0.9 || !pathOK(pos, ballPos, c) { hits = 0; hitsMax = Int.random(in: 2...5); start(.chase, 10); return true }
             pounceFrom = pos
