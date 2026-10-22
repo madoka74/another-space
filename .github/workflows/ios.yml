@@ -12,7 +12,7 @@ concurrency: { group: ios, cancel-in-progress: true }
 jobs:
   vision:
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: maxim-lobanov/setup-xcode@v1
@@ -41,6 +41,12 @@ jobs:
         run: |
           npm install -g wrangler@4 > /dev/null 2>&1
           python3 tools/fetch_sounds.py
+      - name: 실사 재료 캐시 (Poly Haven CC0 하늘·풍경·무늬 — 한 번 받으면 다음 빌드부터 재사용)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/another-space
+          key: ph-assets-${{ hashFiles('tools/fetch_env.py') }}
+          restore-keys: ph-assets-
       - name: 그림 재료 만들기 (하늘·풍경·울타리·나무·바닥 무늬)
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
@@ -105,7 +111,15 @@ jobs:
           ISS: ${{ secrets.ASC_ISSUER_ID }}
         run: |
           sed "s/TEAM_ID/$TEAM/" ios/ExportOptions.plist > "$RUNNER_TEMP/ExportOptions.plist"
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/AnotherSpace.xcarchive" \
-            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/out" \
-            -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
-            -authenticationKeyID "$KID" -authenticationKeyIssuerID "$ISS"
+          # 애플 서버가 잠깐 응답하지 않으면(Bad Gateway 등) 1분 쉬고 다시 (최대 4번)
+          for i in 1 2 3 4; do
+            if xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/AnotherSpace.xcarchive" \
+              -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/out" \
+              -allowProvisioningUpdates -authenticationKeyPath "$RUNNER_TEMP/keys/AuthKey.p8" \
+              -authenticationKeyID "$KID" -authenticationKeyIssuerID "$ISS"; then
+              break
+            fi
+            if [ "$i" = 4 ]; then exit 70; fi
+            echo "::warning::내보내기 실패 ($i/4) — 애플 서버 문제일 수 있어 60초 뒤 다시 시도"
+            sleep 60
+          done
