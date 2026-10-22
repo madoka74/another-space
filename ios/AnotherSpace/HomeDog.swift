@@ -237,7 +237,7 @@ final class HomeDog {
             taps.removeAll()
             yip(-1)
             emote("exclaim")
-            zoomies(lastCtx)
+            if let c = lastCtx { zoomies(c) } else { start(.jump, 1.0) }
             return
         }
         switch act {
@@ -260,8 +260,7 @@ final class HomeDog {
 
     /// 막대를 톡 침: 나에게서 먼 쪽으로 날아가고 달려가 물어 옴
     func throwStick(from head: SIMD3<Float>) {
-        guard stick != nil, !carrying, stickFly < 0 else { return }
-        let c = lastCtx
+        guard stick != nil, !carrying, stickFly < 0, let c = lastCtx else { return }
         let me = SIMD2<Float>(head.x, head.z)
         var d = stickPos - me
         d = simd_length(d) > 0.01 ? simd_normalize(d) : c.fwd
@@ -291,7 +290,7 @@ final class HomeDog {
         done = true
     }
 
-    private var lastCtx: Ctx!
+    private var lastCtx: Ctx?
 
     // MARK: 매 프레임
     func tick(_ dt: Float, _ c: Ctx) {
@@ -597,7 +596,7 @@ final class HomeDog {
         carrying = false
         let r = cardRight()
         stickPos = pos + r * 0.4 * face
-        if !lastCtx.free(stickPos) { stickPos = pos }
+        if let c = lastCtx, !c.free(stickPos) { stickPos = pos }
     }
 
     private func tickStick(_ dt: Float) {
