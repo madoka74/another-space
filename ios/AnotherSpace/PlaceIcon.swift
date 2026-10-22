@@ -10,7 +10,6 @@ extension Worlds {
         case "village": return ("dog.fill", Color(red: 0.78, green: 0.84, blue: 0.95))         // 강아지
         case "home": return ("cat.fill", Color(red: 1.0, green: 0.8, blue: 0.55))              // 고양이
         case "gallery": return ("paintpalette.fill", Color(red: 0.95, green: 0.55, blue: 0.7))  // 그림
-        case "valley": return ("drop.fill", Color(red: 0.45, green: 0.82, blue: 0.95))         // 개울·폭포
         default: return nil
         }
     }
@@ -26,10 +25,9 @@ struct PlaceIcon: View {
             .overlay(alignment: .topTrailing) {
                 if let sp = Worlds.special(id) {
                     Image(systemName: sp.symbol)
-                        .font(.system(size: 9, weight: .bold))
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(sp.color)
-                        .frame(width: 15, height: 15)
-                        .background(Circle().fill(Color.black.opacity(0.6)))
+                        .shadow(color: .black.opacity(0.5), radius: 1)
                         .offset(x: 9, y: -8)
                         .accessibilityHidden(true)
                 }

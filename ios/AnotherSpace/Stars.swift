@@ -56,8 +56,12 @@ enum SkyData {
     }()
 }
 
-/// 숲 테마의 밤하늘: 오늘 밤(테마 시간에 맞춘 시각) 우리나라(서울)에서 보이는 실제 하늘 그대로 — 88개 별자리 중 지평선 위의 것들이 다 떠 있음.
-/// 바라보면 그 별자리의 별빛만 밝아져 포커스를 알 수 있고, 그 상태에서 탭하면 별을 잇는 선이 그려지고 이름이 뜨며 정보판이 열림.
+/// 숲 테마의 밤하늘: 오늘 밤(테마 시간에 맞춘 시각) 서울에서 보이는 실제 하늘.
+/// - 별은 아주 많이: 실제 밝은 별들 + 고르지 않은 별자리의 별 + 희미한 별 무리(눈으로 겨우 보이는 별처럼)
+/// - 별자리는 한 번에 3~4개만, 하늘 여기저기 넉넉히 떨어진 것으로 (지평선 위 20도 넘는 것 중 무작위)
+/// - 바라보면 그 별자리의 별만 더 밝고 또렷해짐(선·테두리 없음). 그 상태에서 탭하면 선이 이어지고 별자리 바로 아래 이름, 정보판
+/// - 별은 '오려 내기'(가장자리 투명 부분은 아예 그리지 않음)로 그려 별끼리·선과 겹쳐도 네모 판이 비치지 않음.
+///   밝기 바꾸기·반짝임도 투명도 대신 재질을 바꿔 끼움 (반투명이 되면 다시 네모가 비침)
 /// 밤에 가장 또렷하고, 새벽·해질녘엔 밝은 별만 흐리게, 낮엔 안 보임. 구름이 끼면 흐려졌다 또렷해졌다, 비·눈이면 가려짐.
 /// 북쪽은 방의 한 방향으로 정해 둠(실제 나침반 방향과는 다를 수 있음), 별의 배치·높이는 실제와 같음
 @MainActor
@@ -68,11 +72,11 @@ final class SkyStars {
         let radius: Float
         let verts: [SIMD3<Float>]
         let segs: [(SIMD3<Float>, SIMD3<Float>)]
-        var normal: Entity?
-        var bright: Entity?
+        var stars: ModelEntity?
         var lines: Entity?
         var label: Entity?
         var focus: Float = 0
+        var level = -1
         var reveal: Float = 0
         var picked = false
         init(c: Constellation, dir: SIMD3<Float>, radius: Float, verts: [SIMD3<Float>], segs: [(SIMD3<Float>, SIMD3<Float>)]) {
@@ -82,7 +86,8 @@ final class SkyStars {
 
     let root = Entity()
     private var groups: [Group] = []
-    private var bgEnts: [Entity] = []
+    private var bgEnts: [(ModelEntity, [UnlitMaterial])] = []      // 별 무리, 반짝임 단계별 재질
+    private var conMats: [UnlitMaterial] = []                       // 별자리 별: 0 = 평소 … 마지막 = 바라볼 때
     private let vis: Float
     private let dimOnly: Bool
     private let cloudy: Bool
@@ -90,6 +95,7 @@ final class SkyStars {
     private let look: LookMode
     private var t: Float = 0
     private var focusT: Float = 0
+    private var twT: Float = 0
     private var focused: Group?
     private let R: Float = 200
     private var mask: TextureResource?
@@ -105,7 +111,7 @@ final class SkyStars {
         if tm == "night" { v = 1 } else if tm == "dusk" || tm == "dawn" { v = 0.55 }
         switch w {
         case "clear", "wind": break
-        case "cloudy": v *= 0.75
+        case "cloudy": v *= 0.8
         default: v = 0
         }
         vis = v
@@ -117,9 +123,14 @@ final class SkyStars {
         mask = Tex.get("glow_a", raw: true)
         let hour: Double = tm == "night" ? 21.5 : (tm == "dusk" ? 19.5 : 4.5)
         let lst = Self.localSidereal(hour: hour, lon: lon)
-        buildBackground(lst)
-        for c in SkyData.shared.cons { build(c, lst) }
-        root.components.set(OpacityComponent(opacity: v))
+        // 밝기 단계 (반짝임·구름·포커스 모두 재질을 바꿔 끼움)
+        for k in 0..<6 {
+            let f = Float(k) / 5
+            conMats.append(starMat(SIMD3<Float>(0.8, 0.83, 0.92) + SIMD3<Float>(0.2, 0.17, 0.08) * f, vis * (0.86 + 0.14 * f), cut: 0.36 - 0.24 * f))
+        }
+        let chosen = choose(lst)
+        buildBackground(lst, skip: Set(chosen.map(\.id)))
+        for c in chosen { build(c, lst) }
     }
 
     /// 오늘 그 시각(이 기기의 시간대)의 지방 항성시 (도)
@@ -145,8 +156,32 @@ final class SkyStars {
         return SIMD3<Float>(Float(cos(alt) * sin(az)), Float(sin(alt)), Float(-cos(alt) * cos(az)))
     }
 
-    private func starQuad(_ g: inout Geo, _ v: SIMD3<Float>, size: Float) {
-        let p = v * R
+    /// 보여 줄 별자리 3~4개: 가운데가 지평선 위 20도 넘고, 별이 4개 넘게 보이고, 너무 크지 않은 것 중 무작위로,
+    /// 서로 50도 넘게 떨어진 것만 (모자라면 35도까지 좁혀 다시)
+    private func choose(_ lst: Double) -> [Constellation] {
+        var cands: [(Constellation, SIMD3<Float>)] = []
+        for c in SkyData.shared.cons {
+            var sum = SIMD3<Float>(0, 0, 0), up = 0, n = 0
+            for l in c.lines { for s in l { let v = dir(s.ra, s.dec, lst); sum += v; n += 1; if v.y > 0.1 { up += 1 } } }
+            guard n > 0 else { continue }
+            let ctr = simd_normalize(sum)
+            var rad: Float = 0
+            for l in c.lines { for s in l { rad = max(rad, acos(min(1, simd_dot(dir(s.ra, s.dec, lst), ctr)))) } }
+            if ctr.y > 0.34 && up >= 4 && up * 10 >= n * 8 && rad < 0.5 && rad > 0.05 { cands.append((c, ctr)) }
+        }
+        cands.shuffle()
+        for minSep in [Float(0.87), 0.6] {
+            var out: [(Constellation, SIMD3<Float>)] = []
+            for c in cands where out.count < 4 {
+                if out.allSatisfy({ acos(min(1, simd_dot($0.1, c.1))) > minSep }) { out.append(c) }
+            }
+            if out.count >= 3 || minSep < 0.7 { return out.map { $0.0 } }
+        }
+        return []
+    }
+
+    private func starQuad(_ g: inout Geo, _ v: SIMD3<Float>, size: Float, r: Float? = nil) {
+        let p = v * (r ?? R)
         let up0 = abs(v.y) > 0.95 ? SIMD3<Float>(0, 0, 1) : SIMD3<Float>(0, 1, 0)
         let right = simd_normalize(simd_cross(v, up0))
         let up = simd_cross(right, v)
@@ -154,39 +189,68 @@ final class SkyStars {
         g.quad(p - hr - hu, p + hr - hu, p + hr + hu, p - hr + hu, SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
     }
 
-    private func starMat(_ c: SIMD3<Float>, _ k: Float) -> UnlitMaterial {
+    /// 별 재질: 오려 내기(cut 보다 투명한 곳은 그리지 않음). cut 이 낮을수록 별이 크고 밝게 보임
+    private func starMat(_ c: SIMD3<Float>, _ k: Float, cut: Float) -> UnlitMaterial {
         let col: UIColor
         switch look {
-        case .line: col = UIColor(white: 0.1, alpha: 1)
-        case .mono: col = UIColor(white: CGFloat(min(1, k)), alpha: 1)
+        case .line: col = UIColor(white: CGFloat(0.35 - 0.3 * min(1, k)), alpha: 1)
+        case .mono: col = UIColor(white: CGFloat(min(1, (c.x + c.y + c.z) / 3 * k)), alpha: 1)
         case .color: col = UIColor(red: CGFloat(min(1, c.x * k)), green: CGFloat(min(1, c.y * k)), blue: CGFloat(min(1, c.z * k)), alpha: 1)
         }
         var m = UnlitMaterial(color: col)
         if let mask {
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
             m.blending = .transparent(opacity: .init(scale: 1, texture: mp))
+            m.opacityThreshold = cut
         }
         return m
     }
 
     private func size(_ mag: Float) -> Float {
-        let deg = max(0.2, 0.8 - 0.13 * mag)
+        let deg = max(0.16, 0.78 - 0.13 * mag)
         return R * deg * .pi / 180 * 2.0
     }
 
-    private func buildBackground(_ lst: Double) {
-        // 별자리 선에 들지 않는 별들: 밝기 무리 세 개로 (무리마다 조금씩 다르게 반짝임)
+    private func buildBackground(_ lst: Double, skip: Set<String>) {
+        // 밝기 무리 셋 (무리마다 다르게 반짝임): 실제 밝은 별 + 고르지 않은 별자리의 별
         var gs = [Geo(), Geo(), Geo()]
-        for (i, s) in SkyData.shared.bg.enumerated() {
-            if dimOnly && s.mag > 2.6 { continue }
-            let v = dir(s.ra, s.dec, lst)
-            guard v.y > 0.02 else { continue }
-            starQuad(&gs[i % 3], v, size: size(s.mag) * 0.8)
+        var n = 0
+        func add(_ v: SIMD3<Float>, _ mag: Float) {
+            guard v.y > 0.02 else { return }
+            if dimOnly && mag > 2.6 { return }
+            starQuad(&gs[n % 3], v, size: size(mag) * 0.85)
+            n += 1
         }
-        for g in gs {
-            if let e = g.entity("bgStars", starMat([0.92, 0.94, 1], 0.85)) {
+        for s in SkyData.shared.bg { add(dir(s.ra, s.dec, lst), s.mag) }
+        var keys = Set<String>()
+        for c in SkyData.shared.cons where !skip.contains(c.id) {
+            for l in c.lines { for s in l where !keys.contains("\(s.ra),\(s.dec)") { keys.insert("\(s.ra),\(s.dec)"); add(dir(s.ra, s.dec, lst), s.mag) } }
+        }
+        // 희미한 별 무리: 은하수 쪽(하늘을 가로지르는 띠)에 더 많이
+        if !dimOnly {
+            var rg = SeededRNG(seed: 1987)
+            let band = simd_normalize(SIMD3<Float>(0.35, 0.25, 0.9))          // 띠의 축 (띠 = 이 축과 직각인 큰 원)
+            var made = 0, tries = 0
+            while made < 2600 && tries < 12000 {
+                tries += 1
+                let z = Float.random(in: 0.03...1, using: &rg), a = Float.random(in: 0...(2 * .pi), using: &rg)
+                let rr = sqrt(max(0, 1 - z * z))
+                let v = SIMD3<Float>(rr * cos(a), z, rr * sin(a))
+                let near = 1 - abs(simd_dot(v, band))
+                if Float.random(in: 0...1, using: &rg) > 0.35 + 0.65 * pow(near, 6) { continue }
+                starQuad(&gs[made % 3], v, size: size(Float.random(in: 5.2...6.4, using: &rg)) * 0.75)
+                made += 1
+            }
+        }
+        for (i, g) in gs.enumerated() {
+            var mats: [UnlitMaterial] = []
+            for k in 0..<4 {
+                let f = Float(k) / 3
+                mats.append(starMat([0.88, 0.9, 1], vis * (0.62 + 0.3 * f), cut: 0.42 - 0.08 * f))
+            }
+            if let e = g.entity("bgStars\(i)", mats[2]) {
                 root.addChild(e)
-                bgEnts.append(e)
+                bgEnts.append((e, mats))
             }
         }
     }
@@ -194,7 +258,7 @@ final class SkyStars {
     private func build(_ c: Constellation, _ lst: Double) {
         var verts: [SIMD3<Float>] = []
         var segs: [(SIMD3<Float>, SIMD3<Float>)] = []
-        var normal = Geo(), bright = Geo(), lines = Geo()
+        var stars = Geo(), lines = Geo()
         var keys = Set<String>()
         var sum = SIMD3<Float>(0, 0, 0)
         for l in c.lines {
@@ -209,38 +273,25 @@ final class SkyStars {
                 verts.append(v)
                 sum += v
                 if dimOnly && s.mag > 2.6 { continue }
-                if v.y > 0.02 {
-                    starQuad(&normal, v, size: size(s.mag))
-                    starQuad(&bright, v, size: size(s.mag) * 1.7)
-                }
+                if v.y > 0.02 { starQuad(&stars, v, size: size(s.mag) * 1.1) }
             }
         }
         guard !verts.isEmpty else { return }
         let center = simd_normalize(sum)
-        // 별자리 전체가 지평선 아래면 건너뜀 (가장 높은 별이 3도 밑)
-        guard verts.contains(where: { $0.y > 0.05 }) else { return }
         var radius: Float = 0
         for v in verts { radius = max(radius, acos(min(1, simd_dot(v, center)))) }
         let g = Group(c: c, dir: center, radius: radius, verts: verts, segs: segs)
-        if let e = normal.entity("con", starMat([0.95, 0.96, 1], 0.95)) { root.addChild(e); g.normal = e }
-        if let e = bright.entity("conFocus", starMat([1, 0.97, 0.9], 1.25)) {
-            e.components.set(OpacityComponent(opacity: 0))
-            e.isEnabled = false
-            root.addChild(e)
-            g.bright = e
-        }
+        if let e = stars.entity("con", conMats[0]) { root.addChild(e); g.stars = e; g.level = 0 }
+        // 선: 별 앞에서 별을 비켜 (별 둘레에 틈), 불투명
         for (a, b) in segs where a.y > 0 || b.y > 0 {
-            let pa = a * R * 0.995, pb = b * R * 0.995
+            let pa = a * R * 0.99, pb = b * R * 0.99
             let d = simd_normalize(pb - pa)
-            let gap: Float = R * 0.006
+            let gap: Float = R * 0.008
             guard simd_distance(pa, pb) > gap * 2.2 else { continue }
-            lines.stroke(pa + d * gap, pb - d * gap, width: R * 0.0016)
+            lines.stroke(pa + d * gap, pb - d * gap, width: R * 0.0018)
         }
-        let lineCol: UIColor = look == .line ? UIColor(white: 0.12, alpha: 1) : (look == .mono ? UIColor(white: 0.9, alpha: 1) : UIColor(red: 0.7, green: 0.82, blue: 1, alpha: 1))
-        var lm = UnlitMaterial(color: lineCol)
-        lm.blending = .transparent(opacity: .init(floatLiteral: 0.85))
-        if let e = lines.entity("conLines", lm) {
-            e.components.set(OpacityComponent(opacity: 0))
+        let lineCol: UIColor = look == .line ? UIColor(white: 0.12, alpha: 1) : (look == .mono ? UIColor(white: 0.85, alpha: 1) : UIColor(red: 0.62, green: 0.76, blue: 1, alpha: 1))
+        if let e = lines.entity("conLines", UnlitMaterial(color: lineCol)) {
             e.isEnabled = false
             root.addChild(e)
             g.lines = e
@@ -248,17 +299,16 @@ final class SkyStars {
         groups.append(g)
     }
 
-    /// 그 방향의 별자리 (별·선에서 3.5도 안, 가장 가까운 것)
-    private func near(_ dirIn: SIMD3<Float>, tol: Float = 0.06) -> Group? {
+    /// 그 방향의 별자리 (별·선·별자리 안쪽에서 tol 안, 가장 가까운 것)
+    private func near(_ dirIn: SIMD3<Float>, tol: Float) -> Group? {
         let d = simd_normalize(dirIn)
         var best: (Group, Float)? = nil
         for g in groups {
             let a = acos(min(1, max(-1, simd_dot(d, g.dir))))
             guard a < g.radius + tol else { continue }
-            var m: Float = 10
+            var m: Float = a < g.radius * 0.6 ? 0 : 10                 // 별자리 한가운데를 봐도 그 별자리
             for v in g.verts { m = min(m, acos(min(1, max(-1, simd_dot(d, v))))) }
             for (p, q) in g.segs {
-                // 큰 원 위 선분까지 거리 (작은 각이라 평면 근사)
                 let pq = q - p
                 let l2 = simd_length_squared(pq)
                 guard l2 > 1e-8 else { continue }
@@ -277,29 +327,31 @@ final class SkyStars {
         focusT -= dt
         if focusT <= 0 {
             focusT = 0.12
-            focused = near(gaze, tol: 0.055)
+            focused = near(gaze, tol: 0.09)
         }
-        // 구름: 천천히 흐려졌다 또렷해짐
+        // 구름: 천천히 흐려졌다 또렷해짐 (0~1), 반짝임은 무리마다 재질 단계를 바꿈
         let cl: Float = cloudy ? 0.5 + 0.5 * max(0, sin(t * 0.07)) : 1
-        for (i, e) in bgEnts.enumerated() {
-            let tw: Float = 0.82 + (windy ? 0.18 : 0.1) * sin(t * (2.1 + Float(i) * 0.9) + Float(i) * 2)
-            e.components.set(OpacityComponent(opacity: tw * cl))
+        twT -= dt
+        if twT <= 0 {
+            twT = windy ? 0.18 : 0.3
+            for (i, b) in bgEnts.enumerated() {
+                let tw = 0.5 + 0.5 * sin(t * (1.7 + Float(i) * 0.8) + Float(i) * 2)
+                let k = max(0, min(3, Int((tw * cl * 3).rounded())))
+                b.0.model?.materials = [b.1[k]]
+            }
         }
         for g in groups {
             let want: Float = (g === focused || g.picked) ? 1 : 0
-            if abs(g.focus - want) > 0.005 || want > 0 {
-                g.focus += (want - g.focus) * min(1, dt * 6)
-                if let b = g.bright {
-                    let on = g.focus > 0.01
-                    if b.isEnabled != on { b.isEnabled = on }
-                    if on { b.components.set(OpacityComponent(opacity: g.focus * (0.85 + 0.15 * sin(t * 5)) * cl)) }
-                }
-            }
-            if g.picked { g.reveal = min(1, g.reveal + dt / 0.9) } else if g.reveal > 0 { g.reveal = max(0, g.reveal - dt * 1.2) }
+            g.focus += (want - g.focus) * min(1, dt * 7)
+            let lv = max(0, min(conMats.count - 1, Int((g.focus * cl * Float(conMats.count - 1)).rounded())))
+            if lv != g.level, let e = g.stars { e.model?.materials = [conMats[lv]]; g.level = lv }
+            if g.picked { g.reveal = min(1, g.reveal + dt / 0.8) } else if g.reveal > 0 { g.reveal = max(0, g.reveal - dt * 1.5) }
             if let l = g.lines {
                 let on = g.reveal > 0.01
                 if l.isEnabled != on { l.isEnabled = on }
-                if on { l.components.set(OpacityComponent(opacity: g.reveal * cl)) }
+                if on {
+                    if g.reveal < 0.999 { l.components.set(OpacityComponent(opacity: g.reveal * cl)) } else { l.components.remove(OpacityComponent.self) }
+                }
             }
             if let lb = g.label {
                 lb.components.set(OpacityComponent(opacity: g.reveal * cl))
@@ -308,33 +360,37 @@ final class SkyStars {
         }
     }
 
-    /// 탭: 그 방향의 별자리를 고름 (없으면 nil) — 선을 긋고 이름을 띄움
-    func pick(_ d: SIMD3<Float>) -> Constellation? {
-        guard visible, let g = near(d, tol: 0.07) else { return nil }
+    /// 탭: 그 방향의 별자리를 고름 (없으면 nil) — 선을 긋고 별자리 바로 아래(내 눈 기준 아래)에 이름. viewUp: 내 머리의 위쪽 방향
+    func pick(_ d: SIMD3<Float>, viewUp: SIMD3<Float>) -> (Constellation, SIMD3<Float>)? {
+        guard visible, let g = near(d, tol: 0.11) else { return nil }
         for o in groups { o.picked = o === g }
         g.reveal = 0
-        if g.label == nil { g.label = makeLabel(g) }
+        g.label?.removeFromParent()
+        g.label = makeLabel(g, viewUp: viewUp)
         Sfx.play("star_chime", in: root, at: g.dir * 4, gain: -4)
-        return g.c
+        return (g.c, g.dir)
     }
 
     func unpick() {
         for g in groups { g.picked = false }
     }
 
-    private func makeLabel(_ g: Group) -> Entity {
-        let up0 = SIMD3<Float>(0, 1, 0)
-        var upT = up0 - g.dir * simd_dot(up0, g.dir)
+    private func makeLabel(_ g: Group, viewUp: SIMD3<Float>) -> Entity {
+        // 내 눈의 위쪽을 그 별자리 자리의 하늘 면에 눕힌 방향 = 글자 위쪽. 이름은 별자리의 가장 아래 별보다 조금 아래
+        var upT = viewUp - g.dir * simd_dot(viewUp, g.dir)
+        if simd_length(upT) < 0.05 { upT = SIMD3<Float>(0, 1, 0) - g.dir * g.dir.y }
         upT = simd_length(upT) > 0.01 ? simd_normalize(upT) : SIMD3<Float>(0, 0, -1)
-        // 별자리 아래쪽 (가장 낮은 별보다 조금 아래)
-        let below = simd_normalize(g.dir - upT * (g.radius + 0.05))
-        let col: UIColor = look == .line ? UIColor(white: 0.12, alpha: 1) : UIColor(white: 0.95, alpha: 1)
-        let text = MeshResource.generateText(g.c.name, extrusionDepth: 0.05, font: .systemFont(ofSize: CGFloat(R * 0.024), weight: .medium), alignment: .center)
+        var low: Float = 0
+        for v in g.verts { low = max(low, -simd_dot(v - g.dir, upT)) }        // 별자리 가운데에서 가장 아래 별까지 (내 눈 기준)
+        let at = simd_normalize(g.dir - upT * (low + 0.075))
+        let col: UIColor = look == .line ? UIColor(white: 0.12, alpha: 1) : UIColor(red: 0.86, green: 0.91, blue: 1, alpha: 1)
+        let dist: Float = R * 0.97
+        let text = MeshResource.generateText(g.c.name, extrusionDepth: 0.02, font: .systemFont(ofSize: CGFloat(dist * 0.045), weight: .semibold), alignment: .center)
         let te = ModelEntity(mesh: text, materials: [UnlitMaterial(color: col)])
         let bb = te.visualBounds(relativeTo: nil)
         te.position = SIMD3<Float>(-(bb.min.x + bb.max.x) / 2, -(bb.min.y + bb.max.y) / 2, 0)
         let holder = Entity()
-        holder.look(at: .zero, from: below * R * 0.98, upVector: upT, relativeTo: root)
+        holder.look(at: .zero, from: at * dist, upVector: upT, relativeTo: root)
         let flipE = Entity()
         flipE.orientation = simd_quatf(angle: .pi, axis: [0, 1, 0])          // 글자 앞면이 나를 보게
         flipE.addChild(te)

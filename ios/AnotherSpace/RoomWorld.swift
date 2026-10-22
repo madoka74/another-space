@@ -704,12 +704,7 @@ final class RoomWorld {
     /// 카페: 유리 천장 (온실 카페). 하늘·날씨가 그대로 보이고, 1.1m 간격 나무 들보 사이에 가는 철제 살(0.55m)이 유리를 나눔
     private func addCafeCeiling(_ rects: [PRect], _ L: Layout, y: Float) {
         let wood = Worlds.safe(tint * 0.9, min: 0.3)
-        // 아주 옅은 유리 (살짝 비치는 빛)
-        if !lineMode, let m = Self.flatMesh(rects, L, y: y - 0.005, tile: 1) {
-            var gm = UnlitMaterial(color: UIColor(red: 0.85, green: 0.93, blue: 0.95, alpha: 1))
-            gm.blending = .transparent(opacity: .init(floatLiteral: 0.07))
-            local.addChild(ModelEntity(mesh: m, materials: [gm]))
-        }
+        // (유리 면 자체는 그리지 않음: 방 안의 반투명 면은 그 뒤 하늘 창을 가려 현실이 비쳐 보일 수 있음 — 살과 들보로 유리 지붕을 나타냄)
         var g = Geo()
         var iron = Geo()
         var lines = Geo()
@@ -1623,7 +1618,7 @@ final class RoomWorld {
         }
         for i in flows.indices {
             var f = flows[i]
-            f.3 = (f.3 - f.2 * dt / 3.5).truncatingRemainder(dividingBy: 1)
+            f.3 = (f.3 + f.2 * dt / 3.5).truncatingRemainder(dividingBy: 1)        // 물길 시작(폭포) → 끝 쪽으로 흐름, 폭포는 아래로
             f.1.textureCoordinateTransform.offset = SIMD2<Float>(0, f.3)
             f.0.model?.materials = [f.1]
             flows[i] = f

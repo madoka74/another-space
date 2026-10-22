@@ -258,10 +258,10 @@ enum VoxStore {
 }
 
 /// 가구 = 바닥에서 솟은 10cm 기둥들 (마인크래프트처럼 반듯한 덩어리).
-/// - 기둥마다 점수: 그물에 가구로 보이면 +2, 바닥이 보이면(그 위가 비었음) -1. 3점이 되어야 보이고, 0점 밑으로 떨어져야 사라짐 →
-///   그물이 한두 번 흔들려도 생겼다 사라졌다 하지 않음. 비전프로가 그물을 치워도(멀어져서) 그대로 둠
+/// - 기둥마다 점수: 그물에 가구로 보이면 +2, 바닥이 보이면(그 위가 비었음) -1. 충분히 확인되어야 보이고,
+///   한 번 보이면 이번 탐험이 끝날 때까지 그대로(높이도) — 생겼다 사라졌다 하지 않음. 잘못 생긴 기둥은 다음 탐험 저장에서 빠짐
 /// - 늘 바닥에서 솟은 기둥이라 허공에 뜬 블록이 생길 수 없음. 둘레 8칸 중 기둥이 2개 넘게 있어야 그림(외톨이 기둥 없음)
-/// - 높이는 최근 4번 본 값의 가운데 값, 20cm 넘게 바뀌거나 세 번 연속 같을 때만 바꿈
+/// - 높이는 처음 보일 때 최근 4번 본 값의 가운데 값으로 정하고 그 뒤로는 바꾸지 않음
 @MainActor
 final class VoxelWorld {
     private struct Col {
@@ -354,19 +354,9 @@ final class VoxelWorld {
             byChunk[Self.chunkOfCol(k), default: []].insert(k)
             markDirty(k)
             changed = true
-        } else if c.shown && c.score <= -2 {
-            c.shown = false
-            byChunk[Self.chunkOfCol(k)]?.remove(k)
-            markDirty(k)
-            changed = true
-        } else if c.shown && med != c.h {
-            let steady = c.hist.count >= 4 && c.hist.allSatisfy { $0 == med }
-            if abs(Int(med) - Int(c.h)) >= 3 || steady {
-                c.h = med
-                markDirty(k)
-                changed = true
-            }
         }
+        // 한 번 보인 기둥은 이번 탐험이 끝날 때까지 그대로 (높이도 안 바꿈) — 가구가 생겼다 사라졌다·높이가 바뀌며
+        // 그 위에 놓인 차림·동물이 뜨거나 묻히지 않게. 바닥이 보였다는 기록만 남겨 두고, 다음 탐험 저장에서 뺌
         if !c.shown && c.score <= 0 && c.first >= 0 && now - c.lastHit > 4 { c.first = -1 }   // 한동안 안 보이면 처음부터 다시 셈
         if !c.shown && c.score <= -4 { cols[k] = nil; return }
         cols[k] = c
@@ -403,7 +393,8 @@ final class VoxelWorld {
     /// 저장할 기둥: 보이고, 세 번 넘게 확인한 것만 (잘못 생긴 기둥이 다음 탐험으로 넘어가지 않게)
     func saveList() -> [Int64: UInt8] {
         var out: [Int64: UInt8] = [:]
-        for (k, c) in cols where c.shown && c.seen >= 3 { out[k] = c.h }
+        // 이번 탐험에서 그 위가 비어(바닥이) 보인 뒤로 다시 가구로 보이지 않은 기둥은 저장하지 않음 → 다음 탐험부터 사라짐
+        for (k, c) in cols where c.shown && c.seen >= 3 && !(c.lastFloor > 0 && c.lastFloor > c.lastHit) { out[k] = c.h }
         return out
     }
 
@@ -422,6 +413,9 @@ final class VoxelWorld {
         let u = Int((p.x / Vox.size).rounded(.down)), v = Int((p.y / Vox.size).rounded(.down))
         return Float(shownH(u, v)) * Vox.size
     }
+
+    /// 그 10cm 칸(평면 격자 번호)에 보이는 가구 높이 (10cm 단위, 없으면 0)
+    func cellH(_ u: Int, _ v: Int) -> Int { shownH(u, v) }
 
     /// 고양이가 올라앉을 만한 평평한 가구 윗면 높이 (둘레 3×3 칸이 모두 보이고 높이 차가 10cm 안). 아니면 nil
     func flatTop(_ p: SIMD2<Float>) -> Float? {

@@ -19,7 +19,7 @@ final class CafeMusic {
     private var recent: [Int] = []
     private var t: Double = 0
     private var on = false
-    static let gain: Double = -15
+    static let gain: Double = -7
 
     var available: Bool { !Self.items.isEmpty }
 
@@ -75,77 +75,181 @@ final class CafeMusic {
     }
 }
 
-/// 카페 테이블: 비전프로가 '탁자'로 알아본 실제 수평면(정확한 높이·크기·방향)에만 차림을 올림 → 공중에 뜨지 않음.
-/// 탁자 크기에 맞춰 마주 앉는 두 자리(잔+받침, 디저트 접시)와 가운데 꽃병·화분·촛불. 잔·접시는 여러 빛깔 유약, 실제 방 빛을 받는 재질.
-/// 탁자 면이 움직이거나 커지면 다시 놓고, 사라지면 치움. 따뜻한 음료는 김, 해질녘·밤엔 촛불
+/// 카페 테이블 차림: 방에 보이는 가구 블록 중 평평한 윗면(높이 50cm~1.1m, 같은 높이로 이어진 면)에만 올림.
+/// 보이는 블록 윗면 높이에 정확히 놓으므로 뜨거나 묻히지 않음 — 가구 블록은 한 번 보이면 탐험이 끝날 때까지 그대로라 차림도 그대로.
+/// 윗면 크기에 맞춰: 넓으면 서로 떨어진 두 자리(잔·받침 + 디저트 접시), 좁으면 한 자리, 가운데엔 꽃병·화분·책(밤엔 촛불).
+/// 물건마다 차지하는 둥근 자리가 윗면 안쪽(가장자리에서 떨어진 곳)에 다 들어가고 서로 겹치지 않을 때만 놓음.
+/// 한 번 놓은 차림은 이 방에 있는 동안(다른 방에 다녀와도) 바뀌지 않음
 @MainActor
 final class CafeTables {
-    struct Table: Equatable {
-        var c: SIMD3<Float>                      // 면 가운데 (저장 좌표, y = 윗면 높이)
-        var w: Float, d: Float                   // 면 크기 (x, z)
-        var yaw: Float
-    }
-
     let root = Entity()
-    private var sets: [UUID: (Table, Entity)] = [:]
+    private var used = Set<Int64>()                 // 차림이 놓인 윗면의 칸 (다시 고르지 않게)
+    private var sets = 0
     private var flames: [(Entity, Float)] = []
-    private var scanT: Float = 0.5
+    private var scanT: Float = 0.8
     private var t: Float = 0
     private let look: LookMode
     private let time: String
+    private let room: Int
 
-    init(look: LookMode, time: String) {
+    init(look: LookMode, time: String, room: Int) {
         self.look = look
         self.time = time
+        self.room = room
     }
 
-    func tick(_ dt: Float, head: SIMD3<Float>, floorY: Float, tables: [UUID: Table], inRoom: (SIMD2<Float>) -> Bool) {
+    private static func key(_ u: Int, _ v: Int) -> Int64 { (Int64(u) + 100_000) << 20 | (Int64(v) + 100_000) }
+
+    /// cellH: 그 10cm 칸에 보이는 가구 블록 높이(10cm 단위, 없으면 0)
+    func tick(_ dt: Float, head: SIMD3<Float>, L: Layout, cellH: (Int, Int) -> Int) {
         t += dt
         for (e, ph) in flames where e.parent != nil {
             let k = 0.85 + 0.15 * sin(t * 13 + ph) * sin(t * 7.1 + ph * 2)
             e.scale = SIMD3<Float>(1, k, 1)
         }
         scanT -= dt
-        guard scanT <= 0 else { return }
+        guard scanT <= 0, sets < 6 else { return }
         scanT = 1
-        let me = SIMD2<Float>(head.x, head.z)
-        func ok(_ tb: Table) -> Bool {
-            let h = tb.c.y - floorY
-            return h > 0.4 && h < 1.2 && min(tb.w, tb.d) >= 0.28 && inRoom(SIMD2<Float>(tb.c.x, tb.c.z))
-        }
-        // 사라졌거나 옮겨진 탁자
-        for (id, s) in sets {
-            guard let tb = tables[id], ok(tb) else {
-                s.1.removeFromParent(); sets[id] = nil; continue
+        let me = L.plane(head.x, head.z)
+        let u0 = Int((me.x / 0.1).rounded(.down)), v0 = Int((me.y / 0.1).rounded(.down))
+        let R = 35
+        var seen = Set<Int64>()
+        var regions: [(Int, [(Int, Int)])] = []
+        for du in -R...R {
+            for dv in -R...R where du * du + dv * dv <= R * R {
+                let u = u0 + du, v = v0 + dv
+                let k = Self.key(u, v)
+                guard !seen.contains(k), !used.contains(k) else { continue }
+                let h = cellH(u, v)
+                guard h >= 5 && h <= 11 else { continue }
+                let pc = SIMD2<Float>((Float(u) + 0.5) * 0.1, (Float(v) + 0.5) * 0.1)
+                guard L.at(x: L.flat(pc).x, z: L.flat(pc).y).room == room else { continue }
+                // 같은 높이로 이어진 칸 모으기
+                var cells: [(Int, Int)] = []
+                var stack = [(u, v)]
+                seen.insert(k)
+                while let c = stack.popLast(), cells.count < 400 {
+                    cells.append(c)
+                    for (a, b) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                        let n = (c.0 + a, c.1 + b), nk = Self.key(n.0, n.1)
+                        guard !seen.contains(nk), !used.contains(nk), cellH(n.0, n.1) == h else { continue }
+                        seen.insert(nk)
+                        stack.append(n)
+                    }
+                }
+                if cells.count >= 12 { regions.append((h, cells)) }
             }
-            let moved = simd_distance(tb.c, s.0.c) > 0.04 || abs(tb.yaw - s.0.yaw) > 0.08
-            let grown = abs(min(tb.w, tb.d) - min(s.0.w, s.0.d)) > 0.15 || abs(max(tb.w, tb.d) - max(s.0.w, s.0.d)) > 0.25
-            if grown {
-                s.1.removeFromParent(); sets[id] = nil
-            } else if moved {
-                s.1.position = tb.c
-                s.1.orientation = simd_quatf(angle: tb.yaw, axis: [0, 1, 0])
-                sets[id] = (tb, s.1)
+        }
+        regions.sort { $0.1.count > $1.1.count }
+        for (h, cells) in regions.prefix(2) where sets < 6 {
+            place(h, cells, L)
+        }
+    }
+
+    /// 한 윗면에 차림 놓기
+    private func place(_ h: Int, _ cells: [(Int, Int)], _ L: Layout) {
+        let inside = Set(cells.map { Self.key($0.0, $0.1) })
+        // 가장자리까지 칸 수 (가장자리 칸 = 1)
+        var depth: [Int64: Int] = [:]
+        var frontier: [(Int, Int)] = []
+        for c in cells {
+            let edge = [(1, 0), (-1, 0), (0, 1), (0, -1)].contains { !inside.contains(Self.key(c.0 + $0.0, c.1 + $0.1)) }
+            if edge { depth[Self.key(c.0, c.1)] = 1; frontier.append(c) }
+        }
+        var d = 1
+        while !frontier.isEmpty {
+            d += 1
+            var next: [(Int, Int)] = []
+            for c in frontier {
+                for (a, b) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                    let n = (c.0 + a, c.1 + b), nk = Self.key(n.0, n.1)
+                    guard inside.contains(nk), depth[nk] == nil else { continue }
+                    depth[nk] = d
+                    next.append(n)
+                }
+            }
+            frontier = next
+        }
+        func ctr(_ c: (Int, Int)) -> SIMD2<Float> { SIMD2<Float>((Float(c.0) + 0.5) * 0.1, (Float(c.1) + 0.5) * 0.1) }
+        // 그 칸에 놓을 수 있는 물건 반지름 (칸 가운데에서 윗면 가장자리까지 - 2cm)
+        func space(_ c: (Int, Int)) -> Float { Float(depth[Self.key(c.0, c.1)] ?? 0) * 0.1 - 0.07 }
+        var placed: [(SIMD2<Float>, Float)] = []
+        func fits(_ p: SIMD2<Float>, _ r: Float) -> Bool { placed.allSatisfy { simd_distance($0.0, p) >= $0.1 + r + 0.025 } }
+        var g = SeededRNG(seed: UInt64(truncatingIfNeeded: cells.count * 7919 + cells[0].0 * 131 + cells[0].1 * 31 + 7))
+        let setE = Entity()
+        let top = L.floorY + Float(h) * 0.1
+        var items: [(SIMD2<Float>, String)] = []
+        // 잔 자리: 들어갈 수 있는 칸 중 서로 가장 먼 두 칸 (넓으면), 아니면 가장 안쪽 한 칸
+        let cupR: Float = 0.08, plateR: Float = 0.1
+        let cupCells = cells.filter { space($0) >= cupR }
+        guard !cupCells.isEmpty else { return }
+        var best: ((Int, Int), (Int, Int), Float)? = nil
+        for _ in 0..<60 {
+            let a = cupCells[Int(g.next() % UInt64(cupCells.count))], b = cupCells[Int(g.next() % UInt64(cupCells.count))]
+            let dd = simd_distance(ctr(a), ctr(b))
+            if best == nil || dd > best!.2 { best = (a, b, dd) }
+        }
+        guard let pair = best else { return }
+        let seats = pair.2 >= 0.45 ? [pair.0, pair.1] : [cupCells.max { space($0) < space($1) } ?? pair.0]
+        for sc in seats where fits(ctr(sc), cupR) {
+            placed.append((ctr(sc), cupR))
+            items.append((ctr(sc), "cup"))
+        }
+        // 접시: 잔 옆 (15~25cm), 들어갈 때만
+        for (cp, _) in items where g.next() % 3 != 0 {
+            let opts = cells.filter { space($0) >= plateR && simd_distance(ctr($0), cp) > 0.17 && simd_distance(ctr($0), cp) < 0.3 && fits(ctr($0), plateR) }
+            if let pc = opts.randomElement(using: &g) {
+                placed.append((ctr(pc), plateR))
+                items.append((ctr(pc), "plate"))
             }
         }
-        guard sets.count < 6 else { return }
-        let fresh = tables.filter { sets[$0.key] == nil && ok($0.value) && simd_distance(SIMD2<Float>($0.value.c.x, $0.value.c.z), me) < 4.5 }
-            .sorted { simd_distance(SIMD2<Float>($0.value.c.x, $0.value.c.z), me) < simd_distance(SIMD2<Float>($1.value.c.x, $1.value.c.z), me) }
-        for (id, tb) in fresh.prefix(6 - sets.count) {
-            // 다른 탁자 면과 겹치면(같은 탁자를 두 번 알아봄) 건너뜀
-            if sets.values.contains(where: { simd_distance($0.0.c, tb.c) < 0.5 }) { continue }
-            var g = SeededRNG(seed: UInt64(truncatingIfNeeded: id.hashValue))
-            let e = makeSet(tb, &g)
-            e.position = tb.c
-            e.orientation = simd_quatf(angle: tb.yaw, axis: [0, 1, 0])
-            root.addChild(e)
-            sets[id] = (tb, e)
+        // 가운데 장식: 윗면 가운데에 가장 가까운 빈 곳
+        let mean = cells.map(ctr).reduce(SIMD2<Float>(0, 0), +) / Float(cells.count)
+        let night = time == "night" || time == "dusk" || time == "dawn"
+        let deco = night ? "candle" : ["vase", "vase", "pot", "book"][Int(g.next() % 4)]
+        let decoR: Float = deco == "book" ? 0.13 : 0.05
+        if let dc = cells.filter({ space($0) >= decoR && fits(ctr($0), decoR) }).min(by: { simd_distance(ctr($0), mean) < simd_distance(ctr($1), mean) }) {
+            placed.append((ctr(dc), decoR))
+            items.append((ctr(dc), deco))
+            if night, g.next() % 2 == 0, let vc = cells.filter({ space($0) >= 0.04 && fits(ctr($0), 0.04) }).min(by: { simd_distance(ctr($0), ctr(dc)) < simd_distance(ctr($1), ctr(dc)) }) {
+                placed.append((ctr(vc), 0.04))
+                items.append((ctr(vc), "vase"))
+            }
         }
+        guard !items.isEmpty else { return }
+        let glaze = Self.glazes[Int(g.next() % UInt64(Self.glazes.count))]
+        for (i, it) in items.enumerated() {
+            let w2 = L.flat(it.0)
+            let holder = Entity()
+            holder.position = SIMD3<Float>(w2.x, top + 0.001, w2.y)
+            var lines = Geo()
+            switch it.1 {
+            case "cup":
+                let drink = Int(g.next() % 5)
+                let other = Self.glazes[Int(g.next() % UInt64(Self.glazes.count))]
+                let mine = (i > 0 && g.next() % 2 == 0) ? other : glaze
+                // 손잡이는 차림 가운데 반대쪽 (앉은 사람 쪽)
+                let away = it.0 - mean
+                let turn: Float = simd_length(away) > 0.01 ? atan2(away.y, away.x) : 0
+                if drink == 4 { icedGlass(.zero, &g, holder, &lines) } else { cup(.zero, kind: drink, glaze: mine, turn: turn, &g, holder, &lines) }
+            case "plate":
+                let food = Int(g.next() % 3)
+                plate(.zero, glaze, food: food, &g, holder, &lines)
+            case "candle": candle(.zero, holder, &lines)
+            case "pot": pot(.zero, &g, holder, &lines)
+            case "book": book(.zero, &g, holder, &lines)
+            default: budVase(.zero, &g, holder, &lines)
+            }
+            if let e = lines.entity("setLines", Ink.line) { holder.addChild(e) }
+            setE.addChild(holder)
+        }
+        root.addChild(setE)
+        for c in cells { used.insert(Self.key(c.0, c.1)) }
+        sets += 1
     }
 
     func remove() {
         root.removeFromParent()
-        sets.removeAll()
         flames.removeAll()
     }
 
@@ -188,56 +292,6 @@ final class CafeTables {
         e.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0]) * simd_quatf(angle: tilt, axis: [0, 0, 1])
         if look != .line { e.components.set(GroundingShadowComponent(castsShadow: true)) }
         p.addChild(e)
-    }
-
-    // MARK: 차림
-    private func makeSet(_ tb: Table, _ g: inout SeededRNG) -> Entity {
-        let root = Entity()
-        var lines = Geo()
-        let long = max(tb.w, tb.d), short = min(tb.w, tb.d)
-        let alongX = tb.w >= tb.d
-        let night = time == "night" || time == "dusk" || time == "dawn"
-        let glaze = Self.glazes[Int(g.next() % UInt64(Self.glazes.count))]
-        // 탁자 안쪽(가장자리 8cm 안)으로만
-        func clampIn(_ p: SIMD2<Float>, _ r: Float) -> SIMD2<Float> {
-            SIMD2<Float>(max(-tb.w / 2 + r + 0.06, min(tb.w / 2 - r - 0.06, p.x)), max(-tb.d / 2 + r + 0.06, min(tb.d / 2 - r - 0.06, p.y)))
-        }
-        func axis(_ a: Float, _ b: Float) -> SIMD2<Float> { alongX ? SIMD2<Float>(a, b) : SIMD2<Float>(b, a) }
-        let seats = (long >= 0.55 && short >= 0.4) ? 2 : 1
-        let off = min(0.36, long * 0.3)
-        for k in 0..<seats {
-            let sgn: Float = seats == 1 ? 0 : (k == 0 ? -1 : 1)
-            // 자리마다: 잔(받침 위) + 가끔 디저트 접시
-            let cupAt = clampIn(axis(sgn * off, (seats == 1 ? -0.05 : 0.06 * sgn)), 0.08)
-            let drink = Int(g.next() % 5)
-            let other = Self.glazes[Int(g.next() % UInt64(Self.glazes.count))]
-            let mine = (k == 1 && g.next() % 2 == 0) ? other : glaze
-            let turn: Float = sgn >= 0 ? .pi : 0
-            if drink == 4 {
-                icedGlass(cupAt, &g, root, &lines)
-            } else {
-                cup(cupAt, kind: drink, glaze: mine, turn: turn, &g, root, &lines)
-            }
-            if g.next() % 3 != 0, short >= 0.45 || seats == 1 {
-                let pl = clampIn(axis(sgn * off * 0.55 + (seats == 1 ? 0.16 : 0), (seats == 1 ? 0.08 : -0.12 * sgn)), 0.1)
-                let food = Int(g.next() % 3)
-                plate(pl, glaze, food: food, &g, root, &lines)
-            }
-        }
-        // 가운데: 밤엔 촛불, 아니면 꽃병·화분 (가끔 책)
-        let mid = clampIn(axis(0, seats == 1 ? 0.0 : 0), 0.05)
-        if night {
-            candle(mid + axis(0.0, -0.04), root, &lines)
-            if seats == 2 && g.next() % 2 == 0 { budVase(mid + axis(0.07, 0.05), &g, root, &lines) }
-        } else {
-            switch g.next() % 4 {
-            case 0, 1: budVase(mid, &g, root, &lines)
-            case 2: pot(mid, &g, root, &lines)
-            default: book(clampIn(mid + axis(0.05, 0.02), 0.12), &g, root, &lines)
-            }
-        }
-        if let e = lines.entity("setLines", Ink.line) { root.addChild(e) }
-        return root
     }
 
     private func outline(_ prof: [SIMD2<Float>], at p: SIMD2<Float>, y0: Float = 0, _ lines: inout Geo, rings: [Int]) {
@@ -502,19 +556,27 @@ final class CafeTables {
         }
     }
 
+    /// 따뜻한 음료의 김: 가늘고 옅은 김이 잔 위에서 피어 흔들리며 사라짐 (큰 덩어리가 겹쳐 보이지 않게 작고 많이)
     private func steam(_ at: SIMD3<Float>, _ root: Entity) {
         var pe = ParticleEmitterComponent()
-        pe.emitterShape = .point
+        pe.emitterShape = .sphere
+        pe.emitterShapeSize = [0.025, 0.004, 0.025]
+        pe.birthLocation = .volume
         pe.birthDirection = .world
         pe.emissionDirection = [0, 1, 0]
-        pe.speed = 0.045
-        pe.speedVariation = 0.015
-        pe.mainEmitter.birthRate = 4
-        pe.mainEmitter.lifeSpan = 2.4
-        pe.mainEmitter.size = 0.014
-        pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 4
-        pe.mainEmitter.noiseStrength = 0.02
-        pe.mainEmitter.color = .constant(.single(look == .line ? UIColor(white: 0.4, alpha: 0.22) : UIColor(white: 1, alpha: 0.26)))
+        pe.speed = 0.035
+        pe.speedVariation = 0.012
+        pe.mainEmitter.birthRate = 14
+        pe.mainEmitter.lifeSpan = 1.8
+        pe.mainEmitter.lifeSpanVariation = 0.5
+        pe.mainEmitter.size = 0.006
+        pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 5
+        pe.mainEmitter.noiseStrength = 0.012
+        pe.mainEmitter.noiseScale = 4
+        pe.mainEmitter.noiseAnimationSpeed = 0.6
+        pe.mainEmitter.acceleration = [0, 0.01, 0]
+        pe.mainEmitter.color = .constant(.single(look == .line ? UIColor(white: 0.45, alpha: 0.12) : UIColor(white: 1, alpha: 0.11)))
+        pe.mainEmitter.blendMode = .alpha
         pe.mainEmitter.opacityCurve = .gradualFadeInOut
         if let puff = Tex.get("smoke_puff", color: true) { pe.mainEmitter.image = puff }
         let se = Entity()

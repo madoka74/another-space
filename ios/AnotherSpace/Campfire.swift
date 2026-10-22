@@ -469,7 +469,7 @@ final class Campfire {
         t += dt
         if !dying {
             let before = amt
-            amt = min(1, amt + dt / 2.2)                           // 2초쯤 걸려 불이 붙어 커짐
+            amt = min(1, amt + dt / 1.4)                           // 바로 불씨가 보이고 1.4초쯤 걸려 커짐
             if before < 0.15 && amt >= 0.15 {
                 setRate(fireE, baseRates.0, on: true)
                 setRate(sparkE, baseRates.1, on: true)

@@ -503,12 +503,15 @@ final class Scenery {
                 pe.emissionDirection = [0, 1, 0]
                 pe.speed = 0.25
                 pe.speedVariation = 0.1
-                pe.mainEmitter.birthRate = 40
-                pe.mainEmitter.lifeSpan = 1.6
-                pe.mainEmitter.size = 0.02
-                pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 6
-                pe.mainEmitter.noiseStrength = 0.05
-                pe.mainEmitter.color = .constant(.single(pcolor([1, 1, 1], 0.3)))
+                pe.mainEmitter.birthRate = 60                                     // 작고 옅은 김을 많이 (큰 동그라미가 겹쳐 보이지 않게)
+                pe.mainEmitter.lifeSpan = 1.4
+                pe.mainEmitter.lifeSpanVariation = 0.4
+                pe.mainEmitter.size = 0.01
+                pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 5
+                pe.mainEmitter.noiseStrength = 0.06
+                pe.mainEmitter.noiseScale = 3
+                pe.mainEmitter.blendMode = .alpha
+                pe.mainEmitter.color = .constant(.single(pcolor([1, 1, 1], 0.15)))
                 pe.mainEmitter.opacityCurve = .gradualFadeInOut
                 if let puff = Tex.get("smoke_puff", color: true) { pe.mainEmitter.image = puff }
                 pe.isEmitting = false

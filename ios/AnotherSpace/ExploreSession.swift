@@ -34,9 +34,15 @@ struct ExploreView: View {
         .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { v in
             s.tapped(v.entity, at: v.convert(v.location3D, from: .local, to: .scene))
         })
-        // 해설 창 아래 막대를 잡고 끌면 창을 옮김
+        // 창(안내판·테마 판·해설·별자리 정보) 아래 막대를 잡고 끌면 창을 옮김
         .simultaneousGesture(DragGesture().targetedToEntity(where: .has(GrabTag.self)).onChanged { v in
-            s.dragDocent(to: v.convert(v.location3D, from: .local, to: .scene))
+            s.dragPanel(v.entity, to: v.convert(v.location3D, from: .local, to: .scene))
+        })
+        // 장난감(털실 공·막대)을 집어 옮기고 놓으면 던짐
+        .simultaneousGesture(DragGesture(minimumDistance: 0.01).targetedToEntity(where: .has(ToyTag.self)).onChanged { v in
+            s.dragToy(v.entity, to: v.convert(v.location3D, from: .local, to: .scene))
+        }.onEnded { v in
+            s.dropToy(v.entity)
         })
         .task { await s.start() }
         .onDisappear { s.stop() }
@@ -93,8 +99,10 @@ private struct ExploreHud: View {
     }
 }
 
-/// 끌 수 있는 막대 표시 (해설 창 옮기기)
-struct GrabTag: Component {}
+/// 끌 수 있는 막대 표시 (창 옮기기) — panel: 어느 창의 막대인지
+struct GrabTag: Component { var panel: String = "" }
+/// 집어서 던질 수 있는 장난감 (고양이 털실 공·강아지 막대)
+struct ToyTag: Component {}
 
 /// 테마 판: 크기가 늘 같은 판 (칩 9개가 딱 들어가는 폭, 좌우 여백 같게)
 private struct ThemePanel: View {
@@ -211,7 +219,18 @@ final class ExploreSession {
     @ObservationIgnored private var themePanel: Entity?
     // 그림 설명
     @ObservationIgnored private var docentCard: Entity?
-    @ObservationIgnored private var docentBar: Entity?
+    @ObservationIgnored private var bars: [String: Entity] = [:]     // 창마다 아래 옮기기 막대
+    @ObservationIgnored private var pinchClosed = [false, false]
+    @ObservationIgnored private var pinchOpenAt: [Float] = [-9, -9]
+    @ObservationIgnored private var pinchCloseAt: [Float] = [-9, -9]
+    @ObservationIgnored private var handTapAt: Float?
+    @ObservationIgnored private var lastSysTap: Float = -9
+    @ObservationIgnored private var lastHandTap: Float = -9
+    @ObservationIgnored private var hudPinned = false
+    @ObservationIgnored private var tip: String?                     // 잠깐 알려 줄 사용법 (처음 한 번)
+    @ObservationIgnored private var tipUntil: Float = 0
+    @ObservationIgnored private var tipsShown = Set<String>()              // 안내판·테마 판을 옮겨 두었으면 그 자리에 둠 (닫힐 때까지)
+    @ObservationIgnored private var toyTrail: [(Float, SIMD3<Float>)] = []   // 장난감을 끄는 동안의 자리 (던지는 빠르기)
     @ObservationIgnored private var docentShow: Float = 0
     @ObservationIgnored private var themeQuiet: Float = 0     // 테마를 바꾼 직후엔 알림판을 띄우지 않음
     @ObservationIgnored private var badgeT: Float = 0
@@ -237,6 +256,7 @@ final class ExploreSession {
     @ObservationIgnored private var mats: [Int: RealityKit.Material] = [:]
     @ObservationIgnored private var head = SIMD3<Float>(0, 1.5, 0)
     @ObservationIgnored private var fwd = SIMD3<Float>(0, 0, -1)
+    @ObservationIgnored private var headUp = SIMD3<Float>(0, 1, 0)
     @ObservationIgnored private var lastHead: SIMD3<Float>?
     @ObservationIgnored private var speed: Float = 0
     @ObservationIgnored private var current = 0
@@ -269,9 +289,7 @@ final class ExploreSession {
     @ObservationIgnored private var starCard: Entity?
     @ObservationIgnored private let music = CafeMusic()
     @ObservationIgnored private let waterSound = WaterSound()
-    @ObservationIgnored private var tables: CafeTables?
-    @ObservationIgnored private var tablesKey = ""
-    @ObservationIgnored private var tablePlanes: [UUID: CafeTables.Table] = [:]
+    @ObservationIgnored private var cafeSets: [Int: (String, CafeTables)] = [:]   // 카페 방마다 차림 (그 방 테마가 바뀔 때만 새로)
     // 집 고양이
     @ObservationIgnored private var cat: HomeCat?
     @ObservationIgnored private var dog: HomeDog?
@@ -352,7 +370,7 @@ final class ExploreSession {
         var providers: [any DataProvider] = [w, m]
         // 세운 평면(문으로 알아본 면): 그물보다 빨리 바뀌어 실제 문이 열리고 닫히는 걸 바로 알 수 있음.
         // 누운 평면 중 '탁자'로 알아본 면: 카페 차림을 정확한 높이에 올림
-        let planes = PlaneDetectionProvider.isSupported ? PlaneDetectionProvider(alignments: [.vertical, .horizontal]) : nil
+        let planes = PlaneDetectionProvider.isSupported ? PlaneDetectionProvider(alignments: [.vertical]) : nil
         if let planes { providers.append(planes) }
         // 손: 닫힌 문짝을 잡고 당기거나 미는 순간을 바로 알아챔 (그물·평면은 문이 다 열리고도 몇 초 늦음)
         if HandTrackingProvider.isSupported && auth[.handTracking] == .allowed {
@@ -483,7 +501,8 @@ final class ExploreSession {
         fire?.remove(); fire = nil
         music.remove()
         waterSound.remove()
-        tables?.remove(); tables = nil
+        for (_, c) in cafeSets { c.1.remove() }
+        cafeSets.removeAll()
         cat?.remove(); cat = nil
         dog?.remove(); dog = nil
         updateSub?.cancel()
@@ -502,7 +521,8 @@ final class ExploreSession {
         dog?.remove(); dog = nil
         music.remove()
         waterSound.remove()
-        tables?.remove(); tables = nil
+        for (_, c) in cafeSets { c.1.remove() }
+        cafeSets.removeAll()
         player.stopAll()
         AppModel.shared.finish()
     }
@@ -519,39 +539,98 @@ final class ExploreSession {
         hud = e
         e.isEnabled = false
         root.addChild(e)
+        makeBar("hud")
     }
 
     func attachTheme(_ e: Entity) {
         themePanel = e
         e.isEnabled = false
         root.addChild(e)
+        makeBar("theme")
     }
 
     func attachDocent(_ e: Entity) {
         docentCard = e
         e.isEnabled = false
         root.addChild(e)
+        makeBar("docent")
+    }
+
+    /// 창 아래 옮기기 막대 (visionOS 창 막대처럼): 잡고 끌면 창이 따라오고 늘 나를 향함
+    private func makeBar(_ panel: String) {
         GrabTag.registerComponent()
-        // 창 아래 옮기기 막대 (창 막대처럼)
+        ToyTag.registerComponent()
         let bar = ModelEntity(mesh: .generateBox(width: 0.13, height: 0.012, depth: 0.012, cornerRadius: 0.006),
                               materials: [UnlitMaterial(color: UIColor(white: 0.92, alpha: 1))])
-        bar.name = "docent-grab"
-        bar.components.set(GrabTag())
+        bar.name = panel + "-grab"
+        bar.components.set(GrabTag(panel: panel))
         bar.components.set(InputTargetComponent())
         bar.components.set(CollisionComponent(shapes: [.generateBox(size: [0.26, 0.08, 0.08])]))
         bar.components.set(HoverEffectComponent())
         bar.isEnabled = false
         root.addChild(bar)
-        docentBar = bar
+        bars[panel] = bar
     }
 
-    /// 막대를 끌어 해설 창을 옮김 (창은 늘 나를 향함)
-    func dragDocent(to p: SIMD3<Float>) {
-        guard let card = docentCard, docent != nil else { return }
+    private func panel(_ name: String) -> Entity? {
+        switch name {
+        case "hud": return hud
+        case "theme": return themePanel
+        case "docent": return docentCard
+        case "stars": return starCard
+        default: return nil
+        }
+    }
+
+    /// 막대를 끌어 창을 옮김 (창은 늘 나를 향함). 안내판·테마 판은 옮긴 자리에 머묾
+    func dragPanel(_ e: Entity, to p: SIMD3<Float>) {
+        lastUITap = t
+        guard let tag = e.components[GrabTag.self], let card = panel(tag.panel), card.isEnabled else { return }
         let b = card.visualBounds(relativeTo: card)
         let below = b.min.y - 0.035
-        card.position = p - card.orientation.act(SIMD3<Float>(b.center.x, below, 0)) * card.scale
+        card.position = p - card.orientation.act(SIMD3<Float>(b.center.x, below, 0) * card.scale)
         faceDocent(card)
+        if tag.panel == "hud" || tag.panel == "theme" {
+            hudPinned = true
+            hudUntil = max(hudUntil, t + 6)
+            if let h = hud { h.position = card.position; h.orientation = card.orientation }
+        }
+    }
+
+    /// 창마다 막대를 창 아래 가운데에 붙임 (창이 보일 때만)
+    private func syncBars() {
+        for (name, bar) in bars {
+            guard let card = panel(name) else { continue }
+            let on = card.isEnabled
+            if bar.isEnabled != on { bar.isEnabled = on }
+            guard on else { continue }
+            let b = card.visualBounds(relativeTo: card)
+            bar.position = card.convert(position: SIMD3<Float>(b.center.x, b.min.y - 0.035, 0), to: root)
+            bar.orientation = card.orientation
+            bar.scale = SIMD3<Float>(repeating: max(0.5, card.scale.x))
+            if let o = card.components[OpacityComponent.self] { bar.components.set(o) } else { bar.components.remove(OpacityComponent.self) }
+        }
+    }
+
+    // MARK: 장난감 집어 던지기
+    func dragToy(_ e: Entity, to p: SIMD3<Float>) {
+        lastUITap = t
+        guard let f = fit else { return }
+        let sp = f.toSaved(p)
+        toyTrail.append((t, sp))
+        if toyTrail.count > 12 { toyTrail.removeFirst() }
+        if e.name == "catball" { cat?.holdBall(at: sp) } else if e.name == "dogstick" { dog?.holdStick(at: sp) }
+    }
+
+    func dropToy(_ e: Entity) {
+        lastUITap = t
+        // 놓기 직전 0.12초 동안 움직인 빠르기로 던짐
+        var v = SIMD3<Float>(0, 0, 0)
+        if let last = toyTrail.last, let first = toyTrail.last(where: { last.0 - $0.0 >= 0.1 }) ?? toyTrail.first, last.0 - first.0 > 0.01 {
+            v = (last.1 - first.1) / (last.0 - first.0)
+        }
+        toyTrail.removeAll()
+        if e.name == "catball" { cat?.releaseBall(vel: v) } else if e.name == "dogstick" { dog?.releaseStick(vel: v) }
     }
 
     private func faceDocent(_ card: Entity) {
@@ -656,17 +735,6 @@ final class ExploreSession {
     private func watchPlanes(_ p: PlaneDetectionProvider) async {
         for await u in p.anchorUpdates {
             let a = u.anchor
-            if a.alignment == .horizontal {
-                if u.event != .removed, a.classification == .table, let f = fit {
-                    let m = a.originFromAnchorTransform * a.geometry.extent.anchorFromExtentTransform
-                    let c = f.toSaved(simd_make_float3(m.columns.3))
-                    let ax = f.dirToSaved(simd_make_float3(m.columns.0))
-                    tablePlanes[a.id] = CafeTables.Table(c: c, w: a.geometry.extent.width, d: a.geometry.extent.height, yaw: atan2(-ax.z, ax.x))
-                } else {
-                    tablePlanes[a.id] = nil
-                }
-                continue
-            }
             guard a.classification == .door || doorPlanes[a.id] != nil else { continue }
             guard let f = fit, let L = layout else { continue }
             let was = doorPlanes[a.id]
@@ -886,6 +954,7 @@ final class ExploreSession {
         let m = dev.originFromAnchorTransform
         head = simd_make_float3(m.columns.3)
         fwd = -simd_make_float3(m.columns.2)
+        headUp = simd_make_float3(m.columns.1)
         if let lh = lastHead, dt > 0 { speed += (simd_distance(lh.xz, head.xz) / dt - speed) * min(1, dt * 4) }
         lastHead = head
 
@@ -958,7 +1027,7 @@ final class ExploreSession {
         if fit != nil {
             let total = data?.rec.rooms.count ?? 0
             let msg: String? = !ready ? "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
-                : (!floorOK ? "바닥 높이를 맞추는 중이에요. 발밑을 한 번 내려다봐 주세요." : (why ?? player.status))
+                : (!floorOK ? "바닥 높이를 맞추는 중이에요. 발밑을 한 번 내려다봐 주세요." : (why ?? (t < tipUntil ? tip : nil) ?? player.status))
             if msg != message {
                 message = msg
                 if msg != nil && t > themeQuiet { hudUntil = max(hudUntil, t + 4) }      // 새 알림은 4초 보여 주고 사라짐
@@ -976,6 +1045,15 @@ final class ExploreSession {
         soundTick(dt)
         placeHud(dt)
         placeDocent(dt)
+        syncBars()
+        if let h = handTapAt, t - h > 0.18 {
+            handTapAt = nil
+            if t - lastSysTap > 0.45 {
+                lastHandTap = t
+                let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
+                tapped(tapCatcher, at: head + g * 2, system: false)
+            }
+        }
         campTick(dt)
         catTick(dt)
         dogTick(dt)
@@ -987,6 +1065,7 @@ final class ExploreSession {
         starCard = e
         e.isEnabled = false
         root.addChild(e)
+        makeBar("stars")
     }
 
     func closeStars() {
@@ -996,13 +1075,19 @@ final class ExploreSession {
         starCard?.isEnabled = false
     }
 
-    /// 정보판: 지금 바라보는 곳(하늘을 보고 있으면 하늘 쪽) 1m 앞, 시선에서 오른쪽으로 25도 비켜 — 별자리를 가리지 않고 고개를 내리지 않아도 됨
-    private func placeStarCard() {
+    /// 정보판: 지금 바라보는 높이 그대로(하늘을 보고 있으면 위쪽), 별자리 반대쪽으로 28도 비켜 — 별자리를 가리지 않고 고개를 내리지 않아도 됨.
+    /// 거리는 0.95m, 그 방향의 벽·천장·닫힌 문이 더 가까우면 그 앞으로 당기고 그만큼 작게(보이는 크기는 같게). 아래 막대로 옮김
+    private func placeStarCard(away cdir: SIMD3<Float>) {
         guard let card = starCard else { return }
         let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-        let turn = simd_quatf(angle: -0.44, axis: [0, 1, 0])
-        let d = simd_normalize(turn.act(g))
-        card.position = head + d * 1.0
+        // 별자리가 시선의 오른쪽이면 왼쪽으로, 왼쪽이면 오른쪽으로
+        let right = simd_normalize(simd_cross(g, SIMD3<Float>(0, 1, 0)))
+        let side: Float = simd_dot(cdir, right) > 0 ? 1 : -1
+        let d = simd_normalize(simd_quatf(angle: side * 0.49, axis: [0, 1, 0]).act(g))
+        let full: Float = 0.95
+        let dist = min(full, max(0.35, clearance(d) - 0.12))
+        card.scale = SIMD3<Float>(repeating: dist / full)
+        card.position = head + d * dist
         faceDocent(card)
         card.isEnabled = true
     }
@@ -1036,20 +1121,23 @@ final class ExploreSession {
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
             music.set(true, at: wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))
-            let key = "\(rm.id)-\(rm.time)-\(rm.lookMode.rawValue)"
-            if tables == nil || key != tablesKey {
-                tables?.remove()
-                let tb = CafeTables(look: rm.lookMode, time: rm.time)
+            let key = "\(rm.time)-\(rm.lookMode.rawValue)"
+            if cafeSets[rm.id]?.0 != key {
+                cafeSets[rm.id]?.1.remove()
+                let tb = CafeTables(look: rm.lookMode, time: rm.time, room: rm.id)
                 spaceRoot.addChild(tb.root)
-                tables = tb
-                tablesKey = key
+                cafeSets[rm.id] = (key, tb)
             }
-            let rid = rm.id
-            tables?.tick(dt, head: f.toSaved(head), floorY: L.floorY, tables: tablePlanes,
-                         inRoom: { p in L.at(x: p.x, z: p.y).room == rid })
+            if let v = vox, let tb = cafeSets[rm.id]?.1 {
+                tb.tick(dt, head: f.toSaved(head), L: L, cellH: { u, w in v.cellH(u, w) })
+            }
         } else {
             music.set(false)
-            if tables != nil { tables?.remove(); tables = nil }
+        }
+        // 다른 방 테마가 카페가 아니게 바뀌었으면 그 방 차림은 치움
+        for (id, c) in cafeSets where d.rec.room(id)?.place != "cafe" {
+            c.1.remove()
+            cafeSets[id] = nil
         }
         music.tick(dt)
     }
@@ -1093,6 +1181,7 @@ final class ExploreSession {
                               top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
                               height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 })
         c.tick(dt, ctx)
+        if c.hasToy { showTip("ball", "털실 공을 엄지·검지로 집어 흔들거나 던져 보세요. 톡 치면 굴러가요.") }
         if c.done { cat = nil }
     }
 
@@ -1129,10 +1218,19 @@ final class ExploreSession {
         let blocked = vox
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
                               free: { [unowned self] p in self.catFree(p, L, rooms, r: 0.2) },
-                              top: { _ in nil },
+                              top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
                               height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 })
         g.tick(dt, ctx)
+        if g.hasToy { showTip("stick", "막대를 엄지·검지로 집어 던져 보세요. 설이가 물어 와요. 톡 치면 가져다줘요.") }
         if g.done { dog = nil }
+    }
+
+    /// 사용법 알림 (탐험마다 한 번씩, 5초)
+    private func showTip(_ key: String, _ text: String) {
+        guard !tipsShown.contains(key) else { return }
+        tipsShown.insert(key)
+        tip = text
+        tipUntil = t + 5
     }
 
     /// 고양이가 설 수 있는 바닥: 집 테마 방 안, 벽에서 12cm 넘게, 둘레 12cm에 가구 없음, 문이 쓸고 지나가는 자리 아님
@@ -1149,7 +1247,7 @@ final class ExploreSession {
     }
 
     // MARK: 불멍
-    /// 캠핑장에서 앉으면(머리가 서 있을 때보다 35cm 넘게 낮아져 2초 머묾) 앞 1~1.8m 평평한 빈 바닥에 모닥불.
+    /// 캠핑장에서 앉으면(머리가 서 있을 때보다 35cm 넘게 낮아져 0.8초 머묾) 앞 1~1.8m 평평한 빈 바닥에 모닥불.
     /// 의자든 바닥이든 머리 높이로 알아봄. 일어나면(머리가 다시 올라오거나 걷기 시작) 불이 사그라들고 연기로 흩어짐
     private func campTick(_ dt: Float) {
         if let fr = fire {
@@ -1164,7 +1262,7 @@ final class ExploreSession {
         let low = h < standH - 0.35 && h < 1.35 && h > 0.45
         if !seated {
             sitT = (low && speed < 0.15) ? sitT + dt : 0
-            if sitT > 2.0 {
+            if sitT > 0.8 {                                     // 앉고 1초쯤이면 불이 피어남 (어디를 보고 있든)
                 seated = true
                 standT = 0
                 sitDown(hs, L)
@@ -1189,7 +1287,7 @@ final class ExploreSession {
             fr.remove()
             fire = nil
         }
-        let fs = f.dirToSaved(fwd)
+        let fs = f.dirToSaved(fwd + headUp * (fwd.y < 0 ? 1 : -1))   // 바닥을 내려다보거나 올려다봐도 몸이 향한 앞쪽
         var dir = SIMD2<Float>(fs.x, fs.z)
         dir = simd_length(dir) > 0.05 ? simd_normalize(dir) : SIMD2<Float>(0, -1)
         let blocked = vox?.blockedCells(minH: 0.05) ?? []
@@ -1490,6 +1588,25 @@ final class ExploreSession {
     /// - 손(손바닥 가운데)이 문짝 15cm 안, 손잡이 자리(높이 0.7~1.35m, 한짝 문은 가운데 빼고)에 0.2초 넘게 닿았다가
     /// - 문짝에서 20cm 넘게 멀어지며 당기거나(손잡이 높이 그대로, 문 폭 안), 문짝 너머 반대편으로 8cm 넘게 밀고 들어가면 → 바로 열림.
     /// 잘못 알아챈 경우(손만 대고 뗌)는 3.5초 뒤 그물·평면이 다시 닫힘으로 돌려놓음 (그물은 문이 다 열리고도 몇 초 늦게 따라오므로 그 전엔 닫지 않음)
+    /// 탭 보조: 시스템 탭이 가끔 안 들어와서, 손 추적으로 '빠르게 집었다 놓는' 손짓도 탭으로 받음.
+    /// 손을 편히 둘 때 손가락이 붙어 있는 것과 구별하려고: 2.5cm 넘게 벌어져 있다가 0.3초 안에 0.9cm 안으로 집고, 0.5초 안에 다시 2cm 넘게 벌림.
+    /// 같은 손짓을 시스템도 알아채면 한 번만 (시스템 탭이 0.45초 안에 오면 이것은 버림)
+    private func pinchWatch(_ a: HandAnchor?, _ i: Int) {
+        guard let a, a.isTracked, let sk = a.handSkeleton else { pinchClosed[i] = false; return }
+        let tj = sk.joint(.thumbTip), ij = sk.joint(.indexFingerTip)
+        guard tj.isTracked, ij.isTracked else { return }
+        let tp = simd_make_float3((a.originFromAnchorTransform * tj.anchorFromJointTransform).columns.3)
+        let ip = simd_make_float3((a.originFromAnchorTransform * ij.anchorFromJointTransform).columns.3)
+        let d = simd_distance(tp, ip)
+        if !pinchClosed[i] {
+            if d > 0.025 { pinchOpenAt[i] = t }
+            if d < 0.009 && t - pinchOpenAt[i] < 0.3 { pinchClosed[i] = true; pinchCloseAt[i] = t }
+        } else if d > 0.02 {
+            pinchClosed[i] = false
+            if t - pinchCloseAt[i] < 0.5 { handTapAt = t }
+        }
+    }
+
     private func handDoors(_ L: Layout, _ f: Fit) {
         guard let hp = hands, hp.state == .running else { return }
         let la = hp.latestAnchors
@@ -1502,6 +1619,8 @@ final class ExploreSession {
             pts.append(f.toSaved(simd_make_float3(w.columns.3)))
         }
         handPts = pts
+        pinchWatch(la.leftHand, 0)
+        pinchWatch(la.rightHand, 1)
         for (i, ds) in L.doors.enumerated() {
             guard realClosed.contains(i) else { grip[i] = nil; continue }
             let lo: Float = min(ds.pA, ds.pB), hi: Float = max(ds.pA, ds.pB)
@@ -1548,7 +1667,11 @@ final class ExploreSession {
 
     // MARK: 탭
     /// 탭 하나: 열쇠·그림 버튼이면 바로 처리, 그 밖(탭 받는 상자)이면 0.4초 안에 또 오는지 기다림
-    func tapped(_ e: Entity, at point: SIMD3<Float>? = nil) {
+    func tapped(_ e: Entity, at point: SIMD3<Float>? = nil, system: Bool = true) {
+        if system {
+            if t - lastHandTap < 0.5 { return }                    // 손 추적으로 이미 받은 같은 손짓
+            lastSysTap = t
+        }
         var cur: Entity? = e
         while let c = cur {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
@@ -1568,7 +1691,7 @@ final class ExploreSession {
             }
             if c.name == "dogstick" {
                 pendingTap = nil
-                if let f = fit { dog?.throwStick(from: f.toSaved(head)) }
+                dog?.tapStick()
                 return
             }
             if c.name == "catball" {
@@ -1587,10 +1710,10 @@ final class ExploreSession {
         // 밤하늘 별자리: 탭한 방향(머리 → 탭한 곳)에 별자리가 있으면 그 별자리를 이어 보여 주고 정보판을 띄움
         if let p = point, let st = stars, st.visible, let f = fit, simd_distance(p, head) > 0.05 {
             let dir = f.dirToSaved(simd_normalize(p - head))
-            if let c = st.pick(dir) {
+            if let r = st.pick(dir, viewUp: f.dirToSaved(headUp)) {
                 pendingTap = nil
-                starPick = c
-                placeStarCard()
+                starPick = r.0
+                placeStarCard(away: f.dirToCurrent(r.1))
                 return
             }
         }
@@ -1725,15 +1848,6 @@ final class ExploreSession {
         docentShow += (want - docentShow) * min(1, dt * 6)
         card.components.set(OpacityComponent(opacity: docentShow))
         card.isEnabled = docentShow > 0.02
-        if let bar = docentBar {
-            bar.isEnabled = card.isEnabled
-            if card.isEnabled {
-                let b = card.visualBounds(relativeTo: card)
-                bar.position = card.convert(position: SIMD3<Float>(b.center.x, b.min.y - 0.035, 0), to: root)
-                bar.orientation = card.orientation
-                bar.components.set(OpacityComponent(opacity: docentShow))
-            }
-        }
         for (_, w) in worlds { w.tickImmerse(dt) }
         decorT += dt
         if decorT > 3, let w = worlds[current], let v = vox {
@@ -1825,12 +1939,18 @@ final class ExploreSession {
         let d = min(full, max(0.3, clearance(dir) - 0.1))
         let k = d / full
         let target = head + dir * d
-        hud.scale = SIMD3<Float>(repeating: k)
-        if appearing || hudShow < 0.05 { hud.position = target } else { hud.position += (target - hud.position) * min(1, dt * 5) }
-        // 눈을 향해 기울임
-        let toEye = head - hud.position
-        let pitch = atan2(toEye.y, simd_length(SIMD2<Float>(toEye.x, toEye.z)))
-        hud.orientation = q * simd_quatf(angle: -pitch, axis: [1, 0, 0])
+        // 막대로 옮겨 둔 판은 닫힐 때까지 그 자리 (나를 향하게만)
+        if hudPinned && want == 0 && hudShow < 0.03 && !themeOpen { hudPinned = false }
+        if hudPinned {
+            faceDocent(hud)
+        } else {
+            hud.scale = SIMD3<Float>(repeating: k)
+            if appearing || hudShow < 0.05 { hud.position = target } else { hud.position += (target - hud.position) * min(1, dt * 5) }
+            // 눈을 향해 기울임
+            let toEye = head - hud.position
+            let pitch = atan2(toEye.y, simd_length(SIMD2<Float>(toEye.x, toEye.z)))
+            hud.orientation = q * simd_quatf(angle: -pitch, axis: [1, 0, 0])
+        }
         hudShow += (want - hudShow) * min(1, dt * 6)
         if want == 0 && hudShow < 0.02 { hudShow = 0 }
         hud.components.set(OpacityComponent(opacity: hudShow))

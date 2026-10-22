@@ -34,9 +34,6 @@ final class HomeCat {
     let ballRoot = Entity()                      // 털실 공 (저장 좌표)
     private(set) var done = false
     private let card = ModelEntity()
-    private let rim = ModelEntity()              // 바라보면 은은하게 비치는 테두리 빛 (톡 칠 수 있다는 표시)
-    private var rimMats: [String: UnlitMaterial] = [:]
-    private var rimAmt: Float = 0
     private let bubble = ModelEntity()
     private var shadow: ModelEntity?
     private let look: LookMode
@@ -92,6 +89,10 @@ final class HomeCat {
     private var ballSpin = simd_quatf(angle: 0, axis: [0, 1, 0])
     private var hits = 0
     private var hitsMax = 4
+    private var ballHeld = false                 // 내가 손으로 집고 있음
+    private var heldAt = SIMD3<Float>(0, 0, 0)
+    private var ballAir: (SIMD3<Float>, SIMD3<Float>)?    // 던져서 날아가는 중 (자리, 빠르기)
+    private var wantChase = false                // 가구 위에서 공을 보면 내려와서 쫓음
     // 말풍선
     private var bubbleT: Float = -1
     private var bubbleDur: Float = 1.4
@@ -122,14 +123,7 @@ final class HomeCat {
         card.name = "homecat"
         card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.42, 0.36, 0.12]).offsetBy(translation: [0, 0.18, 0])]))
         card.components.set(InputTargetComponent())
-        card.components.set(HoverEffectComponent())
         root.addChild(card)
-        // 테두리 빛: 같은 그림 모양을 조금 크게, 뒤에 따뜻한 빛으로
-        if let m = g.mesh("catRim") { rim.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
-        rim.scale = SIMD3<Float>(repeating: 1.09)
-        rim.position = [0, -0.02, -0.004]
-        rim.isEnabled = false
-        card.addChild(rim)
         // 말풍선 판 (16cm)
         var bq = Geo()
         let b: Float = 0.16
@@ -181,35 +175,6 @@ final class HomeCat {
         guard n != shown else { return }
         shown = n
         card.model?.materials = [mat(n)]
-        if rim.isEnabled { rim.model?.materials = [rimMat(n)] }
-    }
-
-    private func rimMat(_ n: String) -> UnlitMaterial {
-        if let m = rimMats[n] { return m }
-        var m = UnlitMaterial(color: look == .line ? UIColor(white: 0.45, alpha: 1) : UIColor(red: 1, green: 0.93, blue: 0.72, alpha: 1))
-        if let a = Tex.get(n + "_a", raw: true) {
-            var p = MaterialParameters.Texture(a); p.sampler = Tex.clamp
-            m.blending = .transparent(opacity: .init(scale: 1, texture: p))
-        }
-        rimMats[n] = m
-        return m
-    }
-
-    /// 바라보는 동안 테두리 빛이 은은하게 (머리가 향한 방향 기준)
-    private func tickRim(_ dt: Float, _ c: Ctx) {
-        let ctr = SIMD3<Float>(pos.x, floorY + elev + 0.2, pos.y) - c.head
-        let d = simd_length(ctr)
-        let tol = max(0.1, atan(0.24 / max(0.3, d)))
-        let on = d < 5 && acos(min(1, max(-1, simd_dot(ctr / max(0.01, d), c.gaze)))) < tol && act != .leave
-        rimAmt += ((on ? 1 : 0) - rimAmt) * min(1, dt * 7)
-        let vis = rimAmt > 0.02
-        if rim.isEnabled != vis {
-            rim.isEnabled = vis
-            if vis { rim.model?.materials = [rimMat(shown)] }
-        }
-        if vis { rim.components.set(OpacityComponent(opacity: rimAmt * (0.62 + 0.1 * sin(t * 3)))) }
-        // 처음 바라보면 귀를 쫑긋 — 앉아 있으면 나를 마주 봄
-        if on && rimAmt < 0.3 && (act == .sit || act == .loaf) && !frontal && act == .sit { frontal = true }
     }
 
     private func loop(_ frames: [String], fps: Float) -> String {
@@ -361,7 +326,62 @@ final class HomeCat {
         }
     }
 
+    /// 털실 공을 손으로 집음: 공이 손을 따라오고, 고양이는 다가와 엉덩이를 씰룩이며 노림
+    func holdBall(at p: SIMD3<Float>) {
+        guard ball != nil else { return }
+        if !ballHeld {
+            ballHeld = true
+            ballAir = nil
+            ballVel = .zero
+            if let b = ball { Sfx.play("cat_chirp", in: b, at: .zero, gain: -12) }
+            if elev > 0.05 { wantChase = true } else if act != .jumpUp && act != .jumpDown && act != .leave && act != .enter {
+                hits = 0
+                hitsMax = Int.random(in: 3...6)
+                emote("exclaim", 1)
+                start(.chase, 30)
+            }
+        }
+        heldAt = p
+        ballPos = SIMD2<Float>(p.x, p.z)
+    }
+
+    /// 놓음: 손의 빠르기 그대로 날아가 떨어져 통통 튀고 굴러감 → 쫓아가 덮침
+    func releaseBall(vel: SIMD3<Float>) {
+        guard ballHeld else { return }
+        ballHeld = false
+        var v = vel
+        let sp = simd_length(v)
+        if sp > 7 { v *= 7 / sp }
+        ballAir = (heldAt, v)
+        if elev > 0.05 { wantChase = true } else if act != .leave && act != .enter {
+            chirp(-2)
+            start(.chase, 14)
+        }
+    }
+
+    /// 가구 위에서 가까운 다른 가구 윗면으로 폴짝 (높이 차 50cm 안)
+    private func hopTop(_ c: Ctx) -> Bool {
+        var found: [(SIMD2<Float>, Float)] = []
+        for k in 0..<16 {
+            let a = Float(k) / 16 * 2 * .pi
+            for r in [Float(0.4), 0.6, 0.85, 1.1] {
+                let p = pos + SIMD2<Float>(cos(a), sin(a)) * r
+                guard let h = c.top(p), h >= 0.3, h <= 1.2, abs(h - elev) < 0.5 else { continue }
+                found.append((p, h))
+            }
+        }
+        guard let pick = found.randomElement() else { return false }
+        jumpFrom = SIMD3<Float>(pos.x, elev, pos.y)
+        jumpTo = SIMD3<Float>(pick.0.x, pick.1, pick.0.y)
+        faceToward(pick.0)
+        start(.jumpUp, 0.5)
+        return true
+    }
+
     /// 집이 아닌 방으로 가면 사라짐
+    /// 장난감이 나와 있음 (사용법 알림용)
+    var hasToy: Bool { ball != nil }
+
     func leave() {
         guard act != .leave else { return }
         setPurr(false)
@@ -427,7 +447,7 @@ final class HomeCat {
                     emote("heart")
                     if meowCool <= 0 { say("cat_trill", -3) }
                 }
-            } else if hidden > 0.7 && act != .chase && (act != .walk || (hidden > 1.6 && !running)) {
+            } else if hidden > 1.4 && act != .chase && (act != .walk || (hidden > 2.4 && !running)) {
                 // 시야 밖 → 보이는 자리로
                 if elev > 0.05 { jumpDownNear(c, prefer: me + c.fwd * 1.4) } else if let s = viewSpot(c, near: 1.5) { go(s, then: .sit, 4, run: true) }
             } else if c.userSpeed > 0.35 && act != .walk && act != .chase && elev < 0.05 {
@@ -478,7 +498,10 @@ final class HomeCat {
             if k >= 1 {
                 elev = jumpTo.y
                 if act == .jumpUp {
-                    start(.onTop, Float.random(in: 8...16))
+                    start(.onTop, Float.random(in: 5...11))
+                } else if wantChase && ball != nil {
+                    wantChase = false
+                    start(.chase, 12)
                 } else {
                     start(.sit, 2)
                 }
@@ -487,7 +510,10 @@ final class HomeCat {
             // 가구 위: 앉아 있다가 그루밍·식빵·잠을 번갈아
             let phase = actT / actDur
             if phase < 0.3 { sitFrame() } else if phase < 0.55 { show(loop(["cat_groom0", "cat_groom1"], fps: 3)) } else { show(loop(["cat_loaf0", "cat_loaf1"], fps: 0.4)) }
-            if actT > actDur { jumpDownNear(c, prefer: me + c.fwd * 1.3) }
+            if wantChase { jumpDownNear(c, prefer: ballPos) } else if actT > actDur {
+                // 옆 가구로 폴짝 건너가거나(가구 위를 돌아다님) 내려옴
+                if !(Float.random(in: 0...1) < 0.55 && hopTop(c)) { jumpDownNear(c, prefer: me + c.fwd * 1.3) }
+            }
         case .sit:
             sitFrame()
             if actT > actDur { decide(c) }
@@ -577,7 +603,6 @@ final class HomeCat {
         }
         tickBall(dt, c)
         tickBubble(dt)
-        tickRim(dt, c)
         place(c)
     }
 
@@ -599,8 +624,11 @@ final class HomeCat {
         while diff < -.pi { diff += 2 * .pi }
         yaw += diff * min(1, lastDt * 8)
         let q = simd_quatf(angle: yaw, axis: [0, 1, 0])
-        card.orientation = q
-        bubble.orientation = q
+        // 가까이서 내려다볼 때도 잘 보이게 그림 판을 내 눈 쪽으로 젖힘 (발밑을 축으로)
+        let flat = max(0.2, simd_length(SIMD2<Float>(d.x, d.z)))
+        let pitch = min(0.95, max(0, atan2(d.y - 0.2, flat))) * 0.8
+        card.orientation = q * simd_quatf(angle: -pitch, axis: [1, 0, 0])
+        bubble.orientation = q * simd_quatf(angle: -pitch, axis: [1, 0, 0])
         // 돌아서기: 0.26초 동안 정면 그림을 거침 (가로로 살짝 좁아졌다 넓어짐)
         var sx = face
         if turnT >= 0 {
@@ -734,7 +762,7 @@ final class HomeCat {
         e.name = "catball"
         e.components.set(CollisionComponent(shapes: [ShapeResource.generateSphere(radius: 0.09)]))
         e.components.set(InputTargetComponent())
-        e.components.set(HoverEffectComponent())
+        e.components.set(ToyTag())
         if look == .line {
             var l = Geo()
             for k in 0..<16 {
@@ -753,6 +781,43 @@ final class HomeCat {
 
     private func tickBall(_ dt: Float, _ c: Ctx) {
         guard let b = ball else { return }
+        if ballHeld {
+            b.position = heldAt
+            ballSpin = simd_quatf(angle: dt * 1.5, axis: [0, 1, 0]) * ballSpin
+            b.orientation = ballSpin
+            return
+        }
+        if var air = ballAir {
+            // 날아감: 중력, 벽·가구에 부딪히면 튕겨 나옴, 바닥에 닿으면 통통 튀다 굴러감
+            air.1.y -= 9.8 * dt
+            var np = air.0 + air.1 * dt
+            if !c.free(SIMD2<Float>(np.x, np.z)) && np.y < floorY + 2 {
+                air.1.x *= -0.4; air.1.z *= -0.4
+                np.x = air.0.x; np.z = air.0.z
+            }
+            if np.y <= floorY + 0.047 {
+                np.y = floorY + 0.047
+                if air.1.y < -1.2 {
+                    air.1.y = -air.1.y * 0.35
+                    air.1.x *= 0.7; air.1.z *= 0.7
+                    Sfx.play("cup_clink1", in: b, at: .zero, gain: -34)
+                } else {
+                    ballPos = SIMD2<Float>(np.x, np.z)
+                    ballVel = SIMD2<Float>(air.1.x, air.1.z) * 0.6
+                    ballAir = nil
+                    b.position = np
+                    return
+                }
+            }
+            air.0 = np
+            ballAir = air
+            ballPos = SIMD2<Float>(np.x, np.z)
+            let hv = SIMD3<Float>(air.1.x, 0, air.1.z)
+            if simd_length(hv) > 0.05 { ballSpin = simd_quatf(angle: simd_length(hv) * dt / 0.045, axis: simd_normalize(SIMD3<Float>(hv.z, 0, -hv.x))) * ballSpin }
+            b.position = np
+            b.orientation = ballSpin
+            return
+        }
         let sp = simd_length(ballVel)
         if sp > 0.01 {
             var np = ballPos + ballVel * dt
@@ -794,6 +859,26 @@ final class HomeCat {
         let d = simd_length(v)
         running = d > 0.5
         if d > 0.001 { moveDir = v / d }
+        if ballHeld {
+            // 손에 든 공을 노림: 60cm까지 다가와 엉덩이 씰룩
+            actT = 0
+            if d > 0.6 {
+                show(walkFrame(moveDir))
+                let np = pos + moveDir * min(d - 0.55, 1.3 * dt)
+                if c.free(np) { pos = np }
+            } else {
+                show(loop(["cat_pounce0", "cat_pounce1"], fps: 6))
+            }
+            faceToward(ballPos)
+            return
+        }
+        if ballAir != nil {
+            show(walkFrame(moveDir))
+            let np = pos + moveDir * min(max(0, d - 0.2), 1.5 * dt)
+            if c.free(np) { pos = np }
+            faceToward(ballPos)
+            return
+        }
         if d < 0.2 && simd_length(ballVel) < 0.6 {
             faceToward(ballPos)
             hitBall()
@@ -828,7 +913,12 @@ final class HomeCat {
             if c.free(s) && pathOK(pos, s, c) { go(s, then: .rub, 3.5); return }
         }
         var opts: [(Float, () -> Bool)] = []
-        opts.append((2.4, { [unowned self] in start(.sit, Float.random(in: 2.5...5)); return true }))
+        opts.append((1.3, { [unowned self] in start(.sit, Float.random(in: 1.5...3.5)); return true }))
+        // 이곳저곳 돌아다니기: 내 앞쪽 넓게(양옆 75도까지) 아무 데나
+        opts.append((2.8, { [unowned self] in
+            guard let s = roamSpot(c) else { return false }
+            go(s, then: Bool.random() ? .sit : .groom, Float.random(in: 1.5...3)); return true
+        }))
         opts.append((1.4, { [unowned self] in start(.groom, Float.random(in: 2.5...4.5)); return true }))
         opts.append((1.0, { [unowned self] in start(.loaf, Float.random(in: 5...10)); return true }))
         opts.append((0.8, { [unowned self] in start(.stretch, 1.8); return true }))
@@ -841,7 +931,7 @@ final class HomeCat {
             guard let s = viewSpot(c, near: Float.random(in: 1.1...2.2)) else { return false }
             go(s, then: .sit, Float.random(in: 2...4)); return true
         }))
-        opts.append((1.6, { [unowned self] in jumpUpSomewhere(c) }))
+        opts.append((2.4, { [unowned self] in jumpUpSomewhere(c) }))
         opts.append((1.0, { [unowned self] in scratchSomewhere(c) }))
         // 털실 공 놀이: 공이 보이면 노려보다 덮침, 없으면 꺼내 옴
         opts.append((1.8, { [unowned self] in
@@ -904,6 +994,18 @@ final class HomeCat {
             }
         }
         return best?.0
+    }
+
+    /// 돌아다닐 곳: 내 앞쪽 넓게(양옆 75도, 0.8~3.2m) 빈 바닥 중 지금 자리에서 50cm 넘게 떨어지고 바로 갈 수 있는 곳 아무 데나
+    private func roamSpot(_ c: Ctx) -> SIMD2<Float>? {
+        let me = SIMD2<Float>(c.head.x, c.head.z)
+        for _ in 0..<24 {
+            let a = Float.random(in: -1.3...1.3), dd = Float.random(in: 0.8...3.2)
+            let v = SIMD2<Float>(c.fwd.x * cos(a) - c.fwd.y * sin(a), c.fwd.x * sin(a) + c.fwd.y * cos(a))
+            let p = me + v * dd
+            if c.free(p) && simd_distance(p, pos) > 0.5 && pathOK(pos, p, c) { return p }
+        }
+        return nil
     }
 
     /// 앉아 있는 나의 옆 (시야 안쪽으로)
