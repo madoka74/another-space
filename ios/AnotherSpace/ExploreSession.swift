@@ -285,7 +285,6 @@ final class ExploreSession {
     @ObservationIgnored private var seated = false
     // 시골 밤하늘 별자리 · 카페 음악·테이블
     @ObservationIgnored private var stars: SkyStars?
-    @ObservationIgnored private var starsKey = ""
     @ObservationIgnored private var starCard: Entity?
     @ObservationIgnored private let music = CafeMusic()
     @ObservationIgnored private let waterSound = WaterSound()
@@ -984,7 +983,8 @@ final class ExploreSession {
             buildTimer += dt
             if buildTimer > 0.05 { buildTimer = 0; buildSome(fit, I) }
         }
-        vox?.tick()
+        vox?.tick(now: t)
+        if fade > 0.95 && vox?.revealed == false { vox?.revealed = true }
         voxSaveT += dt
         if voxSaveT > 20 { voxSaveT = 0; saveVox() }
 
@@ -1101,23 +1101,13 @@ final class ExploreSession {
         let gaze = f.dirToSaved(fwd)
         // 계곡: 개울·폭포 물소리
         waterSound.set(rm.place == "valley" && fade > 0.5, stream: wld.riverNear, fall: wld.fallSpot)
-        // 숲 밤하늘 별자리
-        if rm.place == "forest" {
-            let key = "\(rm.id)-\(rm.time)-\(rm.weather)-\(rm.lookMode.rawValue)"
-            if stars == nil || key != starsKey || stars?.root.parent !== wld.world {
-                stars?.root.removeFromParent()
-                let st = SkyStars(room: rm, center: wld.center, look: rm.lookMode)
-                wld.world.addChild(st.root)
-                stars = st
-                starsKey = key
-                if starPick != nil { closeStars() }
-            }
-            stars?.tick(dt, gaze: gaze)
-        } else if stars != nil {
-            stars?.root.removeFromParent()
-            stars = nil
+        // 밤하늘 (모든 장소: 별·달, 숲은 별자리까지) — 방 세계가 만들어 둔 것. 지금 방 것만 반짝임·포커스를 계산
+        let sky = wld.stars
+        if stars !== sky {
             if starPick != nil { closeStars() }
+            stars = sky
         }
+        stars?.tick(dt, gaze: gaze)
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
             music.set(true, at: wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))
@@ -1307,22 +1297,25 @@ final class ExploreSession {
             }
             return true
         }
+        // 모닥불 크기는 앞 빈 바닥에 맞춰 여러 단계 (돌 둘레 반지름 55cm ~ 18cm): 넓으면 크게, 좁으면 작게.
+        // 큰 불일수록 조금 더 떨어진 곳(앉은 자리에서 불 반지름 + 45cm 넘게)
         var cands: [(SIMD2<Float>, Float, Float)] = []         // 자리, 점수, 반지름
-        for r in [Float(0.55), Float(0.42)] {
-            var dd: Float = r == 0.55 ? 1.0 : 0.85
+        for r in stride(from: Float(0.55), through: Float(0.18), by: -0.0925) {
+            var dd: Float = max(0.55, r + 0.45)
             while dd <= 1.9 {
                 for a in [Float(0), 0.2, -0.2, 0.4, -0.4, 0.65, -0.65] {
                     let v = SIMD2<Float>(dir.x * cos(a) - dir.y * sin(a), dir.x * sin(a) + dir.y * cos(a))
                     let p = me + v * dd
-                    cands.append((p, abs(dd - 1.25) + abs(a) * 0.8 + (r < 0.5 ? 1 : 0), r))
+                    cands.append((p, abs(dd - (r + 0.75)) + abs(a) * 0.8 + (0.55 - r) * 3, r))
                 }
                 dd += 0.1
             }
         }
         cands.sort { $0.1 < $1.1 }
-        guard let pick = cands.first(where: { free($0.0, $0.2) }) else { return }      // 앞에 빈 바닥이 없으면 피우지 않음
+        guard let pick = cands.first(where: { free($0.0, $0.2) }) else { return }      // 앞에 18cm 빈 바닥도 없으면 피우지 않음
         let wd = simd_quatf(angle: -w.angle, axis: [0, 1, 0]).act(SIMD3<Float>(1, 0, 0.35))
-        let cf = Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd, ceilH: rm.ceil, sky: w.world)
+        let cf = Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd, ceilH: rm.ceil, sky: w.world,
+                          scale: pick.2 / 0.55)
         spaceRoot.addChild(cf.root)
         fire = cf
     }

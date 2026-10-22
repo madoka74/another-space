@@ -46,7 +46,7 @@ struct ThemePicker: View {
                             pick(it.id)
                         } label: {
                             VStack(spacing: 4) {
-                                PlaceIcon(id: it.id, symbol: LookMode(rawValue: it.id)?.icon).font(.title3)
+                                PlaceIcon(id: it.id, symbol: LookMode(rawValue: it.id)?.icon, size: 26)
                                 Text(it.label).font(.caption)
                             }
                             .frame(width: compact ? 60 : 64, height: compact ? 54 : 60)

@@ -54,7 +54,7 @@ final class Campfire {
     private var baseRates: (Float, Float, Float, Float) = (0, 0, 0, 0)  // 불·불티·연기·김 (처음 정한 양)
 
     /// base: 불 자리 바닥 (저장 좌표), windDir: 바람이 부는 쪽 (저장 좌표 수평)
-    init(at base: SIMD3<Float>, room: RoomRec, look: LookMode, windDir: SIMD3<Float>, ceilH: Float = 2.5, sky: Entity? = nil) {
+    init(at base: SIMD3<Float>, room: RoomRec, look: LookMode, windDir: SIMD3<Float>, ceilH: Float = 2.5, sky: Entity? = nil, scale k: Float = 1) {
         self.look = look
         let w = room.weather, tm = room.time
         wetFire = ["drizzle", "rain", "storm"].contains(w)
@@ -215,23 +215,29 @@ final class Campfire {
         }
         flameRoot.components.set(OpacityComponent(opacity: tm == "morning" || tm == "afternoon" ? 0.85 : 1))
         root.addChild(flameRoot)
+        // 자리에 맞춘 크기 (좁으면 작은 모닥불): 돌·장작·숯·불길·바닥 불빛을 함께 줄임
+        remains.scale = SIMD3<Float>(repeating: k)
+        flameRoot.scale = SIMD3<Float>(repeating: k)
+        glow?.scale = SIMD3<Float>(repeating: max(0.5, k))
 
+        // 입자 크기도 불 크기(자리에 맞춘 단계)에 맞춤
+        let ps = size * k
         // 입자: 불 알갱이 · 불티 · 연기 · 김
         let hot1 = Tex.with(look) { Tex.color([1, 0.85, 0.4]) }, hot2 = Tex.with(look) { Tex.color([0.95, 0.28, 0.05]) }
         let sp1 = Tex.with(look) { Tex.color([1, 0.9, 0.5]) }, sp2 = Tex.with(look) { Tex.color([1, 0.35, 0.08]) }
         let drift = wind * windK
-        let fr: Float = 80 * size
+        let fr: Float = 80 * ps
         var fire = ParticleEmitterComponent()
         fire.emitterShape = .box
-        fire.emitterShapeSize = [0.26 * size, 0.04, 0.26 * size]
+        fire.emitterShapeSize = [0.26 * ps, 0.04, 0.26 * ps]
         fire.birthLocation = .volume
         fire.birthDirection = .world
         fire.emissionDirection = [0, 1, 0]
-        fire.speed = 0.45 * size + 0.1
+        fire.speed = 0.45 * ps + 0.1
         fire.speedVariation = 0.2
         fire.mainEmitter.birthRate = fr
         fire.mainEmitter.lifeSpan = 0.75
-        fire.mainEmitter.size = 0.09 * size
+        fire.mainEmitter.size = 0.09 * ps
         fire.mainEmitter.sizeMultiplierAtEndOfLifespan = 0.15
         fire.mainEmitter.acceleration = drift * 0.9
         if line {
@@ -368,7 +374,7 @@ final class Campfire {
         // 숯불 알갱이: 장작 밑에서 작은 불씨가 살짝 떠올랐다 사라짐
         var emb = ParticleEmitterComponent()
         emb.emitterShape = .box
-        emb.emitterShapeSize = [0.32 * size, 0.02, 0.32 * size]
+        emb.emitterShapeSize = [0.32 * ps, 0.02, 0.32 * ps]
         emb.birthLocation = .volume
         emb.birthDirection = .world
         emb.emissionDirection = [0, 1, 0]
@@ -397,7 +403,7 @@ final class Campfire {
         for (e, pe, y) in [(fireE, fire, Float(0.06)), (sparkE, spark, Float(0.25)), (smokeE, smoke, Float(0.55)), (steamE, steam, Float(0.15)),
                            (emberE, emb, Float(0.03))] {
             e.components.set(pe)
-            e.position = [0, y, 0]
+            e.position = [0, y * k, 0]
             root.addChild(e)
         }
 

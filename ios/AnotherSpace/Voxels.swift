@@ -273,7 +273,11 @@ final class VoxelWorld {
         var first: Float = -1               // 처음 본 때 (지난 탐험·스캔에서 온 기둥은 -1)
         var lastHit: Float = -100           // 마지막으로 점수를 올린 때
         var lastFloor: Float = -100         // 마지막으로 점수를 내린 때
+        var ready = false                   // 보일 준비가 됨 (1m 칸마다 모아서 한 번에 다듬어 보임)
     }
+    private var pendingChunks: [Int64: (Float, Float)] = [:]     // 1m 칸 → (처음 준비된 때, 마지막으로 준비된 때)
+    /// 세계를 보여 주기 전(처음 몇 초)엔 지난 탐험에서 온 기둥도 바닥이 보이면 지움. 보여 준 뒤로는 고정
+    var revealed = false
     private var floorAt: [Int64: Float] = [:]           // 이번 탐험에서 바닥이 보였던 칸 → 그때
     let root = Entity()                                 // 저장 좌표 (공간 뿌리 아래)
     private let L: Layout
@@ -299,7 +303,8 @@ final class VoxelWorld {
 
     // MARK: 기둥 넣고 빼기
     /// 지난 탐험에서 확인한 기둥(또는 스캔 그물에서 만든 기둥) — 처음부터 보임
-    func seed(_ list: [Int64: UInt8]) {
+    func seed(_ list0: [Int64: UInt8]) {
+        let list = Self.tidy(list0, fixed: [:])
         for (k, h) in list where h >= 2 {
             var c = Col()
             c.score = 4; c.shown = true; c.h = h; c.hist = [h, h, h]; c.seen = 3
@@ -348,10 +353,17 @@ final class VoxelWorld {
         let med = median(c.hist)
         let wasFloor = (floorAt[k].map { now - $0 < 90 }) ?? false
         let need: Float = wasFloor ? 6 : 2.5
-        if !c.shown && c.score >= 5 && c.seen >= 3 && c.first >= 0 && now - c.first >= need {
-            c.shown = true
+        if !c.shown && !c.ready && c.score >= 5 && c.seen >= 3 && c.first >= 0 && now - c.first >= need {
+            c.ready = true
             c.h = med
-            byChunk[Self.chunkOfCol(k), default: []].insert(k)
+            let ch = Self.chunkOfCol(k)
+            pendingChunks[ch] = (pendingChunks[ch]?.0 ?? now, now)
+        } else if c.ready && c.score <= 0 {
+            c.ready = false
+        } else if !revealed && c.shown && c.score <= -2 {
+            // 보여 주기 전: 지난 탐험에서 온 기둥인데 지금 그 자리 바닥이 보이면 치움
+            c.shown = false
+            byChunk[Self.chunkOfCol(k)]?.remove(k)
             markDirty(k)
             changed = true
         }
@@ -369,9 +381,136 @@ final class VoxelWorld {
     }
 
     /// 매 프레임: 바뀐 칸 다시 그리기 (한 번에 budget개)
-    func tick(budget: Int = 6) {
+    func tick(budget: Int = 3, now: Float = 0) {
+        // 준비된 기둥은 1m 칸마다 모아 두었다가(1.2초 동안 더 안 늘거나 4초가 지나면) 한꺼번에 다듬어 보임
+        for (ch, tt) in pendingChunks where now - tt.1 > 1.2 || now - tt.0 > 4 {
+            pendingChunks[ch] = nil
+            commit(ch)
+        }
         guard !dirty.isEmpty else { return }
         for c in Array(dirty.prefix(budget)) { rebuild(c) }
+    }
+
+    /// 그 1m 칸의 준비된 기둥을 다듬어 보임: 이미 보이는 이웃 기둥(고정)에 높이를 맞추고, 작은 부스러기·삐죽한 기둥은 버림
+    private func commit(_ ch: Int64) {
+        var ready: [Int64: UInt8] = [:]
+        var fixed: [Int64: UInt8] = [:]
+        let (cu, cv) = Self.uv(ch)
+        for (k, c) in cols {
+            let (u, v) = Self.uv(k)
+            let du = Vox.fdiv(u) - cu, dv = Vox.fdiv(v) - cv
+            guard abs(du) <= 1 && abs(dv) <= 1 else { continue }
+            if c.shown { fixed[k] = c.h } else if c.ready && du == 0 && dv == 0 { ready[k] = c.h }
+        }
+        guard !ready.isEmpty else { return }
+        let out = Self.tidy(ready, fixed: fixed)
+        for (k, _) in ready {
+            guard var c = cols[k] else { continue }
+            c.ready = false
+            if let h = out[k] {
+                c.shown = true
+                c.h = h
+                byChunk[Self.chunkOfCol(k), default: []].insert(k)
+                markDirty(k)
+                changed = true
+            } else {
+                c.score = min(c.score, 3)                     // 부스러기로 버린 것: 더 확인되면 다시 후보
+            }
+            cols[k] = c
+        }
+        // 메운 구멍
+        for (k, h) in out where ready[k] == nil && cols[k]?.shown != true {
+            var c = cols[k] ?? Col()
+            c.shown = true; c.ready = false; c.h = h; c.score = 5; c.seen = 3
+            cols[k] = c
+            byChunk[Self.chunkOfCol(k), default: []].insert(k)
+            markDirty(k)
+            changed = true
+        }
+    }
+
+    /// 기둥 모음 다듬기 (새 기둥 `list`, 이미 보이는 고정 기둥 `fixed` — 고정 기둥은 바꾸지 않음):
+    /// 1) 서로 붙은 덩어리(대각선 포함)가 고정 기둥과 합쳐도 6칸(0.06㎡) 안 되면 버림 — 사람·반사·케이블 같은 부스러기
+    /// 2) 높이 차 10cm 안으로 이어진 '평평한 면'마다 가장 많은 높이로 맞춤 (탁자·소파가 들쑥날쑥하지 않게, 고정 기둥이 있으면 그 높이)
+    /// 3) 둘레보다 30cm 넘게 혼자 솟은 기둥은 둘레 높이로
+    /// 4) 둘레 8칸 중 6칸 넘게 같은 면으로 둘러싸인 빈칸은 채움 (그물 구멍)
+    static func tidy(_ list: [Int64: UInt8], fixed: [Int64: UInt8]) -> [Int64: UInt8] {
+        func key(_ u: Int, _ v: Int) -> Int64 { Vox.chunkKey(u, v) }
+        var all = fixed
+        for (k, h) in list { all[k] = h }
+        var out = list
+        // 1) 덩어리 크기
+        var comp: [Int64: Int] = [:]
+        var sizes: [Int] = []
+        for k0 in all.keys where comp[k0] == nil {
+            let id = sizes.count
+            var n = 0
+            var stack = [k0]
+            comp[k0] = id
+            while let k = stack.popLast() {
+                n += 1
+                let (u, v) = uv(k)
+                for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
+                    let nk = key(u + du, v + dv)
+                    if all[nk] != nil && comp[nk] == nil { comp[nk] = id; stack.append(nk) }
+                } }
+            }
+            sizes.append(n)
+        }
+        for k in list.keys where sizes[comp[k] ?? 0] < 6 { out[k] = nil }
+        // 2) 평평한 면마다 높이 맞추기
+        var cur = fixed
+        for (k, h) in out { cur[k] = h }
+        var plate: [Int64: Int] = [:]
+        var plates: [[Int64]] = []
+        for k0 in cur.keys where plate[k0] == nil {
+            let id = plates.count
+            var members: [Int64] = []
+            var stack = [k0]
+            plate[k0] = id
+            while let k = stack.popLast() {
+                members.append(k)
+                let (u, v) = uv(k)
+                let h = Int(cur[k] ?? 0)
+                for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    let nk = key(u + du, v + dv)
+                    if let nh = cur[nk], plate[nk] == nil, abs(Int(nh) - h) <= 1 { plate[nk] = id; stack.append(nk) }
+                }
+            }
+            plates.append(members)
+        }
+        for members in plates where members.count >= 4 {
+            var hist: [UInt8: Int] = [:]
+            let fixedIn = members.filter { fixed[$0] != nil }
+            for k in (fixedIn.isEmpty ? members : fixedIn) { if let h = cur[k] { hist[h, default: 0] += 1 } }
+            guard let mode = hist.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key < $1.key })?.key else { continue }
+            for k in members where out[k] != nil { out[k] = mode; cur[k] = mode }
+        }
+        // 3) 혼자 솟은 기둥
+        for (k, h) in out {
+            let (u, v) = uv(k)
+            var mx: UInt8 = 0
+            var n = 0
+            for (du, dv) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                if let nh = cur[key(u + du, v + dv)] { mx = max(mx, nh); n += 1 }
+            }
+            if n >= 2 && Int(h) - Int(mx) >= 3 { out[k] = mx; cur[k] = mx }
+        }
+        // 4) 구멍 채우기 (새 기둥 둘레만)
+        var holes: [Int64: UInt8] = [:]
+        for k in out.keys {
+            let (u, v) = uv(k)
+            for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
+                let hk = key(u + du, v + dv)
+                guard cur[hk] == nil, holes[hk] == nil else { continue }
+                let (hu, hv) = (u + du, v + dv)
+                var hs: [UInt8] = []
+                for a in -1...1 { for b in -1...1 where a != 0 || b != 0 { if let nh = cur[key(hu + a, hv + b)] { hs.append(nh) } } }
+                if hs.count >= 6, let lo = hs.min(), let hi = hs.max(), hi - lo <= 1 { holes[hk] = hs.sorted()[hs.count / 2] }
+            } }
+        }
+        for (k, h) in holes { out[k] = h }
+        return out
     }
 
     func restyle() {

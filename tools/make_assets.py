@@ -147,7 +147,7 @@ SKY = {
                       lit=(70, 78, 104), dark=(14, 17, 28), ocol=(24, 28, 40)),
 }
 CONDS = ('clear', 'cloudy', 'overcast', 'storm')
-SW, SH = 2048, 512
+SW, SH = 4096, 1024                     # 하늘 반구 (가로 360°, 세로 지평선~꼭대기)
 
 
 _BLUR = {}
@@ -190,8 +190,8 @@ def sky(time, cond, cloud_tex):
         mw = np.exp(-((((az + el * 1.4) % 360) - 230) / 26) ** 2) * smooth(5, 40, el)
         n = noise(1.4, SW, 3, h=SH)
         col = col + np.array([60, 66, 92.0]) * (mw * (0.35 + 0.65 * n) * 0.55)[..., None]
-    glow = np.exp(-ang / P['glow']) * (0.9 if time != 'night' else 0.35)
-    halo = np.exp(-ang / (P['glow'] * 5)) * (0.25 if time != 'night' else 0.1)
+    glow = np.exp(-ang / P['glow']) * (0.9 if time != 'night' else 0.0)          # 밤: 달은 앱이 따로 띄움
+    halo = np.exp(-ang / (P['glow'] * 5)) * (0.25 if time != 'night' else 0.0)
     col = col + sun[None, None, :] * (glow + halo)[..., None] * 0.6
 
     # 구름: 높이 1의 평면에 그린 잡음을 원근으로 (지평선 쪽은 납작하고 촘촘)
@@ -237,7 +237,7 @@ def sky(time, cond, cloud_tex):
         hcol = hcol * 0.55
     col = lerp(col, np.clip(hcol, 0, 255), hazek)
     # 별 (구름 뒤로 가려짐)
-    if P['stars'] > 0 and cond != 'storm':
+    if False:            # 별·달은 그림에 그리지 않음 — 앱이 별(또렷한 점)·달(따로 된 판)을 하늘에 직접 띄움 (그림에 그리면 꼭대기 쪽이 늘어나 보임)
         r = rng(31)
         k = int(5200 * P['stars'])
         ys = (r.random(k) ** 1.25 * SH * 0.94).astype(int)
@@ -248,7 +248,7 @@ def sky(time, cond, cloud_tex):
         star = star * (1 - np.clip(cloud_a * 1.6, 0, 1)) * smooth(2, 20, el)
         col = col + 255 * star[..., None] * np.array([0.95, 0.97, 1.0])
     # 해·달 원반
-    if cond in ('clear', 'cloudy') and sel > 0:
+    if cond in ('clear', 'cloudy') and sel > 0 and time != 'night':
         rad = 0.85 if time != 'night' else 1.1
         disc = smooth(rad, rad * 0.75, ang)
         if time == 'night':
@@ -263,10 +263,187 @@ def sky(time, cond, cloud_tex):
 
 
 def skies():
+    """하늘 20장 (시간 5 × 상태 4): Poly Haven 실사 하늘을 받아 두었으면 그것으로, 없으면 직접 그림"""
     cloud_tex = noise(2.6, 1024, 77, lowcut=6) * 0.6 + noise(2.0, 1024, 78, lowcut=6) * 0.4
     for t in SKY:
         for c in CONDS:
-            save_jpg(f'sky_{t}_{c}', sky(t, c, cloud_tex), folder='sky', q=86)
+            img = photo_sky(t, c)
+            if img is None:
+                img = sky(t, c, cloud_tex)
+                print('  하늘(직접 그림):', t, c, flush=True)
+            save_jpg(f'sky_{t}_{c}', img, folder='sky', q=90)
+
+
+def _ph_sky(t, c):
+    """받아 둔 실사 하늘 → 위쪽 반(하늘 반구)만 4096×1024 (없으면 None)"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fetch_env
+    i = fetch_env.SKIES.get((t, c))
+    if i is None:
+        return None
+    path = fetch_env.sky_path(i)
+    if not os.path.exists(path):
+        return None
+    im = Image.open(path).convert('RGB')
+    im = im.crop((0, 0, im.width, im.height // 2)).resize((SW, SH), Image.LANCZOS)
+    return np.asarray(im).astype(np.float32)
+
+
+def _lum(a):
+    return a[..., 0] * 0.299 + a[..., 1] * 0.587 + a[..., 2] * 0.114
+
+
+def _night_from(a, target=11.0):
+    """밤하늘 사진: 별 점은 지우고(앱이 또렷한 별을 따로 띄움) 어둡고 푸르게"""
+    im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).filter(ImageFilter.MedianFilter(7))
+    b = np.asarray(im).astype(np.float32)
+    up = b[: int(SH * 0.85)]
+    k = target / max(1.0, float(_lum(up).mean()))
+    return np.clip(b * k * np.array([0.92, 0.98, 1.12]), 0, 255)
+
+
+def photo_sky(t, c):
+    """실사 하늘 고르기·다듬기. 받은 하늘이 없는 조합은 가까운 하늘을 어둡게·흐리게 바꿔 씀"""
+    a = _ph_sky(t, c)
+    if a is not None:
+        if t == 'night':
+            return _night_from(a)
+        return a
+    if c == 'storm':
+        base = _ph_sky(t, 'overcast') if t != 'night' else None
+        if base is None:
+            base = _ph_sky('afternoon', 'storm')
+        if base is None:
+            return None
+        g = _lum(base)[..., None]
+        out = (base * 0.55 + g * 0.45) * (0.5 if t in ('morning', 'afternoon') else 0.36)
+        if t == 'night':
+            out = out * 0.18
+        return np.clip(out * np.array([0.94, 0.98, 1.06]), 0, 255)
+    if t == 'night':
+        over = _ph_sky('afternoon', 'overcast')
+        clear = _ph_sky('night', 'clear')
+        if over is None:
+            return None
+        dark = np.clip(over * np.array([0.06, 0.07, 0.1]), 0, 255)
+        if c == 'overcast' or clear is None:
+            return dark
+        n = _night_from(clear)
+        m = np.clip((_lum(over) - 120) / 90, 0, 1)[..., None]           # 구름이 짙은 곳일수록 구름으로
+        return n * (1 - m) + dark * m
+    return None
+
+
+def moon_art():
+    """달: 바다(크고 부드러운 어두운 무늬)·작은 크레이터·밝은 광조·가장자리 어두워짐이 있는 보름달 (투명 바탕) — 앱이 밤하늘에 따로 띄움"""
+    S = 512
+    yy, xx = np.mgrid[0:S, 0:S].astype(np.float32)
+    cx = cy = S / 2
+    R = S * 0.46
+    d = np.hypot(xx - cx, yy - cy) / R
+    disc = np.clip((1 - d) * R / 1.5, 0, 1)
+    maria = noise(3.8, S, 1901, lowcut=2)
+    maria = np.asarray(Image.fromarray((maria * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(6))) / 255.0
+    mar = np.clip((maria - 0.5) * 3.2, 0, 1)
+    fine = noise(1.6, S, 1902)
+    v = 0.84 - 0.26 * mar + 0.05 * (fine - 0.5)
+    r = rng(1903)
+    for _ in range(45):
+        px, py = r.uniform(-0.85, 0.85, 2) * R + cx
+        if np.hypot(px - cx, py - cy) > R * 0.92:
+            continue
+        rr = R * r.uniform(0.012, 0.04)
+        dd = np.hypot(xx - px, yy - py) / rr
+        inner = np.clip(1 - dd, 0, 1) ** 0.6
+        rim = np.exp(-((dd - 1) / 0.25) ** 2)
+        side = ((xx - px) * -0.6 + (yy - py) * -0.8) / rr
+        v = v - inner * 0.05 + rim * 0.035 * np.clip(side, -1, 1)
+    # 밝은 광조 크레이터 하나 (티코처럼): 가운데 밝은 점 + 부드럽게 퍼지는 줄
+    tx, ty = cx - R * 0.12, cy + R * 0.58
+    ang = np.arctan2(yy - ty, xx - tx)
+    dist = np.hypot(xx - tx, yy - ty)
+    rays = np.clip(np.cos(ang * 7 + noise(2.0, S, 1904) * 3) * 0.5 + 0.5, 0, 1) ** 4 * np.exp(-dist / (R * 0.35)) * np.clip(dist / (R * 0.05), 0, 1)
+    rays = np.asarray(Image.fromarray((np.clip(rays, 0, 1) * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(2))) / 255.0
+    v = v + rays * 0.035 + np.exp(-(dist / (R * 0.025)) ** 2) * 0.12
+    limb = 1 - 0.3 * np.clip(d, 0, 1) ** 2.6
+    v = np.clip(v * limb, 0, 1)
+    rgb = np.stack([v * 248, v * 244, v * 232], axis=-1)
+    save_png('moon', rgb, disc)
+
+
+# 먼 풍경 띠의 위·아래 끝 (방 바닥 기준 높이 / 반지름 → 고도각) — RoomWorld Decor 의 pano 띠와 같은 값
+PANO_SPEC = {'pano_hills': (270.0, 68.0, -7.0), 'pano_peaks': (270.0, 92.0, -6.0)}
+
+
+def photo_band(name):
+    """360° 실사 풍경에서 땅·산만 오려 낸 지평선 띠 (가로 8192, 한 바퀴 그대로). 받지 못했거나 오려 내기가 미덥지 않으면
+    직접 그린 산 띠를 한 바퀴로 이어 붙여 같은 이름으로"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fetch_env
+    r, h, base = PANO_SPEC[name]
+    el_lo = math.degrees(math.atan2(base, r)); el_hi = math.degrees(math.atan2(base + h, r))
+    full_id, pure_id = fetch_env.PANOS[name]
+    fp, pp = fetch_env.sky_path(full_id), fetch_env.sky_path(pure_id)
+    ok = False
+    if os.path.exists(fp) and os.path.exists(pp):
+        fi = Image.open(fp).convert('RGB')
+        pi = Image.open(pp).convert('RGB').resize(fi.size, Image.LANCZOS)
+        W0, H0 = fi.size
+        y0 = int((0.5 - el_hi / 180.0) * H0); y1 = int((0.5 - el_lo / 180.0) * H0)
+        f = np.asarray(fi.crop((0, y0, W0, y1))).astype(np.float32)
+        q = np.asarray(pi.crop((0, y0, W0, y1))).astype(np.float32)
+        diff = np.abs(f - q).max(axis=2)
+        diff = np.asarray(Image.fromarray(np.clip(diff * 4, 0, 255).astype(np.uint8)).filter(ImageFilter.MedianFilter(5))).astype(np.float32) / 4
+        hh, ww = diff.shape
+        m = diff > 14
+        # 열마다 위에서부터 처음으로 땅이 4줄 넘게 이어지는 곳 = 능선, 그 아래는 다 땅
+        run = np.zeros_like(m, dtype=np.int32)
+        for yv in range(hh - 1, -1, -1):
+            run[yv] = np.where(m[yv], (run[yv + 1] + 1) if yv + 1 < hh else 1, 0)
+        first = np.argmax(run >= 4, axis=0)
+        none = ~(run >= 4).any(axis=0)
+        first[none] = hh - 1
+        pad = np.concatenate([first[-4:], first, first[:4]]).astype(np.float32)
+        first = np.median(np.lib.stride_tricks.sliding_window_view(pad, 9), axis=1)        # 능선을 고르게 (한 바퀴 이어지게)
+        sky_frac = float((first > hh * 0.3).mean())
+        if sky_frac > 0.6:
+            yy = np.arange(hh)[:, None].astype(np.float32)
+            a = np.clip(yy - first[None, :] + 1.0, 0, 1)
+            rgb = f
+            W1 = 8192
+            if ww != W1:
+                im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).resize((W1, int(hh * W1 / ww)), Image.LANCZOS)
+                am = Image.fromarray((a * 255).astype(np.uint8)).resize(im.size, Image.LANCZOS)
+                rgb = np.asarray(im).astype(np.float32); a = np.asarray(am).astype(np.float32) / 255
+            save_png(name, rgb, a)
+            print('  실사 풍경 띠:', name, '←', full_id, rgb.shape, flush=True)
+            ok = True
+        else:
+            print('  실사 풍경 띠 오려 내기 실패 → 직접 그림:', name, sky_frac, flush=True)
+    if not ok:
+        # 직접 그린 먼 산을 한 바퀴 길이로 이어 붙임 (가로·세로 비율을 실제 띠에 맞게)
+        reps = max(1, round(2 * math.pi * r / (h * 4)))
+        src = 'far_peaks' if name == 'pano_peaks' else 'far_mtn'
+        rgb = np.asarray(Image.open(os.path.join(OUT, 'tex', src + '.png')).convert('RGB')).astype(np.float32)
+        a = np.asarray(Image.open(os.path.join(OUT, 'tex', src + '_a.png')).convert('L')).astype(np.float32) / 255
+        rgb = np.tile(rgb, (1, reps, 1)); a = np.tile(a, (1, reps))
+        save_png(name, rgb, a)
+
+
+def photo_textures():
+    """받아 둔 실사 무늬로 바닥·벽·바위·나무껍질 그림을 바꿈 (밝기는 앱 재질에 맞게 맞춤)"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fetch_env
+    target = {'grass': 92, 'moss': 82, 'pebble': 132, 'sand': 182, 'dirt': 118, 'planks': 128, 'planks_dark': 78,
+              'brick': 118, 'plaster': 218, 'rock': 124, 'mossrock': 100, 'bark': 86}
+    for name, i in fetch_env.TEXTURES.items():
+        path = fetch_env.tex_path(i)
+        if not os.path.exists(path):
+            continue
+        a = np.asarray(Image.open(path).convert('RGB').resize((2048, 2048), Image.LANCZOS)).astype(np.float32)
+        k = target.get(name, 120) / max(1.0, float(_lum(a).mean()))
+        save_jpg(name, np.clip(a * k, 0, 255), q=90)
+        print('  실사 무늬:', name, '←', i, flush=True)
 
 
 def cloud_sprites():
@@ -294,7 +471,7 @@ def ridge(W, seed, base, amp, beta=2.2, sharp=0.0):
 
 
 def band_far_mountains(name, seed, col, snow=False):
-    W, H = 2048, 512
+    W, H = 4096, 1024                     # 고해상도 (먼 산도 가장자리가 또렷하게)
     top = ridge(W, seed, 0.55, 0.42, beta=2.4)
     top2 = ridge(W, seed + 1, 0.72, 0.22, beta=2.0)
     yy = np.mgrid[0:H, 0:W][0] / H
@@ -304,7 +481,7 @@ def band_far_mountains(name, seed, col, snow=False):
     base = np.array(col, float)
     rgb = base * (0.92 + 0.12 * n)[..., None]
     # 해 쪽 비탈이 밝게 (능선 기울기를 부드럽게 해서), 위쪽일수록 옅게
-    sm = np.convolve(np.concatenate([top[-40:], top, top[:40]]), np.ones(41) / 41, 'same')[40:-40]
+    sm = np.convolve(np.concatenate([top[-80:], top, top[:80]]), np.ones(81) / 81, 'same')[80:-80]
     slope = np.gradient(sm)[None, :] * W * 0.02
     depth = np.clip((yy - top[None, :]) * 4, 0, 1)
     rgb = rgb * (1 + np.clip(slope, -0.15, 0.15) * (1 - depth) * 1.5)[..., None]
@@ -334,8 +511,9 @@ def tree_line(W, H, seed, count, hmin, hmax, kind, col_dark, col_lit, ground=0.9
         x0 = int(cx - w * 1.1); x1 = int(cx + w * 1.1) + 1
         xs = np.arange(x0, x1) % W
         sub_x = (np.arange(x0, x1) - cx)[None, :]
-        sub_y = yy[:, :1]
-        lf = leaf[:, xs]
+        ya = max(0, int(top - h * 0.25)); yb = min(H, int(ground * H) + 1)     # 이 나무가 차지하는 줄만 계산 (빠르게)
+        sub_y = yy[ya:yb, :1]
+        lf = leaf[ya:yb][:, xs]
         if kind == 'pine':
             t = (sub_y - top) / h                                   # 0 꼭대기 → 1 밑
             tiers = 0.6 + 0.4 * ((t * 8 + lf * 0.6) % 1)            # 가지 층 톱니
@@ -344,8 +522,8 @@ def tree_line(W, H, seed, count, hmin, hmax, kind, col_dark, col_lit, ground=0.9
             lk = 0.55 - 0.45 * sub_x / np.maximum(half, 1) + 0.25 * ((t * 8) % 1) - 0.2 * t
         else:
             # 잎 덩어리 여러 개가 모인 수관
-            crown = np.zeros((H, len(xs)), bool)
-            lk = np.zeros((H, len(xs)))
+            crown = np.zeros((yb - ya, len(xs)), bool)
+            lk = np.zeros((yb - ya, len(xs)))
             for _ in range(6):
                 bx = r.uniform(-0.55, 0.55) * w; by = top + h * r.uniform(0.12, 0.45)
                 br = h * r.uniform(0.13, 0.22)
@@ -358,9 +536,9 @@ def tree_line(W, H, seed, count, hmin, hmax, kind, col_dark, col_lit, ground=0.9
         trunk = (sub_y > top + h * (0.75 if kind == 'pine' else 0.55)) & (np.abs(sub_x) < max(2, w * 0.07)) & (sub_y < ground * H)
         m = crown | trunk
         lk = np.where(trunk & ~crown, 0.15 - 0.3 * sub_x / max(2, w * 0.07) * 0.3, lk)
-        a[:, xs] = np.where(m, 1, a[:, xs])
-        light[:, xs] = np.where(m, np.clip(lk, 0, 1), light[:, xs])
-        depth[:, xs] = np.where(m, d, depth[:, xs])
+        a[ya:yb, xs] = np.where(m, 1, a[ya:yb][:, xs])
+        light[ya:yb, xs] = np.where(m, np.clip(lk, 0, 1), light[ya:yb][:, xs])
+        depth[ya:yb, xs] = np.where(m, d, depth[ya:yb][:, xs])
     # 아래쪽 덤불 (사이로 하늘이 안 보이게)
     bush = ground * H - (0.08 + 0.1 * noise1(W, 1.6, seed + 9)) * H
     under = yy >= bush[None, :]
@@ -375,19 +553,19 @@ def tree_line(W, H, seed, count, hmin, hmax, kind, col_dark, col_lit, ground=0.9
     return rgb, a
 
 
-def band_trees(name, seed, kind, H=1024, count=90, hmin=0.45, hmax=0.92, dark=(18, 34, 26), lit=(70, 104, 64)):
-    rgb, a = tree_line(2048, H, seed, count, hmin, hmax, kind, dark, lit)
+def band_trees(name, seed, kind, H=2048, count=90, hmin=0.45, hmax=0.92, dark=(18, 34, 26), lit=(70, 104, 64)):
+    rgb, a = tree_line(4096, H, seed, count, hmin, hmax, kind, dark, lit)
     save_png(name, rgb, a)
 
 
 def band_ridge_pines(name, seed, col):
     """먼 능선 + 위에 바늘처럼 솟은 소나무들"""
-    W, H = 2048, 512
+    W, H = 4096, 1024
     top = ridge(W, seed, 0.62, 0.28, beta=2.6)
     r = rng(seed + 1)
     spikes = np.zeros(W)
-    for _ in range(700):
-        cx = r.random() * W; h = r.uniform(0.04, 0.12); w = r.uniform(2, 5)
+    for _ in range(1400):
+        cx = r.random() * W; h = r.uniform(0.04, 0.12); w = r.uniform(4, 10)
         xs = np.arange(int(cx - w), int(cx + w) + 1)
         v = h * (1 - np.abs(xs - cx) / w)
         spikes[xs % W] = np.maximum(spikes[xs % W], v)
@@ -399,8 +577,8 @@ def band_ridge_pines(name, seed, col):
     save_png(name, rgb, a)
 
 
-def band_cliffs(name, seed, H=1024):
-    W = 2048
+def band_cliffs(name, seed, H=2048):
+    W = 4096
     top = ridge(W, seed, 0.3, 0.26, beta=1.8)
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     a = (yy / H >= top[None, :]).astype(float)
@@ -412,7 +590,7 @@ def band_cliffs(name, seed, H=1024):
     rgb = colorize(base, [(0, (84, 70, 58)), (0.45, (140, 116, 92)), (0.8, (184, 160, 128)), (1, (206, 186, 154))])
     # 큰 바위 기둥: 해 쪽 면은 밝고 반대는 그늘
     cols = noise1(W, 2.2, seed + 6)
-    g = np.gradient(np.convolve(np.concatenate([cols[-40:], cols, cols[:40]]), np.ones(61) / 61, 'same')[40:-40]) * W * 0.03
+    g = np.gradient(np.convolve(np.concatenate([cols[-80:], cols, cols[:80]]), np.ones(121) / 121, 'same')[80:-80]) * W * 0.03
     rgb = rgb * (0.94 + np.clip(g, -0.14, 0.14))[None, :, None]
     cracks = np.abs(noise(1.6, W, seed + 7, h=H, aniso=(1, 0.25)) - 0.5) < 0.008
     rgb[cracks] *= 0.55
@@ -1753,6 +1931,12 @@ def line_folder(folder, sky=False):
         mask.save(os.path.join(folder, name + '_lna.png'), optimize=True)      # 선 그림에서 쓰는 매끄러운 가림 그림
 
 
+def _fetch_env():
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fetch_env
+    fetch_env.main()
+
+
 def _jazz():
     """카페 배경 재즈 (tools/jazz.py) → sfx/jazz_XX.m4a + sfx/jazz.json"""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1782,7 +1966,8 @@ def _fetch_art():
 def main():
     only = sys.argv[1:] if len(sys.argv) > 1 else None
     jobs = {
-        'sky': lambda: (skies(), cloud_sprites()),
+        'env': lambda: _fetch_env(),          # 실사 하늘·무늬 받기 (캐시에 있으면 건너뜀)
+        'sky': lambda: (skies(), cloud_sprites(), moon_art()),
         'bands': lambda: (
             band_far_mountains('far_mtn', 101, (176, 190, 210)),
             band_far_mountains('far_peaks', 111, (160, 172, 190), snow=True),
@@ -1792,7 +1977,8 @@ def main():
             band_cliffs('mid_cliffs', 151),
             band_village('mid_village', 161), band_village('mid_village_night', 161, night=True),
             band_city('far_city', 171), band_city('far_city_night', 171, night=True),
-            band_islands('far_islands', 181)),
+            band_islands('far_islands', 181),
+            photo_band('pano_hills'), photo_band('pano_peaks')),
         'barriers': lambda: (barrier_camp(), barrier_forest(), barrier_valley(), barrier_sea(), barrier_village(), barrier_city()),
         'trees': lambda: (
             tree_single('tree_pine', 'pine', 501, (16, 36, 24), (72, 110, 64)),
@@ -1811,7 +1997,8 @@ def main():
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
-            people(), menu_board(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True)),
+            people(), menu_board(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True),
+            photo_textures()),
         'sfx': lambda: sfx(),
         'cat': lambda: _cat(),
         'jazz': lambda: _jazz(),

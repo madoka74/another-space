@@ -181,7 +181,7 @@ private struct SpaceCard: View {
                 ForEach(space.rooms) { r in
                     Button { theme(r.id) } label: {
                         HStack(spacing: 10) {
-                            PlaceIcon(id: r.place).frame(width: 28).foregroundStyle(RoomColor.of(r.id))
+                            PlaceIcon(id: r.place, size: 26).foregroundStyle(RoomColor.of(r.id))
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(r.name).font(.headline)
                                 Text(r.title).font(.subheadline).foregroundStyle(.secondary)

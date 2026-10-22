@@ -44,7 +44,7 @@ struct Decor {
         var d = Decor()
         switch place {
         case "camp":
-            d.bands = [Band(tex: "far_mtn", radius: 270, height: 70, base: -6, aspect: 4, layer: 0),
+            d.bands = [Band(tex: "pano_hills", radius: 270, height: 68, base: -7, aspect: 0, layer: 0),
                        Band(tex: "mid_ridge", radius: 140, height: 32, base: -3, aspect: 4, layer: 1),
                        Band(tex: "near_pines", radius: 34, relative: true, height: 20, base: -1, aspect: 2, layer: 2)]
             d.trees = [Trees(tex: "tree_pine", count: 18, h: 8...15, d: 3...20)]
@@ -57,7 +57,7 @@ struct Decor {
                        Trees(tex: "tree_pine", count: 10, h: 12...20, d: 3...18)]
             d.rocks = Rocks(tex: "mossrock", count: 7, size: 0.4...1.2, d: 1.5...10)
         case "valley":
-            d.bands = [Band(tex: "far_peaks", radius: 270, height: 90, base: -6, aspect: 4, layer: 0),
+            d.bands = [Band(tex: "pano_peaks", radius: 270, height: 92, base: -6, aspect: 0, layer: 0),
                        Band(tex: "mid_cliffs", radius: 40, relative: true, height: 48, base: -2, aspect: 2, layer: 2)]
             d.trees = [Trees(tex: "tree_pine", count: 6, h: 6...11, d: 4...22)]
             d.rocks = Rocks(tex: "rock", count: 16, size: 0.6...3, d: 1...24)
@@ -67,7 +67,7 @@ struct Decor {
             d.rocks = Rocks(tex: "basalt", count: 8, size: 0.5...2.2, d: 5...26)
             d.sea = true
         case "village":
-            d.bands = [Band(tex: "far_mtn", radius: 270, height: 60, base: -6, aspect: 4, layer: 0),
+            d.bands = [Band(tex: "pano_hills", radius: 270, height: 68, base: -7, aspect: 0, layer: 0),
                        Band(tex: "mid_village", night: "mid_village_night", radius: 100, height: 36, base: -4, aspect: 4, layer: 1)]
             d.trees = [Trees(tex: "tree_broad", count: 8, h: 7...12, d: 4...25)]
         case "city":
@@ -78,7 +78,7 @@ struct Decor {
             d.bands = [Band(tex: "street_shops", night: "street_shops_night", radius: 9, relative: true, height: 9, base: -0.3, aspect: 4, layer: 2),
                        Band(tex: "far_city", night: "far_city_night", radius: 70, relative: true, height: 90, base: -2, aspect: 2, layer: 1)]
         case "gallery":
-            d.bands = [Band(tex: "far_mtn", radius: 270, height: 60, base: -6, aspect: 4, layer: 0)]
+            d.bands = [Band(tex: "pano_hills", radius: 270, height: 68, base: -7, aspect: 0, layer: 0)]
             d.trees = [Trees(tex: "tree_broad", count: 6, h: 7...11, d: 4...14)]
             d.paintings = true
         default:   // home
@@ -751,6 +751,8 @@ final class RoomWorld {
 
     // MARK: 하늘 세계
     private static var skyMesh: MeshResource?
+    /// 밤하늘 별·달 (밤·새벽·해질녘, 비·눈이 아닐 때)
+    private(set) var stars: SkyStars?
 
     private func addSky() {
         if Self.skyMesh == nil { Self.skyMesh = Self.skySphere(radius: 300) }
@@ -762,6 +764,14 @@ final class RoomWorld {
         s.position = center
         world.addChild(s)
         skyEntity = s; skyMat = base; flashMat = bright
+        // 밤·새벽·해질녘: 또렷한 별(그림에 그리지 않고 점으로)·달, 숲이면 별자리
+        if ["night", "dusk", "dawn"].contains(room.time) {
+            let st = SkyStars(room: room, center: center, look: look, constellations: room.place == "forest")
+            if st.visible {
+                world.addChild(st.root)
+                stars = st
+            }
+        }
     }
 
     private func addGround(_ dc: Decor, R: Float, floorY: Float) {
@@ -838,7 +848,8 @@ final class RoomWorld {
                 default: k = fog ? tint * 0.7 + haze * 0.3 : tint
                 }
             }
-            let reps = max(1, (2 * .pi * r / (b.height * b.aspect)).rounded())
+            // aspect 0 = 한 바퀴짜리 실사 풍경 띠 (되풀이하지 않음)
+            let reps: Float = b.aspect == 0 ? 1 : max(1, (2 * .pi * r / (b.height * b.aspect)).rounded())
             var geo = Geo()
             geo.ring(center: SIMD3<Float>(center.x, floorY + b.base, center.z), radius: r, y0: 0, y1: b.height,
                      repeats: reps, segments: r > 100 ? 128 : 72, phase: Float.random(in: 0...6.28, using: &g))
@@ -1744,7 +1755,7 @@ final class RoomWorld {
 
     /// 안쪽에서 보는 하늘 구. 그림은 위 절반(꼭대기→지평선)만 있고, 지평선 아래는 위를 거울처럼 씀
     static func skySphere(radius: Float) -> MeshResource? {
-        let seg = 64, rings = 32
+        let seg = 160, rings = 80                // 촘촘하게 (꼭대기 쪽 그림이 늘어나 보이지 않게)
         var g = Geo()
         for r in 0...rings {
             let el = Float.pi / 2 - Float.pi * Float(r) / Float(rings)

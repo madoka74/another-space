@@ -15,22 +15,29 @@ extension Worlds {
     }
 }
 
-/// 장소 아이콘 + 오른쪽 위 작은 색 표시 (그 장소의 특별한 것). 장소가 아닌 기호(날씨·시간)는 표시 없이 그대로
+/// 장소 아이콘 + 오른쪽 위 작은 색 표시 (그 장소의 특별한 것). 어디서 쓰든 같은 모양:
+/// 아이콘은 size×size 칸 가운데, 표시는 그 칸의 오른쪽 위 모서리에 칸 크기에 비례해 (기호 모양·글자 크기와 상관없이 늘 같은 자리).
+/// 장소가 아닌 기호(날씨·시간·표시 방식)는 표시 없이 같은 칸에
 struct PlaceIcon: View {
     let id: String
     var symbol: String? = nil
+    var size: CGFloat = 26
 
     var body: some View {
-        Image(systemName: symbol ?? Worlds.icon(id))
-            .overlay(alignment: .topTrailing) {
-                if let sp = Worlds.special(id) {
-                    Image(systemName: sp.symbol)
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(sp.color)
-                        .shadow(color: .black.opacity(0.5), radius: 1)
-                        .offset(x: 9, y: -8)
-                        .accessibilityHidden(true)
-                }
+        ZStack {
+            Image(systemName: symbol ?? Worlds.icon(id))
+                .font(.system(size: size * 0.72, weight: .regular))
+                .frame(width: size, height: size)
+            if let sp = Worlds.special(id) {
+                Image(systemName: sp.symbol)
+                    .font(.system(size: size * 0.4, weight: .bold))
+                    .foregroundStyle(sp.color)
+                    .shadow(color: .black.opacity(0.55), radius: 1)
+                    .frame(width: size * 0.5, height: size * 0.5)
+                    .position(x: size * 0.98, y: size * 0.04)
+                    .accessibilityHidden(true)
             }
+        }
+        .frame(width: size, height: size)
     }
 }
