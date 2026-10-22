@@ -10,6 +10,9 @@ extension Worlds {
         case "village": return ("dog.fill", Color(red: 0.78, green: 0.84, blue: 0.95))         // 강아지
         case "home": return ("cat.fill", Color(red: 1.0, green: 0.8, blue: 0.55))              // 고양이
         case "gallery": return ("paintpalette.fill", Color(red: 0.95, green: 0.55, blue: 0.7))  // 그림
+        case "sea": return ("bubbles.and.sparkles", Color(red: 0.62, green: 0.72, blue: 1.0))         // 해파리
+        case "valley": return ("fish.fill", Color(red: 1.0, green: 0.55, blue: 0.3))                 // 물고기
+        case "city": return ("lightbulb.fill", Color(red: 1.0, green: 0.35, blue: 0.8))              // 네온사인
         default: return nil
         }
     }

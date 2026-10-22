@@ -1108,6 +1108,9 @@ final class ExploreSession {
             stars = sky
         }
         stars?.tick(dt, gaze: gaze)
+        // 바다 해파리: 머리 자리(가까이 오면 비켜 감) · 계곡 물고기: 손(물에 대면 흩어짐)
+        wld.jelly?.head = f.toSaved(head)
+        wld.creek?.tick(dt, hands: handPts)
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
             music.set(true, at: wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))

@@ -1295,6 +1295,7 @@ def sfx():
     dog_sounds(r)
     misc_sounds(r)
     water_sounds(r)
+    neon_sounds(r)
 
 
 def _formant_voice(f0, F, amp, r, breath=0.06, nasal=None):
@@ -1595,6 +1596,27 @@ def water_sounds(r):
     save_wav('fall_loop', _loop(roar, 1.0), -12)
 
 
+def neon_sounds(r):
+    """네온사인: 낮게 웅웅거리는 변압기 소리(되풀이) · 깜빡일 때 지직 하는 소리 두 가지"""
+    dur = 6.0
+    n = int(SR * dur)
+    t = _t(dur)
+    hum = (np.sin(2 * np.pi * 120 * t) * 0.6 + np.sin(2 * np.pi * 240 * t) * 0.25 + np.sin(2 * np.pi * 360 * t) * 0.1)
+    hum *= 0.8 + 0.2 * np.sin(2 * np.pi * 0.31 * t)
+    buzz = _lowpass(r.standard_normal(n), 3000) * (0.5 + 0.5 * np.sign(np.sin(2 * np.pi * 120 * t))) * 0.06
+    save_wav('neon_hum', _loop(hum * 0.5 + buzz, 1.0), -24)
+    for i in range(1, 3):
+        buf = np.zeros(int(SR * 0.5))
+        at = 0.0
+        for k in range(r.integers(3, 7)):
+            ln = r.uniform(0.006, 0.03)
+            x = r.standard_normal(int(SR * ln))
+            x = (x - _lowpass(x, 1500)) * np.exp(-_t(ln) * 60)
+            _place(buf, x * r.uniform(0.4, 1), at)
+            at += r.uniform(0.02, 0.07)
+        save_wav(f'neon_flick{i}', buf, -20)
+
+
 def misc_sounds(r):
     """별자리 반짝(맑은 종 두 음), 카페 에스프레소 머신 스팀, 잔 부딪히는 소리"""
     buf = np.zeros(int(SR * 2.4))
@@ -1772,6 +1794,199 @@ def stream_art():
     save_png('fall', rgb, a)
 
 
+def jelly_art():
+    """해파리: 갓(가로 = 둘레, 세로 = 가장자리→꼭대기) — 가장자리 띠는 밝고, 방사형 관·네 잎 생식소 무늬, 꼭대기로 갈수록 투명.
+    촉수(세로로 긴 띠, 아래로 갈수록 가늘고 옅게)·입팔(주름진 넓은 띠)"""
+    W = H = 256
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    v = 1 - yy / (H - 1)                     # 0 가장자리 → 1 꼭대기 (그림 아래가 가장자리)
+    u = xx / W
+    canals = np.clip(np.cos(u * 2 * np.pi * 8) * 0.5 + 0.5, 0, 1) ** 30 * (1 - v) * 0.9
+    lobes = np.clip(np.cos(u * 2 * np.pi * 4) * 0.5 + 0.5, 0, 1) ** 3 * np.exp(-((v - 0.62) / 0.12) ** 2)
+    rim = np.exp(-(v / 0.06) ** 2)
+    fine = noise(1.4, W, 2101)
+    lum = np.clip(0.35 + 0.65 * rim + 0.55 * canals + 0.6 * lobes + 0.12 * (fine - 0.5), 0, 1)
+    a = np.clip(0.22 + 0.5 * rim + 0.35 * canals + 0.45 * lobes - 0.12 * v, 0.08, 1)
+    save_png('jelly_bell', np.stack([lum * 255] * 3, -1), a)
+    # 촉수 (32×512): 가운데가 진하고 아래로 갈수록 옅어짐, 작은 마디
+    Wt, Ht = 32, 512
+    yy, xx = np.mgrid[0:Ht, 0:Wt].astype(np.float32)
+    d = np.abs(xx - Wt / 2) / (Wt / 2)
+    k = yy / Ht                              # 0 위 → 1 아래
+    beads = 0.75 + 0.25 * np.cos(yy / Ht * 2 * np.pi * 26) ** 2
+    a = np.clip((1 - d ** 1.5) * (1 - k ** 1.3) * beads, 0, 1)
+    save_png('jelly_tent', np.full((Ht, Wt, 3), 245.0), a)
+    # 입팔 (64×256): 물결치는 주름 가장자리
+    Wo, Ho = 64, 256
+    yy, xx = np.mgrid[0:Ho, 0:Wo].astype(np.float32)
+    edge = 0.75 + 0.25 * np.sin(yy / Ho * 2 * np.pi * 9)
+    d = np.abs(xx - Wo / 2) / (Wo / 2)
+    a = np.clip((edge - d) * 4, 0, 1) * (1 - (yy / Ho) ** 2) * 0.85
+    fr = np.clip(1 - np.abs(d - edge * 0.85) * 6, 0, 1)
+    save_png('jelly_arm', np.stack([200 + 55 * fr] * 3, -1), a)
+
+
+def fish_art():
+    """물고기 무늬 6가지 (가로 = 머리→꼬리, 세로 = 등→배): 비단잉어(주홍·흰 얼룩), 금빛, 은빛 피라미(옆줄), 줄무늬,
+    파랑·노랑, 검은 반점 붉은 물고기. 등은 진하고 배는 밝게"""
+    W, H = 256, 128
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    u = xx / W; v = yy / H                    # v 0 등 → 1 배
+    belly = np.clip((v - 0.45) * 2, 0, 1)
+    back = np.clip((0.45 - v) * 2.2, 0, 1)
+    specs = []
+    n1 = noise(3.6, W, 2201, h=H)
+    koi = np.where((n1 > 0.52)[..., None], np.array([236, 92, 34.0]), np.array([246, 240, 232.0]))
+    specs.append(koi)
+    gold = np.array([238, 170, 50.0]) * (0.9 + 0.2 * noise(1.5, W, 2202, h=H))[..., None]
+    specs.append(gold)
+    silver = np.array([176, 186, 196.0]) * (0.95 + 0.1 * np.sin(u * 60))[..., None]
+    lat = np.exp(-((v - 0.5) / 0.05) ** 2)[..., None]
+    silver = silver * (1 - 0.4 * lat) + np.array([90, 110, 160.0]) * 0.4 * lat
+    specs.append(silver)
+    stripes = (np.sin(u * 2 * np.pi * 5) > 0.35)[..., None]
+    specs.append(np.where(stripes, np.array([40, 40, 46.0]), np.array([236, 214, 120.0])))
+    by = np.where((v < 0.5)[..., None], np.array([40, 110, 210.0]), np.array([246, 214, 60.0]))
+    specs.append(by)
+    spots = (noise(3.4, W, 2203, h=H) > 0.62)[..., None]
+    specs.append(np.where(spots, np.array([30, 24, 24.0]), np.array([214, 56, 46.0])))
+    for i, base in enumerate(specs):
+        rgb = base * (1 - 0.35 * back[..., None]) + 255 * 0.25 * belly[..., None]
+        # 비늘 결
+        scale = 0.94 + 0.06 * np.sin(u * 140 + np.sin(v * 30) * 2) * np.sin(v * 90)
+        rgb = rgb * scale[..., None]
+        save_jpg(f'fish_{i}', rgb, q=90)
+
+
+NEON_COLORS = [(255, 60, 170), (40, 230, 255), (255, 70, 60), (170, 90, 255), (255, 190, 40), (70, 255, 120), (60, 120, 255), (255, 240, 220)]
+
+
+def _neon_glyphs(d, r, x0, y0, x1, y1, lw):
+    """글자 같기도 그림 같기도 한 모양 (알아볼 수 없는 기호): 칸마다 획 2~4개 — 곧은 획·둥근 획·점·고리"""
+    def U(lo, hi):
+        return r.uniform(min(lo, hi), max(lo, hi) + 1e-3)
+    cells = max(1, int((x1 - x0) / max(1, (y1 - y0) * 0.8)))
+    cw = (x1 - x0) / cells
+    segs = []
+    for c in range(cells):
+        cx0 = x0 + c * cw + cw * 0.12; cx1 = x0 + (c + 1) * cw - cw * 0.12
+        for _ in range(r.integers(2, 5)):
+            kind = r.integers(0, 4)
+            if kind == 0:
+                ax, ay = U(cx0, cx1), U(y0, y1)
+                bx, by = U(cx0, cx1), U(y0, y1)
+                segs.append(('line', (ax, ay, bx, by)))
+            elif kind == 1:
+                rr = r.uniform(0.18, 0.45) * min(cw, y1 - y0)
+                cx, cy = U(cx0 + rr, cx1 - rr), U(y0 + rr, y1 - rr)
+                st = r.uniform(0, 360)
+                segs.append(('arc', (cx - rr, cy - rr, cx + rr, cy + rr, st, st + r.uniform(120, 300))))
+            elif kind == 2:
+                rr = r.uniform(0.12, 0.3) * min(cw, y1 - y0)
+                cx, cy = U(cx0 + rr, cx1 - rr), U(y0 + rr, y1 - rr)
+                segs.append(('ring', (cx - rr, cy - rr, cx + rr, cy + rr)))
+            else:
+                ax = U(cx0, cx1)
+                segs.append(('line', (ax, y0, ax + r.uniform(-0.2, 0.2) * cw, y1)))
+    return segs
+
+
+def _draw_segs(d, segs, lw):
+    for k, p in segs:
+        if k == 'line':
+            d.line(p, fill=255, width=lw)
+        elif k == 'arc':
+            d.arc(p[:4], p[4], p[5], fill=255, width=lw)
+        else:
+            d.ellipse(p, outline=255, width=lw)
+
+
+def neon_art():
+    """네온사인 16개 (가로형 10, 세로형 6) × 두 장(번갈아 켜지는 부분): 유리관 가운데는 하얗게 타고 둘레로 색 빛이 번짐.
+    읽을 수 없는 기호 + 테두리 관(일부는 끊긴 선)·화살표·심장·잔 같은 그림 조각"""
+    S = 2                                     # 두 배로 그려 줄여 매끈하게
+    for i in range(16):
+        r = rng(2301 + i)
+        vert = i >= 10
+        W, H = (256, 1024) if vert else (1024, 256)
+        col = np.array(NEON_COLORS[i % len(NEON_COLORS)], float)
+        col2 = np.array(NEON_COLORS[(i * 3 + 2) % len(NEON_COLORS)], float)
+        frames = []
+        # 공통: 테두리 관
+        pad = 18
+        lw = int(r.uniform(9, 14)) * S
+        border = Image.new('L', (W * S, H * S), 0)
+        bd = ImageDraw.Draw(border)
+        style = r.integers(0, 3)
+        if style == 0:
+            bd.rounded_rectangle((pad * S, pad * S, (W - pad) * S, (H - pad) * S), radius=40 * S, outline=255, width=lw // 2)
+        elif style == 1:
+            bd.rectangle((pad * S, pad * S, (W - pad) * S, (H - pad) * S), outline=255, width=lw // 2)
+        # 글자 (가로형은 한 줄, 세로형은 세로로 쌓은 기호)
+        g1 = Image.new('L', (W * S, H * S), 0)
+        g2 = Image.new('L', (W * S, H * S), 0)
+        d1 = ImageDraw.Draw(g1); d2 = ImageDraw.Draw(g2)
+        if vert:
+            n = r.integers(3, 6)
+            ch = (H - 2 * pad - 30) / n
+            for k in range(n):
+                y0 = pad + 15 + k * ch
+                segs = _neon_glyphs(d1, r, (pad + 30) * S, (y0 + ch * 0.12) * S, (W - pad - 30) * S, (y0 + ch * 0.88) * S, lw)
+                _draw_segs(d1 if k % 2 == 0 or r.random() < 0.6 else d2, segs, lw)
+        else:
+            icon = r.random() < 0.55
+            x_text0 = pad + 40 + (H if icon else 0)
+            segs = _neon_glyphs(d1, r, x_text0 * S, (pad + 40) * S, (W - pad - 40) * S, (H - pad - 40) * S, lw)
+            _draw_segs(d1, segs, lw)
+            if icon:
+                # 그림 조각: 잔·심장·화살표·별 비슷한 모양 (두 번째 장에서만 일부가 바뀌어 움직이는 느낌)
+                cx, cy, rr = (pad + 40 + H / 2 - 20) * S, H / 2 * S, (H / 2 - pad - 34) * S
+                k = r.integers(0, 4)
+                if k == 0:     # 잔
+                    d1.line((cx - rr, cy - rr * 0.7, cx + rr, cy - rr * 0.7), fill=255, width=lw)
+                    d1.line((cx - rr, cy - rr * 0.7, cx, cy + rr * 0.2), fill=255, width=lw)
+                    d1.line((cx + rr, cy - rr * 0.7, cx, cy + rr * 0.2), fill=255, width=lw)
+                    d1.line((cx, cy + rr * 0.2, cx, cy + rr * 0.9), fill=255, width=lw)
+                    d2.ellipse((cx + rr * 0.2, cy - rr * 1.1, cx + rr * 0.6, cy - rr * 0.7), outline=255, width=lw // 2)
+                elif k == 1:   # 심장 비슷
+                    d1.arc((cx - rr, cy - rr, cx, cy), 150, 360, fill=255, width=lw)
+                    d1.arc((cx, cy - rr, cx + rr, cy), 180, 30, fill=255, width=lw)
+                    d1.line((cx - rr * 0.93, cy - rr * 0.25, cx, cy + rr), fill=255, width=lw)
+                    d1.line((cx + rr * 0.93, cy - rr * 0.25, cx, cy + rr), fill=255, width=lw)
+                    d2.ellipse((cx - rr * 1.25, cy - rr * 1.25, cx + rr * 1.25, cy + rr * 1.25), outline=255, width=lw // 3)
+                elif k == 2:   # 화살표 (두 장이 번갈아 → 움직임)
+                    for kk, dd in ((0, d1), (1, d2)):
+                        off = kk * rr * 0.5
+                        dd.line((cx - rr + off, cy, cx + rr * 0.3 + off, cy), fill=255, width=lw)
+                        dd.line((cx + rr * 0.3 + off, cy, cx - rr * 0.1 + off, cy - rr * 0.5), fill=255, width=lw)
+                        dd.line((cx + rr * 0.3 + off, cy, cx - rr * 0.1 + off, cy + rr * 0.5), fill=255, width=lw)
+                else:          # 별 비슷
+                    pts = []
+                    for q in range(10):
+                        a = q / 10 * 2 * np.pi - np.pi / 2
+                        rad = rr if q % 2 == 0 else rr * 0.45
+                        pts.append((cx + np.cos(a) * rad, cy + np.sin(a) * rad))
+                    d1.line(pts + [pts[0]], fill=255, width=lw, joint='curve')
+                    d2.ellipse((cx - rr * 0.2, cy - rr * 0.2, cx + rr * 0.2, cy + rr * 0.2), outline=255, width=lw // 2)
+        b = np.asarray(border.resize((W, H), Image.LANCZOS)).astype(np.float32) / 255
+        a1 = np.asarray(g1.resize((W, H), Image.LANCZOS)).astype(np.float32) / 255
+        a2 = np.asarray(g2.resize((W, H), Image.LANCZOS)).astype(np.float32) / 255
+        for fi, tubes in enumerate([(a1, a2 * 0.0, b), (a1, a2, b)]):
+            main = np.clip(tubes[0] + tubes[1], 0, 1)
+            bord = tubes[2]
+            def glow(m, rad):
+                im = Image.fromarray((np.clip(m, 0, 1) * 255).astype(np.uint8))
+                return np.asarray(im.filter(ImageFilter.GaussianBlur(rad))).astype(np.float32) / 255
+            gm = np.clip(glow(main, 6) * 1.6 + glow(main, 22) * 1.4, 0, 1)
+            gb = np.clip(glow(bord, 6) * 1.6 + glow(bord, 22) * 1.4, 0, 1)
+            core_m = np.clip(main * 1.2, 0, 1); core_b = np.clip(bord * 1.2, 0, 1)
+            rgb = col[None, None, :] * gm[..., None] + col2[None, None, :] * gb[..., None]
+            hot = np.clip(core_m + core_b, 0, 1)
+            rgb = rgb * (1 - hot[..., None] * 0.7) + 255 * hot[..., None] * 0.7 + (col * 0.3)[None, None, :] * hot[..., None]
+            a = np.clip(np.maximum(hot, (gm + gb) * 0.85), 0, 1)
+            save_png(f'neon_{i:02d}{"ab"[fi]}', np.clip(rgb, 0, 255), a)
+
+
 def street_shops(night=False):
     """카페 창밖 맞은편 거리: 2~4층 건물이 늘어서고 1층은 차양 달린 가게(진열창·문·간판), 가로등.
     가로 2048 × 세로 512 (= 높이 9m 띠), 하늘은 투명. 밤엔 가게 창과 일부 위층 창, 가로등에 불"""
@@ -1910,7 +2125,7 @@ def line_art():
 
 def line_folder(folder, sky=False):
     for fn in sorted(os.listdir(folder)):
-        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid') or fn.startswith('cat_') or fn.startswith('dog_') or fn.startswith('fire_') or fn.startswith('stream_') or fn.startswith('fall_') or fn.startswith('emote_'):
+        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid') or fn.startswith('cat_') or fn.startswith('dog_') or fn.startswith('fire_') or fn.startswith('stream_') or fn.startswith('fall_') or fn.startswith('emote_') or fn.startswith('jelly_') or fn.startswith('neon_') or fn.startswith('moon'):
             continue
         name = fn[:-6]
         m = Image.open(os.path.join(folder, fn)).convert('L')
@@ -1998,6 +2213,7 @@ def main():
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
             people(), menu_board(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True),
+            jelly_art(), fish_art(), neon_art(),
             photo_textures()),
         'sfx': lambda: sfx(),
         'cat': lambda: _cat(),

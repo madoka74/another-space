@@ -213,6 +213,9 @@ final class RoomWorld {
         if dc.city { l.append((night ? "facade_night" : "facade", "tex")) }
         if dc.paintings { for i in 0..<6 { l.append(("art_\(i)", "tex")) } }
         if r.place == "valley" { l += [("river", "tex"), ("river_hi", "tex"), ("fall", "tex"), ("pebble", "tex"), ("rock", "tex")] }
+        if r.place == "valley" { for i in 0..<6 { l.append(("fish_\(i)", "tex")) } }
+        if r.place == "sea" { l += [("jelly_bell", "tex"), ("jelly_tent", "tex"), ("jelly_arm", "tex"), ("glow", "tex"), ("spark_dot", "tex")] }
+        if r.place == "city" { for i in 0..<16 { l += [(String(format: "neon_%02da", i), "tex"), (String(format: "neon_%02db", i), "tex")] } }
         if Worlds.cloudCount(r.weather) > 0 { for i in 0..<3 { l.append(("cloud_\(i)", "sky")) } }
         return l
     }
@@ -262,6 +265,7 @@ final class RoomWorld {
         addGround(dc, R: R, floorY: floorY)
         addBands(dc, R: R, floorY: floorY)
         addThings(dc, rec: rec, L, floorY: floorY)
+        addFeature(L, segs: segs, floorY: floorY, ceilY: ceilY)
         if dc.paintings {
             paintSegs = segs.filter { !$0.window }
             paintLayout = L
@@ -753,6 +757,12 @@ final class RoomWorld {
     private static var skyMesh: MeshResource?
     /// 밤하늘 별·달 (밤·새벽·해질녘, 비·눈이 아닐 때)
     private(set) var stars: SkyStars?
+    /// 장소마다의 특징: 바다 해파리 · 계곡 방 안 물길과 물고기 · 도시 네온사인
+    private(set) var jelly: JellySea?
+    private(set) var creek: ValleyCreek?
+    private(set) var neon: NeonCity?
+    private var cityNear: [NeonCity.Box] = []
+    private var cityFar: [NeonCity.Box] = []
 
     private func addSky() {
         if Self.skyMesh == nil { Self.skyMesh = Self.skySphere(radius: 300) }
@@ -1093,6 +1103,29 @@ final class RoomWorld {
         riverNear = pts.min { simd_distance($0, center) < simd_distance($1, center) }
     }
 
+    /// 장소마다의 특징 만들기
+    private func addFeature(_ L: Layout, segs: [WallSeg], floorY: Float, ceilY: Float) {
+        switch room.place {
+        case "sea":
+            let j = JellySea(center: center, halfSize: halfSize, floorY: floorY, ceilY: ceilY, layout: L, room: room, look: look)
+            world.addChild(j.root)
+            jelly = j
+        case "valley":
+            let c = ValleyCreek(room: room, layout: L, floorY: floorY, blocked: blocked, riverNear: riverNear,
+                                riverWidth: riverW.min() ?? 2.4, look: look, tint: tint)
+            if c.ok {
+                local.addChild(c.local)
+                world.addChild(c.world)
+                creek = c
+            }
+        case "city":
+            let n = NeonCity(room: room, layout: L, floorY: floorY, segs: segs, near: cityNear, far: cityFar, center: center, look: look)
+            world.addChild(n.world)
+            neon = n
+        default: break
+        }
+    }
+
     /// 나무·바위·텐트·건물.
     /// 집 안(어느 방이든 걸을 수 있는 곳)에 걸치는 자리는 피함: 포털 너머 세계의 물건은 방 안에 있어도
     /// 다른 방 포털(문 너머 벽 등)을 통해 그려져서, 복도·문 앞에 나무·덤불이 떠 있는 것처럼 보임
@@ -1186,6 +1219,27 @@ final class RoomWorld {
                 let byaw = -angle + (i % 3 == 0 ? 0.3 : 0)
                 geo.box(base: p, w: bw, d: bd, h: h, yaw: byaw, tile: 12)
                 if lineMode { tentLines.boxOutline(base: p, w: bw, d: bd, h: h, yaw: byaw, width: 0.25 + d * 0.004) }
+                cityFar.append(NeonCity.Box(base: p, w: bw, d: bd, h: h, yaw: byaw))
+            }
+            // 옥상 바로 옆에 솟은 건물 몇 채 (가까운 벽 — 네온 간판이 눈높이에 걸려 공간감이 생김)
+            var tries = 0
+            while cityNear.count < 3 && tries < 40 {
+                tries += 1
+                let a = Float.random(in: 0...(2 * .pi), using: &g)
+                let bw = Float.random(in: 8...14, using: &g), bd = Float.random(in: 8...12, using: &g)
+                let d = R + Float.random(in: 4.5...8, using: &g) + bd / 2
+                let p = SIMD3<Float>(center.x + cos(a) * d, floorY - 30, center.z + sin(a) * d)
+                // 집 안(어느 방이든)에 걸치거나 이미 세운 옆 건물과 겹치면 다른 자리
+                let pc = SIMD2<Float>(p.x, p.z)
+                var bad = cityNear.contains { simd_distance(SIMD2<Float>($0.base.x, $0.base.z), pc) < 14 }
+                for dx in [-bw / 2, 0, bw / 2] { for dz in [-bd / 2, 0, bd / 2] where L.walkable(L.plane(p.x + dx, p.z + dz)) { bad = true } }
+                if bad { continue }
+                let h = 30 + Float.random(in: 7...16, using: &g)
+                let to = SIMD3<Float>(center.x - p.x, 0, center.z - p.z)
+                let byaw = atan2(to.x, to.z) - .pi / 2
+                geo.box(base: p, w: bw, d: bd, h: h, yaw: byaw, tile: 12)
+                if lineMode { tentLines.boxOutline(base: p, w: bw, d: bd, h: h, yaw: byaw, width: 0.2) }
+                cityNear.append(NeonCity.Box(base: p, w: bw, d: bd, h: h, yaw: byaw))
             }
             let face = dark ? "facade_night" : "facade"
             if let e = geo.entity("city", Tex.unlit(face, tint: dark ? SIMD3<Float>(repeating: 0.95) : tint * shades[1])) { world.addChild(e) }
@@ -1627,6 +1681,8 @@ final class RoomWorld {
             if waterOff > 6 { waterOff -= 6 }
             w.position = SIMD3<Float>(waterOff, 0, waterOff * 0.4)
         }
+        jelly?.tick(dt)
+        neon?.tick(dt)
         for i in flows.indices {
             var f = flows[i]
             f.3 = (f.3 + f.2 * dt / 3.5).truncatingRemainder(dividingBy: 1)        // 물길 시작(폭포) → 끝 쪽으로 흐름, 폭포는 아래로
