@@ -232,6 +232,7 @@ final class Campfire {
         let drift = wind * windK
         let fr: Float = 80 * ps
         var fire = ParticleEmitterComponent()
+        fire.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
         fire.emitterShape = .box
         fire.emitterShapeSize = [0.26 * ps, 0.04, 0.26 * ps]
         fire.birthLocation = .volume

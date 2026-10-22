@@ -386,12 +386,14 @@ final class SkyStars {
     }
 
     /// 탭: 그 방향의 별자리를 고름 (없으면 nil) — 선을 긋고 별자리 바로 아래(내 눈 기준 아래)에 이름. viewUp: 내 머리의 위쪽 방향
-    func pick(_ d: SIMD3<Float>, viewUp: SIMD3<Float>) -> (Constellation, SIMD3<Float>)? {
+    /// 반환: 별자리, 가운데 방향, 가장 낮은 별의 고도(라디안) — 정보판을 별자리 바로 아래에 두려고
+    func pick(_ d: SIMD3<Float>, viewUp: SIMD3<Float>) -> (Constellation, SIMD3<Float>, Float)? {
         guard visible, let g = near(d, tol: 0.16) else { return nil }
         for o in groups { o.picked = o === g }
         g.reveal = 0
         Sfx.play("star_chime", in: root, at: g.dir * 4, gain: -4)
-        return (g.c, g.dir)
+        let low = g.verts.map(\.y).min() ?? g.dir.y
+        return (g.c, g.dir, asin(max(-1, min(1, low))))
     }
 
     func unpick() {

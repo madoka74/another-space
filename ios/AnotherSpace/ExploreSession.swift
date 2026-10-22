@@ -1075,30 +1075,27 @@ final class ExploreSession {
         starCard?.isEnabled = false
     }
 
-    /// 정보판 자리: 탭한 별자리를 보던 그 높이(위로 젖힌 고개 그대로), 별자리 옆으로 28도쯤 비켜 — 별자리를 가리지 않고 바로 읽힘.
+    /// 정보판 자리: 별자리 바로 아래 (같은 방위, 판 윗변이 가장 낮은 별 조금 아래) — 별자리를 보며 탭하면 그 시선 그대로 아래에 읽을 판이 있음.
     /// 판은 늘 나를 정면으로 보고(기울어짐), 네 귀퉁이·옮기기 막대까지 모두 방 안(천장·벽·문·가구에서 떨어짐)인 자리만.
-    /// 높이 올려다보면 천장에 걸리므로 들어갈 때까지 가까이(그만큼 작게 — 보이는 크기는 같음), 그래도 안 되면 조금씩 낮춤
-    private func placeStarCard(away cdir: SIMD3<Float>) {
+    /// 높이 올려다보면 천장에 걸리므로 들어갈 때까지 가까이(그만큼 작게 — 보이는 크기는 같음), 그래도 안 되면 조금씩 낮추고 마지막에야 옆으로
+    private func placeStarCard(away cdir: SIMD3<Float>, lowElev: Float) {
         guard let card = starCard else { return }
         card.isEnabled = true
         var hz = SIMD3<Float>(cdir.x, 0, cdir.z)
         if simd_length(hz) < 0.05 { hz = SIMD3<Float>(fwd.x, 0, fwd.z) }
         hz = simd_length(hz) > 0.01 ? simd_normalize(hz) : SIMD3<Float>(0, 0, -1)
-        let elev0 = min(0.87, max(0.05, asin(min(1, max(-1, simd_normalize(cdir).y)))))      // 별자리 높이 (최대 50도)
-        var g = fwd; g.y = 0
-        g = simd_length(g) > 0.01 ? simd_normalize(g) : hz
-        let right = simd_normalize(simd_cross(g, SIMD3<Float>(0, 1, 0)))
-        let side: Float = simd_dot(hz, right) > 0 ? 1 : -1                     // 별자리가 오른쪽이면 판은 그 왼쪽에
         let full: Float = 0.95
         var hw: Float = 0.25, hh: Float = 0.28
         card.scale = SIMD3<Float>(repeating: 1)
         let bb = card.visualBounds(relativeTo: card)
         if bb.extents.x > 0.05 && bb.extents.y > 0.05 { hw = bb.extents.x / 2; hh = bb.extents.y / 2 }
+        let halfAng = atan((hh + 0.06) / full)                                   // 판 반 높이 + 막대가 차지하는 각도
+        let elev0 = min(0.9, lowElev - 0.05 - halfAng)                           // 판 가운데 = 가장 낮은 별 바로 아래
         var best: (SIMD3<Float>, Float)? = nil
-        search: for drop: Float in [0, 0.15, 0.3, 0.45, 0.6] {
-            let elev = max(-0.1, elev0 - drop)
-            for yaw: Float in [0.49, 0.7, 0.32, 0.95] {
-                let h2 = simd_normalize(simd_quatf(angle: side * yaw, axis: [0, 1, 0]).act(hz))
+        search: for yaw: Float in [0, 0.2, -0.2, 0.4, -0.4] {
+            for drop: Float in [0, 0.12, 0.24, 0.36, 0.5] {
+                let elev = max(-0.2, elev0 - drop)
+                let h2 = simd_normalize(simd_quatf(angle: yaw, axis: [0, 1, 0]).act(hz))
                 let d = simd_normalize(h2 * cos(elev) + SIMD3<Float>(0, sin(elev), 0))
                 let cr = simd_normalize(simd_cross(d, SIMD3<Float>(0, 1, 0)))       // 판의 가로
                 let cu = simd_normalize(simd_cross(cr, d))                            // 판의 세로 (나를 향해 기운 판)
@@ -1120,6 +1117,8 @@ final class ExploreSession {
                 }
             }
         }
+        var g = fwd; g.y = 0
+        g = simd_length(g) > 0.01 ? simd_normalize(g) : hz
         let spot = best ?? (head + g * 0.4 + SIMD3<Float>(0, -0.05, 0), 0.4 / full)
         card.scale = SIMD3<Float>(repeating: spot.1)
         card.position = spot.0
@@ -1166,7 +1165,8 @@ final class ExploreSession {
         wld.creek?.tick(dt, hands: handPts, feet: f.toSaved(head))
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
-            music.set(true, at: wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))
+            music.set(true, at: wld.speakerSpot ?? wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))      // 천장 들보에 매단 스피커에서
+            wld.musicOn = true
             let key = "\(rm.time)-\(rm.lookMode.rawValue)"
             if cafeSets[rm.id]?.0 != key {
                 cafeSets[rm.id]?.1.remove()
@@ -1179,6 +1179,7 @@ final class ExploreSession {
             }
         } else {
             music.set(false)
+            wld.musicOn = false
         }
         // 다른 방 테마가 카페가 아니게 바뀌었으면 그 방 차림은 치움
         for (id, c) in cafeSets where d.rec.room(id)?.place != "cafe" {
@@ -1314,7 +1315,8 @@ final class ExploreSession {
         let h: Float = hs.y - L.floorY
         // 서 있는 높이: 더 높아지면 바로, 걷는 동안엔 천천히 따라감 (앉아 있을 땐 그대로)
         if standH == 0 || h > standH { standH = h } else if speed > 0.3 && !seated { standH += (h - standH) * min(1, dt * 0.4) }
-        let low = h < standH - 0.35 && h < 1.35 && h > 0.45
+        // 앉음: 서 있을 때보다 머리가 28cm 넘게 낮아짐 (소파·의자·바닥 어디든, 키와 상관없이 — 예전엔 '바닥에서 1.35m 아래'도 따져 키 큰 사람은 아래를 봐야만 됐음)
+        let low = h < standH - 0.28 && h > 0.3
         if !seated {
             sitT = (low && speed < 0.15) ? sitT + dt : 0
             if sitT > 0.8 {                                     // 앉고 1초쯤이면 불이 피어남 (어디를 보고 있든)
@@ -1323,7 +1325,7 @@ final class ExploreSession {
                 sitDown(hs, L)
             }
         } else {
-            standT = (h > standH - 0.2 || speed > 0.5) ? standT + dt : 0
+            standT = (h > standH - 0.16 || speed > 0.5) ? standT + dt : 0
             if standT > 0.4 {
                 seated = false
                 sitT = 0
@@ -1368,7 +1370,7 @@ final class ExploreSession {
         for r in stride(from: Float(0.55), through: Float(0.18), by: -0.0925) {
             var dd: Float = max(0.55, r + 0.45)
             while dd <= 1.9 {
-                for a in [Float(0), 0.2, -0.2, 0.4, -0.4, 0.65, -0.65] {
+                for a in [Float(0), 0.2, -0.2, 0.4, -0.4, 0.65, -0.65, 1.0, -1.0, 1.4, -1.4, 1.9, -1.9, 2.5, -2.5, 3.14] {   // 앞이 막혔으면 옆·뒤에라도
                     let v = SIMD2<Float>(dir.x * cos(a) - dir.y * sin(a), dir.x * sin(a) + dir.y * cos(a))
                     let p = me + v * dd
                     cands.append((p, abs(dd - (r + 0.75)) + abs(a) * 0.8 + (0.55 - r) * 3, r))
@@ -1773,7 +1775,7 @@ final class ExploreSession {
             if let r = st.pick(dir, viewUp: f.dirToSaved(headUp)) {
                 pendingTap = nil
                 starPick = r.0
-                placeStarCard(away: f.dirToCurrent(r.1))
+                placeStarCard(away: f.dirToCurrent(r.1), lowElev: r.2)
                 return
             }
         }

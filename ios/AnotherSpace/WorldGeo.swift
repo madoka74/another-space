@@ -299,6 +299,135 @@ struct Geo {
         }
     }
 
+    // MARK: 캠핑 텐트 (여러 모양). 모두 바닥 가운데 c, 앞(문) = 회전 yaw 의 +z. fabric: 천, dark: 문·창(짙은 천), poles: 폴대·줄, lines: 선 그림 윤곽
+    struct TentParts { var fabric = Geo(); var dark = Geo(); var poles = Geo(); var lines = Geo() }
+
+    private static func rot(_ yaw: Float) -> simd_quatf { simd_quatf(angle: yaw, axis: [0, 1, 0]) }
+
+    /// 돔 텐트: 둥근 지붕 + 대각선으로 엇갈린 두 폴대 + 앞문 + 둘레 고정 줄
+    static func domeTent(_ t: inout TentParts, at c: SIMD3<Float>, w: Float, l: Float, h: Float, yaw: Float) {
+        let q = rot(yaw)
+        func P(_ u: Float, _ v: Float, _ k: Float = 1) -> SIMD3<Float> {
+            c + q.act(SIMD3<Float>(cos(v) * cos(u) * w / 2 * k, sin(v) * h * k, cos(v) * sin(u) * l / 2 * k))
+        }
+        let nu = 20, nv = 7
+        for i in 0..<nu {
+            for j in 0..<nv {
+                let u0 = Float(i) / Float(nu) * 2 * .pi, u1 = Float(i + 1) / Float(nu) * 2 * .pi
+                let v0 = Float(j) / Float(nv) * .pi / 2, v1 = Float(j + 1) / Float(nv) * .pi / 2
+                // 폴대 사이 천이 살짝 처지게 (가운데를 조금 안쪽으로)
+                let sag: Float = 1 - 0.035 * abs(sin(2 * (u0 + u1) / 2))
+                t.fabric.quad(P(u0, v0, sag), P(u1, v0, sag), P(u1, v1, sag), P(u0, v1, sag), SIMD2<Float>(u0, v0) / 1.2, SIMD2<Float>(u1, v0) / 1.2,
+                              SIMD2<Float>(u1, v1) / 1.2, SIMD2<Float>(u0, v1) / 1.2)
+            }
+        }
+        // 문 (앞쪽 아래 둥근 판, 천보다 조금 바깥)
+        for i in 0..<6 {
+            let u0 = Float.pi / 2 - 0.42 + Float(i) / 6 * 0.84, u1 = Float.pi / 2 - 0.42 + Float(i + 1) / 6 * 0.84
+            for j in 0..<4 {
+                let v0 = Float(j) / 4 * 0.95, v1 = Float(j + 1) / 4 * 0.95
+                let sh0: Float = 1 - pow(Float(j) / 4, 3) * 0.6, sh1: Float = 1 - pow(Float(j + 1) / 4, 3) * 0.6      // 위로 갈수록 좁아지는 둥근 문
+                let um = Float.pi / 2
+                t.dark.quad(P(um + (u0 - um) * sh0, v0, 1.012), P(um + (u1 - um) * sh0, v0, 1.012), P(um + (u1 - um) * sh1, v1, 1.012), P(um + (u0 - um) * sh1, v1, 1.012),
+                            .zero, .zero, .zero, .zero)
+            }
+        }
+        // 폴대 두 개 (대각선으로 꼭대기에서 엇갈림)
+        for u in [Float.pi / 4, 3 * .pi / 4] {
+            var prev: SIMD3<Float>? = nil
+            for k in 0...16 {
+                let s2 = Float(k) / 16
+                let p = s2 < 0.5 ? P(u, s2 * .pi, 1.01) : P(u + .pi, (1 - s2) * .pi, 1.01)
+                if let pr = prev { t.poles.stroke(pr, p, width: 0.022); t.lines.stroke(pr, p, width: 0.025) }
+                prev = p
+            }
+        }
+        // 고정 줄: 몸통 중간에서 바깥 말뚝으로
+        for k in 0..<4 {
+            let u = Float(k) / 4 * 2 * .pi + .pi / 4
+            let a = P(u, 0.75, 1.0), b2 = c + q.act(SIMD3<Float>(cos(u) * w * 0.95, 0.02, sin(u) * l * 0.95))
+            t.poles.stroke(a, b2, width: 0.008)
+        }
+        for i in 0..<nu { t.lines.stroke(P(Float(i) / Float(nu) * 2 * .pi, 0), P(Float(i + 1) / Float(nu) * 2 * .pi, 0), width: 0.025) }
+    }
+
+    /// 터널 텐트: 반원 단면을 길게 늘인 몸통 + 폴대 고리 셋 + 앞 끝 문 + 앞뒤 고정 줄
+    static func tunnelTent(_ t: inout TentParts, at c: SIMD3<Float>, w: Float, l: Float, h: Float, yaw: Float) {
+        let q = rot(yaw)
+        func P(_ a: Float, _ z: Float, _ k: Float = 1) -> SIMD3<Float> {
+            let hoop: Float = 1 - 0.05 * abs(sin((z / l + 0.5) * 2 * .pi))         // 고리 사이가 살짝 처짐
+            return c + q.act(SIMD3<Float>(cos(a) * w / 2 * k * hoop, sin(a) * h * k * hoop, z))
+        }
+        let na = 12, nz = 12
+        for i in 0..<na {
+            let a0 = Float(i) / Float(na) * .pi, a1 = Float(i + 1) / Float(na) * .pi
+            for j in 0..<nz {
+                let z0 = -l / 2 + l * Float(j) / Float(nz), z1 = -l / 2 + l * Float(j + 1) / Float(nz)
+                t.fabric.quad(P(a0, z0), P(a1, z0), P(a1, z1), P(a0, z1), SIMD2<Float>(a0, z0), SIMD2<Float>(a1, z0), SIMD2<Float>(a1, z1), SIMD2<Float>(a0, z1))
+            }
+            // 뒤 끝은 천, 앞 끝은 짙은 문
+            t.fabric.quad(c + q.act(SIMD3<Float>(0, 0, -l / 2)), P(a0, -l / 2), P(a1, -l / 2), c + q.act(SIMD3<Float>(0, 0, -l / 2)), .zero, .zero, .zero, .zero)
+            t.dark.quad(c + q.act(SIMD3<Float>(0, 0, l / 2 + 0.01)), P(a0, l / 2 + 0.01, 0.97), P(a1, l / 2 + 0.01, 0.97), c + q.act(SIMD3<Float>(0, 0, l / 2 + 0.01)),
+                        .zero, .zero, .zero, .zero)
+        }
+        for z in [-l / 2 + 0.15, 0, l / 2 - 0.15] {
+            for i in 0..<na {
+                let a = P(Float(i) / Float(na) * .pi, z, 1.01), b2 = P(Float(i + 1) / Float(na) * .pi, z, 1.01)
+                t.poles.stroke(a, b2, width: 0.022); t.lines.stroke(a, b2, width: 0.025)
+            }
+        }
+        for zs: Float in [-1, 1] {
+            let top = c + q.act(SIMD3<Float>(0, h * 0.9, zs * l / 2))
+            t.poles.stroke(top, c + q.act(SIMD3<Float>(0, 0.02, zs * (l / 2 + 1.2))), width: 0.008)
+            for i in 0..<na { t.lines.stroke(P(Float(i) / Float(na) * .pi, zs * l / 2), P(Float(i + 1) / Float(na) * .pi, zs * l / 2), width: 0.025) }
+        }
+    }
+
+    /// 벨 텐트(캔버스 글램핑): 낮은 원통 벽 + 원뿔 지붕 + 가운데 기둥 끝 + 열린 문 + 둘레로 뻗은 고정 줄
+    static func bellTent(_ t: inout TentParts, at c: SIMD3<Float>, r: Float, h: Float, yaw: Float) {
+        let q = rot(yaw)
+        let wallH = h * 0.24, n = 24
+        func ring(_ k: Int, _ rr: Float, _ y: Float) -> SIMD3<Float> {
+            let a = Float(k) / Float(n) * 2 * .pi
+            return c + q.act(SIMD3<Float>(cos(a) * rr, y, sin(a) * rr))
+        }
+        let apex = c + SIMD3<Float>(0, h, 0)
+        for k in 0..<n {
+            let a = Float(k) / Float(n)
+            let door = abs(a - 0.25) < 0.05                                        // 앞(+z)쪽 문
+            let w0 = ring(k, r, 0), w1 = ring(k + 1, r, 0), u0 = ring(k, r, wallH), u1 = ring(k + 1, r, wallH)
+            if door { t.dark.quad(w0, w1, u1, u0, .zero, .zero, .zero, .zero) } else { t.fabric.quad(w0, w1, u1, u0, .zero, .zero, .zero, .zero) }
+            // 처마 (벽보다 조금 밖으로) → 꼭대기
+            let e0 = ring(k, r * 1.04, wallH + 0.02), e1 = ring(k + 1, r * 1.04, wallH + 0.02)
+            t.fabric.quad(e0, e1, apex, apex, .zero, .zero, .zero, .zero)
+            t.lines.stroke(e0, e1, width: 0.025)
+            t.lines.stroke(w0, w1, width: 0.025)
+            if k % 3 == 0 {
+                t.lines.stroke(e0, apex, width: 0.02)
+                t.poles.stroke(e0, ring(k, r * 1.9, 0.02), width: 0.008)            // 고정 줄
+            }
+        }
+        t.poles.stroke(apex, apex + SIMD3<Float>(0, 0.18, 0), width: 0.04)           // 가운데 기둥 끝
+        // 걷어 올린 문 자락 (문 위 짙은 띠)
+        t.dark.quad(ring(Int(Float(n) * 0.2), r * 1.01, wallH * 0.98), ring(Int(Float(n) * 0.3), r * 1.01, wallH * 0.98),
+                    ring(Int(Float(n) * 0.3), r * 1.01, wallH * 0.8), ring(Int(Float(n) * 0.2), r * 1.01, wallH * 0.8), .zero, .zero, .zero, .zero)
+    }
+
+    /// A형(삼각) 텐트: 기존 삼각 기둥 + 앞 문(짙은 세모) + 앞뒤 기둥과 고정 줄
+    static func ridgeTent(_ t: inout TentParts, at c: SIMD3<Float>, w: Float, l: Float, h: Float, yaw: Float) {
+        t.fabric.tent(base: c, w: w, l: l, h: h, yaw: yaw)
+        let ax = SIMD3<Float>(cos(yaw), 0, -sin(yaw)), az = SIMD3<Float>(sin(yaw), 0, cos(yaw))
+        let fl = c - ax * (w * 0.32) - az * (l / 2 + 0.01), fr = c + ax * (w * 0.32) - az * (l / 2 + 0.01)
+        let ft = c - az * (l / 2 + 0.01) + SIMD3<Float>(0, h * 0.82, 0)
+        t.dark.quad(fl, fr, ft, ft, .zero, .zero, .zero, .zero)
+        for zs: Float in [-1, 1] {
+            let top = c + az * (zs * l / 2) + SIMD3<Float>(0, h, 0)
+            t.poles.stroke(c + az * (zs * l / 2), top + SIMD3<Float>(0, 0.12, 0), width: 0.03)
+            t.poles.stroke(top, c + az * (zs * (l / 2 + 1.3)), width: 0.008)
+        }
+        t.lines.tentOutline(base: c, w: w, l: l, h: h, yaw: yaw)
+    }
+
     /// 작은 전구 (팔면체)
     mutating func bulb(at c: SIMD3<Float>, r: Float) {
         let pts: [SIMD3<Float>] = [c + SIMD3<Float>(r, 0, 0), c + SIMD3<Float>(-r, 0, 0), c + SIMD3<Float>(0, r, 0),

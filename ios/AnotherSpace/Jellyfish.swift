@@ -12,7 +12,11 @@ import simd
 /// 하늘 세계(포털 너머)에 두어 반투명이어도 현실이 비치지 않고, 방 안 자리여도 포털 너머로 그려짐 (가구보다 높이 떠 있어 겹치지 않음)
 @MainActor
 final class JellySea {
-    let root = Entity()
+    let root = Entity()          // 방 밖 바다 위 (하늘 세계)
+    /// 방 안 해파리 (실제 방 쪽, 저장 좌표): 가구 블록과 같은 공간에 있어야 앞뒤가 정확함 —
+    /// 하늘 세계(포털 너머)에 두면 방 안 가구와 앞뒤를 비교할 수 없어 보는 각도마다 앞에 있다 뒤에 있다 했음.
+    /// 반투명 재질은 깊이를 쓰지 않으므로(writesDepth = false) 방 안에 있어도 뒤의 하늘·벽 너머가 가려지지 않음
+    let localRoot = Entity()
 
     private final class Jelly {
         let e = Entity()                 // 자리 (저장 좌표)
@@ -214,7 +218,7 @@ final class JellySea {
             j.arms.append(chain(at: start, length: s * Float.random(in: 1.6...2.6, using: &g), width: s * 0.22,
                                 parts: j.inside ? 4 : 3, mat: armMat, tex: "jelly_arm", into: j.body))
         }
-        root.addChild(j.e)
+        if inside { localRoot.addChild(j.e) } else { root.addChild(j.e) }
         jellies.append(j)
     }
 
@@ -263,9 +267,11 @@ final class JellySea {
 
     /// 바다눈: 아주 작은 빛 알갱이가 천천히 떠다님 (방 안과 둘레)
     private func addPlankton() {
+        for inRoom in [true, false] {
         var pe = ParticleEmitterComponent()
         pe.emitterShape = .box
-        pe.emitterShapeSize = [reach * 2 + 6, max(0.6, ceilY - floorY), reach * 2 + 6]
+        // 방 안: 방 크기만큼 (실제 공간 쪽) / 방 밖: 둘레 넓게 (하늘 세계)
+        pe.emitterShapeSize = inRoom ? [reach * 0.9, max(0.6, ceilY - floorY - 0.3), reach * 0.9] : [reach * 2 + 14, max(0.6, ceilY - floorY) + 3, reach * 2 + 14]
         pe.birthLocation = .volume
         pe.birthDirection = .world
         pe.emissionDirection = [0, 1, 0]
@@ -290,7 +296,8 @@ final class JellySea {
         let e = Entity()
         e.components.set(pe)
         e.position = SIMD3<Float>(center.x, (floorY + ceilY) / 2, center.z)
-        root.addChild(e)
+        if inRoom { localRoot.addChild(e) } else { root.addChild(e) }
+        }
     }
 
     // MARK: 매 프레임

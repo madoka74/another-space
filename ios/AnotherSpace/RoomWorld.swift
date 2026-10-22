@@ -228,6 +228,24 @@ final class RoomWorld {
         e.components.set(ModelSortGroupComponent(group: sortGroup, order: Int32(order)))
     }
 
+    /// 불빛 둘레 은은한 빛무리 (나를 향하지 않아도 둥글게 보이도록 십자로 세 장, 깊이를 쓰지 않고 맨 나중에 그림)
+    private func glowSprite(at c: SIMD3<Float>, size: Float, color: SIMD3<Float>) {
+        guard let tx = Tex.get("glow", color: look == .color), let mk = Tex.get("glow_a", raw: true) else { return }
+        var m = UnlitMaterial(color: Tex.color(color))
+        var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.clamp
+        m.color = .init(tint: Tex.color(color), texture: tp)
+        var mp = MaterialParameters.Texture(mk); mp.sampler = Tex.clamp
+        m.blending = .transparent(opacity: .init(scale: 0.5, texture: mp))
+        m.writesDepth = false
+        var q = Geo()
+        for k in 0..<3 {
+            let a = Float(k) / 3 * .pi
+            q.card(c, SIMD3<Float>(cos(a), 0, sin(a)), SIMD3<Float>(0, 1, 0), w: size, h: size)
+        }
+        q.card(c, SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 0, 1), w: size, h: size)
+        if let e = q.entity("glow", m) { layer(e, 30); world.addChild(e) }
+    }
+
     /// 안의 모든 그림에 그리는 순서를 줌. 반투명(깊이를 쓰지 않는) 것은 나무·바위·건물보다 나중에(큰 순서) 그려야
     /// 앞에 있을 땐 그 위에, 뒤에 있을 땐 그 뒤로 자연스럽게 보임 (먼저 그리면 뒤의 나무가 덮어써서 네모나게 깨져 보였음)
     private func layerAll(_ e: Entity, _ order: Int) {
@@ -762,6 +780,137 @@ final class RoomWorld {
         if let e = g.entity("cafeBeams", lineMode ? Ink.paper(0) : Tex.unlit("planks_dark", tint: wood * 0.7)) { local.addChild(e) }
         if let e = iron.entity("cafeMuntins", lineMode ? Ink.paper(0) : ink(SIMD3<Float>(0.13, 0.13, 0.13))) { local.addChild(e) }
         if let e = lines.entity("cafeBeamLines", Ink.line) { local.addChild(e) }
+        addCafeSpeaker(rects, L, y: y)
+    }
+
+    /// 카페 음악이 나오는 스피커: 방 가운데에서 가장 가까운 천장 들보 아래에 쇠 받침으로 매단 나무 상자 스피커 (방 가운데 쪽을 보며 아래로 기울어짐).
+    /// 음악에 맞춰 울림판(콘)이 살짝 떨리고, 소리 물결이 앞으로 은은하게 퍼짐
+    private(set) var speakerSpot: SIMD3<Float>?
+    private var speakerCone: Entity?
+    private var speakerBody: Entity?
+    private var speakerWaves: [(ModelEntity, Float)] = []
+    private var waveMat: UnlitMaterial?
+    private var waveT: Float = 0
+    private var spT: Float = 0
+    var musicOn = false
+
+    private func addCafeSpeaker(_ rects: [PRect], _ L: Layout, y: Float) {
+        let cp = L.plane(center.x, center.z)
+        var best: (SIMD2<Float>, Float)? = nil
+        for r in rects where r.1.x - r.0.x > 0.6 && r.1.y - r.0.y > 0.6 {
+            var v = (r.0.y).rounded(.down) + 0.55
+            while v < r.1.y - 0.2 {
+                let u = min(r.1.x - 0.4, max(r.0.x + 0.4, cp.x))
+                let p = SIMD2<Float>(u, v)
+                let d = simd_distance(p, cp)
+                if best == nil || d < best!.1 { best = (p, d) }
+                v += 1.1
+            }
+        }
+        guard let b = best else { return }
+        let w2 = L.flat(b.0)
+        let beamBottom = y - 0.12
+        let root = Entity()
+        root.position = SIMD3<Float>(w2.x, beamBottom, w2.y)
+        // 들보를 따라가는 방향과 직각(방 가운데 쪽)으로 향함
+        let beamDir = simd_normalize(L.flat(SIMD2<Float>(1, 0)) - L.flat(SIMD2<Float>(0, 0)))
+        var face = SIMD2<Float>(-beamDir.y, beamDir.x)
+        let toC = SIMD2<Float>(center.x - w2.x, center.z - w2.y)
+        if simd_dot(face, toC) < 0 { face = -face }
+        root.orientation = simd_quatf(angle: atan2(face.x, face.y), axis: [0, 1, 0])
+        let metal = lineMode ? Ink.line : ink(SIMD3<Float>(0.16, 0.16, 0.17))
+        let woodM = lineMode ? Ink.paper(0) : Tex.unlit("walnut", tint: Worlds.safe(tint, min: 0.35))
+        let cloth = lineMode ? Ink.paper(1) : ink(SIMD3<Float>(0.2, 0.18, 0.17))
+        let coneM = lineMode ? Ink.line : ink(SIMD3<Float>(0.08, 0.08, 0.08))
+        // 받침: 들보에 붙은 판 + 내려오는 막대
+        let plate = ModelEntity(mesh: .generateBox(width: 0.12, height: 0.012, depth: 0.12), materials: [metal])
+        plate.position = [0, -0.006, 0]
+        root.addChild(plate)
+        let rod = ModelEntity(mesh: .generateCylinder(height: 0.1, radius: 0.012), materials: [metal])
+        rod.position = [0, -0.06, 0]
+        root.addChild(rod)
+        // 상자 (아래로 25도 기울여 방을 봄)
+        let body = Entity()
+        body.position = [0, -0.23, 0]
+        body.orientation = simd_quatf(angle: 0.44, axis: [1, 0, 0])
+        root.addChild(body)
+        let box = ModelEntity(mesh: .generateBox(width: 0.34, height: 0.24, depth: 0.22, cornerRadius: 0.02), materials: [woodM])
+        body.addChild(box)
+        let grille = ModelEntity(mesh: .generateBox(width: 0.3, height: 0.2, depth: 0.004, cornerRadius: 0.01), materials: [cloth])
+        grille.position = [0, 0, 0.111]
+        body.addChild(grille)
+        let cone = Entity()
+        cone.position = [0, 0, 0.114]
+        let disc = ModelEntity(mesh: .generateCylinder(height: 0.004, radius: 0.075), materials: [coneM])
+        disc.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
+        cone.addChild(disc)
+        let cap = ModelEntity(mesh: .generateSphere(radius: 0.022), materials: [lineMode ? Ink.paper(0) : ink(SIMD3<Float>(0.3, 0.28, 0.26))])
+        cap.position = [0, 0, 0.004]
+        cap.scale = [1, 1, 0.5]
+        cone.addChild(cap)
+        body.addChild(cone)
+        let joint = ModelEntity(mesh: .generateBox(width: 0.06, height: 0.05, depth: 0.04), materials: [metal])
+        joint.position = [0, 0.13, 0]
+        body.addChild(joint)
+        if lineMode {
+            var l = Geo()
+            let hx: Float = 0.17, hy: Float = 0.12, hz: Float = 0.11
+            let c: [SIMD3<Float>] = [[-hx, -hy, -hz], [hx, -hy, -hz], [hx, hy, -hz], [-hx, hy, -hz], [-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]]
+            for (i, j) in [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4), (0, 4), (1, 5), (2, 6), (3, 7)] { l.stroke(c[i], c[j], width: 0.006) }
+            for k in 0..<20 {
+                let a0 = Float(k) / 20 * 2 * .pi, a1 = Float(k + 1) / 20 * 2 * .pi
+                l.stroke(SIMD3<Float>(cos(a0) * 0.075, sin(a0) * 0.075, 0.116), SIMD3<Float>(cos(a1) * 0.075, sin(a1) * 0.075, 0.116), width: 0.005)
+            }
+            if let e = l.entity("speakerLines", Ink.line) { body.addChild(e) }
+        }
+        local.addChild(root)
+        speakerCone = cone
+        speakerBody = body
+        speakerSpot = root.convert(position: SIMD3<Float>(0, -0.23, 0.12), to: local)
+        // 소리 물결 재질 (물결 고리 그림을 오려 냄)
+        var m = UnlitMaterial(color: lineMode ? UIColor(white: 0.07, alpha: 1) : Tex.color(SIMD3<Float>(1, 0.9, 0.7)))
+        if let mk = Tex.get("ripple_a", raw: true) {
+            var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.clamp
+            m.blending = .transparent(opacity: .init(scale: lineMode ? 1 : 0.35, texture: tp))
+            if lineMode { m.opacityThreshold = 0.4 }
+        }
+        m.writesDepth = false
+        waveMat = m
+    }
+
+    /// 스피커: 음악이 나오는 동안 울림판이 박자처럼 떨리고, 앞으로 소리 물결 고리가 퍼짐
+    private func tickSpeaker(_ dt: Float) {
+        guard let cone = speakerCone, let body = speakerBody else { return }
+        spT += dt
+        let t = spT
+        if musicOn {
+            let beat = pow(max(0, sin(t * 2 * .pi * 1.6)), 6) * 0.06 + 0.012 * sin(t * 47) + 0.008 * sin(t * 83)
+            cone.scale = SIMD3<Float>(1 + beat * 0.4, 1 + beat * 0.4, 1 + beat * 6)
+            body.position = SIMD3<Float>(0.0008 * sin(t * 61), -0.23 + 0.0006 * sin(t * 73), 0)
+            waveT -= dt
+            if waveT <= 0, let m = waveMat {
+                waveT = 0.62
+                var q = Geo()
+                q.card(.zero, SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 1, 0), w: 1, h: 1)
+                if let e = q.entity("soundWave", m) {
+                    e.position = [0, 0, 0.13]
+                    e.scale = SIMD3<Float>(repeating: 0.12)
+                    body.addChild(e)
+                    speakerWaves.append((e, 0))
+                }
+            }
+        } else {
+            cone.scale = SIMD3<Float>(repeating: 1)
+        }
+        for i in speakerWaves.indices.reversed() {
+            speakerWaves[i].1 += dt
+            let a = speakerWaves[i].1 / 1.8
+            if a >= 1 { speakerWaves[i].0.removeFromParent(); speakerWaves.remove(at: i); continue }
+            let e = speakerWaves[i].0
+            e.scale = SIMD3<Float>(repeating: 0.12 + a * 0.8)
+            e.position = [0, 0, 0.13 + a * 0.5]
+            e.components.set(OpacityComponent(opacity: (1 - a) * (1 - a)))
+        }
     }
 
     // MARK: 하늘 세계
@@ -1281,6 +1430,7 @@ final class RoomWorld {
             let j = JellySea(center: center, halfSize: halfSize, floorY: floorY, ceilY: ceilY, layout: L, room: room, look: look)
             layerAll(j.root, 30)
             world.addChild(j.root)
+            local.addChild(j.localRoot)                      // 방 안 해파리는 실제 방 쪽 (가구와 앞뒤가 맞게)
             jelly = j
         case "valley":
             let c = ValleyCreek(room: room, layout: L, floorY: floorY, blocked: blocked, riverNear: riverNear,
@@ -1384,20 +1534,90 @@ final class RoomWorld {
         var tentLines = Geo()
         defer { if let e = tentLines.entity("tentLines", Ink.line) { world.addChild(e) } }
         if dc.tents {
-            var orange = Geo(), olive = Geo(), bulbs = Geo()
-            for i in 0..<3 {
-                let p = around(Float(i) / 3 + Float.random(in: 0...0.2, using: &g), Float.random(in: 3...8, using: &g), rec, floorY - 0.05)
-                let yaw = Float.random(in: 0...6.28, using: &g)
-                guard roundFree(p, 1.9) else { continue }
-                if i % 2 == 0 { orange.tent(base: p, w: 2.2, l: 2.6, h: 1.5, yaw: yaw) } else { olive.tent(base: p, w: 2.0, l: 2.4, h: 1.4, yaw: yaw) }
-            if lineMode { tentLines.tentOutline(base: p, w: 2.1, l: 2.5, h: 1.45, yaw: yaw) }
-                bulbs.bulb(at: p + SIMD3<Float>(0, 1.0, 0) + SIMD3<Float>(sin(yaw), 0, cos(yaw)) * -1.5, r: 0.07)
+            // 캠핑장: 모양이 다른 텐트 넷 (돔·터널·벨 텐트·A형) — 색도 저마다, 문은 캠프 가운데(방) 쪽을 봄.
+            // 텐트 사이 나무 기둥에 걸린 알전구 줄(가운데가 처진 줄에 전구가 줄지어)과 텐트 앞 갈고리 기둥에 매단 캠핑 랜턴
+            let palette: [SIMD3<Float>] = [[0.92, 0.5, 0.22], [0.3, 0.46, 0.3], [0.22, 0.4, 0.66], [0.9, 0.74, 0.26], [0.7, 0.22, 0.18], [0.62, 0.58, 0.44]]
+            var cols = palette
+            cols.shuffle(using: &g)
+            let lit = dark || room.time == "dusk"
+            let kinds = [0, 1, 2, 3].shuffled(using: &g)
+            var spots: [SIMD3<Float>] = []
+            for i in 0..<4 {
+                for _ in 0..<6 {
+                    let p = around(Float(i) / 4 + Float.random(in: 0...0.15, using: &g), Float.random(in: 3...8.5, using: &g), rec, floorY - 0.05)
+                    let kind = kinds[i]
+                    let rad: Float = kind == 2 ? 2.2 : 1.7
+                    guard roundFree(p, rad + 0.6), !spots.contains(where: { simd_distance($0, p) < 4.2 }) else { continue }
+                    let to = center - p
+                    let yaw = atan2(to.x, to.z) + Float.random(in: -0.3...0.3, using: &g)
+                    var parts = Geo.TentParts()
+                    switch kind {
+                    case 0: Geo.domeTent(&parts, at: p, w: Float.random(in: 2.0...2.6, using: &g), l: Float.random(in: 2.0...2.4, using: &g), h: Float.random(in: 1.1...1.35, using: &g), yaw: yaw)
+                    case 1: Geo.tunnelTent(&parts, at: p, w: 2.0, l: Float.random(in: 3.0...3.8, using: &g), h: 1.25, yaw: yaw)
+                    case 2: Geo.bellTent(&parts, at: p, r: Float.random(in: 1.9...2.2, using: &g), h: Float.random(in: 2.6...2.9, using: &g), yaw: yaw)
+                    default: Geo.ridgeTent(&parts, at: p, w: 2.0, l: 2.4, h: 1.4, yaw: yaw + .pi)
+                    }
+                    let col = kind == 2 ? SIMD3<Float>(0.9, 0.86, 0.74) : cols[i % cols.count]          // 벨 텐트는 생지 캔버스
+                    let fab = lineMode ? Ink.paper(0) : Tex.unlit("canvas", tint: col * Worlds.safe(tint, min: 0.3))
+                    let drk = lineMode ? Ink.paper(2) : Tex.unlit("canvas", tint: col * 0.38 * Worlds.safe(tint, min: 0.3))
+                    let pol = lineMode ? Ink.line : UnlitMaterial(color: Tex.color(SIMD3<Float>(0.22, 0.22, 0.24) * Worlds.safe(tint, min: 0.4)))
+                    if let e = parts.fabric.entity("tent\(i)", fab) { layer(e, 5); world.addChild(e) }
+                    if let e = parts.dark.entity("tentDoor\(i)", drk) { layer(e, 5); world.addChild(e) }
+                    if let e = parts.poles.entity("tentPoles\(i)", pol) { layer(e, 5); world.addChild(e) }
+                    if lineMode, let e = parts.lines.entity("tentLines\(i)", Ink.line) { layer(e, 6); world.addChild(e) }
+                    spots.append(p)
+                    // 텐트 앞 랜턴: 갈고리 기둥 + 매달린 랜턴 (밤엔 불빛)
+                    if dc.lanterns {
+                        let side = SIMD3<Float>(cos(yaw), 0, -sin(yaw)), fwdT = SIMD3<Float>(sin(yaw), 0, cos(yaw))
+                        let lp = p + fwdT * (rad + 0.5) + side * 0.9
+                        var hook = Geo(), lamp = Geo()
+                        hook.stroke(lp, lp + SIMD3<Float>(0, 1.5, 0), width: 0.025)
+                        hook.stroke(lp + SIMD3<Float>(0, 1.5, 0), lp + SIMD3<Float>(0, 1.55, 0) + side * 0.22, width: 0.02)
+                        let lc = lp + side * 0.24 + SIMD3<Float>(0, 1.3, 0)
+                        hook.stroke(lp + SIMD3<Float>(0, 1.55, 0) + side * 0.22, lc + SIMD3<Float>(0, 0.12, 0), width: 0.006)
+                        lamp.trunk(from: lc - SIMD3<Float>(0, 0.1, 0), to: lc + SIMD3<Float>(0, 0.08, 0), r0: 0.06, r1: 0.05, sides: 10, segs: 1)
+                        var cap = Geo()
+                        cap.trunk(from: lc + SIMD3<Float>(0, 0.08, 0), to: lc + SIMD3<Float>(0, 0.13, 0), r0: 0.07, r1: 0.03, sides: 10, segs: 1)
+                        cap.trunk(from: lc - SIMD3<Float>(0, 0.13, 0), to: lc - SIMD3<Float>(0, 0.1, 0), r0: 0.065, r1: 0.07, sides: 10, segs: 1)
+                        if let e = hook.entity("lanternHook\(i)", lineMode ? Ink.line : UnlitMaterial(color: Tex.color([0.12, 0.12, 0.13]))) { layer(e, 5); world.addChild(e) }
+                        if let e = cap.entity("lanternCap\(i)", lineMode ? Ink.line : UnlitMaterial(color: Tex.color([0.16, 0.3, 0.22]))) { layer(e, 5); world.addChild(e) }
+                        let glass = lineMode ? Ink.paper(0) : UnlitMaterial(color: Tex.color(lit ? [1, 0.84, 0.55] : [0.82, 0.84, 0.82]))
+                        if let e = lamp.entity("lanternGlass\(i)", glass) { layer(e, 5); world.addChild(e) }
+                        if lit && !lineMode { glowSprite(at: lc, size: 0.9, color: [1, 0.72, 0.4]) }
+                    }
+                    break
+                }
             }
-            if let e = orange.entity("tents", Tex.unlit("canvas", tint: SIMD3<Float>(0.95, 0.55, 0.3) * Worlds.safe(tint, min: 0.3))) { world.addChild(e) }
-            if let e = olive.entity("tents2", Tex.unlit("canvas", tint: SIMD3<Float>(0.55, 0.62, 0.4) * Worlds.safe(tint, min: 0.3))) { world.addChild(e) }
-            if dc.lanterns && (dark || room.time == "dusk"),
-               let e = bulbs.entity("lanterns", lineMode ? Ink.line : UnlitMaterial(color: Tex.color(SIMD3<Float>(1, 0.78, 0.45)))) {
-                world.addChild(e)
+            // 알전구 줄: 나무 기둥 셋 (텐트 사이 빈 곳) — 기둥 꼭대기를 잇는 줄이 가운데로 처지고 45cm마다 전구
+            if dc.lanterns {
+                var posts: [SIMD3<Float>] = []
+                for k in 0..<12 where posts.count < 3 {
+                    let p = around(Float(k) / 12 + 0.04, Float.random(in: 2.2...3.4, using: &g), rec, floorY)
+                    guard roundFree(p, 0.4), !spots.contains(where: { simd_distance($0, p) < 2.8 }), posts.allSatisfy({ simd_distance($0, p) > 3 && simd_distance($0, p) < 9 }) else { continue }
+                    posts.append(p)
+                }
+                var wood = Geo(), wire = Geo(), bulbs = Geo()
+                for p in posts { wood.trunk(from: p - SIMD3<Float>(0, 0.1, 0), to: p + SIMD3<Float>(0, 2.5, 0), r0: 0.06, r1: 0.05, sides: 8, segs: 1) }
+                var bulbAt: [SIMD3<Float>] = []
+                for k in 0..<max(0, posts.count - 1) {
+                    let a = posts[k] + SIMD3<Float>(0, 2.4, 0), b = posts[k + 1] + SIMD3<Float>(0, 2.4, 0)
+                    let span = simd_distance(a, b)
+                    let n = max(4, Int(span / 0.45))
+                    var prev = a
+                    for j in 1...n {
+                        let t2 = Float(j) / Float(n)
+                        let p = a + (b - a) * t2 - SIMD3<Float>(0, 0.45 * 4 * t2 * (1 - t2), 0)
+                        wire.stroke(prev, p, width: 0.008)
+                        if j < n { bulbAt.append(p - SIMD3<Float>(0, 0.06, 0)); wire.stroke(p, p - SIMD3<Float>(0, 0.04, 0), width: 0.006) }
+                        prev = p
+                    }
+                }
+                for c in bulbAt { bulbs.bulb(at: c, r: 0.035) }
+                if let e = wood.entity("lightPosts", lineMode ? Ink.line : Tex.unlit("bark", tint: Worlds.safe(tint * 0.7, min: 0.2))) { layer(e, 5); world.addChild(e) }
+                if let e = wire.entity("lightWire", lineMode ? Ink.line : UnlitMaterial(color: Tex.color([0.1, 0.1, 0.1]))) { layer(e, 5); world.addChild(e) }
+                let bm = lineMode ? Ink.line : UnlitMaterial(color: Tex.color(lit ? [1, 0.82, 0.52] : [0.86, 0.86, 0.8]))
+                if let e = bulbs.entity("lightBulbs", bm) { layer(e, 5); world.addChild(e) }
+                if lit && !lineMode { for c in bulbAt { glowSprite(at: c, size: 0.32, color: [1, 0.74, 0.42]) } }
             }
         }
         if dc.city {
@@ -1709,6 +1929,7 @@ final class RoomWorld {
     private func setMotes(_ p: [SIMD3<Float>]) {
         if motes == nil {
             var pe = ParticleEmitterComponent()
+            pe.mainEmitter.image = Tex.particle("spark_dot")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
             pe.emitterShape = .box
             pe.emitterShapeSize = SIMD3<Float>(max(0.5, halfSize.x * 2 - 0.6), 2.0, max(0.5, halfSize.y * 2 - 0.6))
             pe.birthLocation = .volume
@@ -1886,6 +2107,7 @@ final class RoomWorld {
     func tick(_ dt: Float, active: Bool) {
         guard active else { return }
         scenery?.tick(dt)
+        tickSpeaker(dt)
         for (e, v) in clouds {
             e.position += v * dt
             let off = e.position - center
@@ -1962,6 +2184,7 @@ final class RoomWorld {
     /// 바람: 나뭇잎(자연)이나 먼지(도시·바다)가 옆으로 날림
     static func windBits(_ place: String, size: SIMD3<Float>, look: LookMode = .color) -> Entity {
         var pe = ParticleEmitterComponent()
+        pe.mainEmitter.image = Tex.particle(["camp", "forest", "valley", "village", "home", "gallery"].contains(place) ? "leaf_bit" : "spark_dot")      // 기본 동그라미 대신
         pe.emitterShape = .box
         pe.emitterShapeSize = size
         pe.birthLocation = .volume
@@ -1991,6 +2214,7 @@ final class RoomWorld {
     /// 반딧불 (밤·해질녘의 자연)
     static func fireflies(size: SIMD3<Float>, look: LookMode = .color) -> Entity {
         var pe = ParticleEmitterComponent()
+        pe.mainEmitter.image = Tex.particle("spark_dot")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
         pe.emitterShape = .box
         pe.emitterShapeSize = size
         pe.birthLocation = .volume

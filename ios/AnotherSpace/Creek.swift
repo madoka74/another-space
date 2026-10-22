@@ -458,11 +458,14 @@ final class ValleyCreek {
         }
         for _ in 0..<n {
             let f = Fish()
-            let big = Float.random(in: 0...1, using: &g) < 0.25
-            f.size = big ? Float.random(in: 0.1...0.15, using: &g) : Float.random(in: 0.045...0.09, using: &g)
-            f.cruise = Float.random(in: 0.06...0.14, using: &g) * (big ? 0.8 : 1.2)
+            // 크기 여러 가지: 작은 피라미(4~9cm) 45% · 중간(10~17cm) 35% · 큰 물고기(20~34cm, 느긋하게) 20%
+            let r = Float.random(in: 0...1, using: &g)
+            let big = r > 0.8
+            f.size = r < 0.45 ? Float.random(in: 0.04...0.09, using: &g) : (big ? Float.random(in: 0.2...0.34, using: &g) : Float.random(in: 0.1...0.17, using: &g))
+            f.cruise = Float.random(in: 0.06...0.14, using: &g) * (big ? 0.7 : (r < 0.45 ? 1.25 : 1))
             f.speed = f.cruise
             f.depth = Float.random(in: 0.015...0.03, using: &g)
+            if f.size > 0.18 { f.e.scale = [1, 0.6, 1]; f.depth = 0.016 }        // 큰 물고기는 얕은 물에 맞게 조금 납작하게 (등이 물 밖으로 나오지 않게)
             f.head = Float.random(in: 0...(2 * .pi), using: &g)
             f.wag = Float.random(in: 0...6, using: &g)
             let k = waterCells[Int(g.next() % UInt64(waterCells.count))]

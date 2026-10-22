@@ -166,12 +166,33 @@ final class Scenery {
     // MARK: 새
     private func addBirds<G: RandomNumberGenerator>(_ n: Int, R: Float, floorY: Float, color: SIMD3<Float>, big: Bool = false, using g: inout G) {
         let mat = solid(color)
-        let span: Float = big ? 1.6 : 0.55
+        let wingMat = solid(color * (color.x > 0.8 ? 0.82 : 1))          // 갈매기: 날개 위는 옅은 회색
+        let span: Float = big ? 1.8 : 0.6
+        // 날개 (머리 = -z, 오른쪽 날개 = +x): 몸 쪽은 넓고 끝으로 갈수록 좁게, 앞 가장자리는 둥글게 뒤로 젖힘. 큰 새는 끝 깃이 손가락처럼 갈라짐
         var wing = Geo()
-        wing.quad(SIMD3<Float>(0, 0, -0.06 * span), SIMD3<Float>(0, 0, 0.1 * span), SIMD3<Float>(span / 2, 0, 0.02 * span),
-                  SIMD3<Float>(span / 2, 0, -0.02 * span), .zero, .zero, .zero, .zero)
+        let s2 = span / 2
+        wing.quad(SIMD3<Float>(0.02 * span, 0, -0.08 * span), SIMD3<Float>(s2 * 0.45, 0.01 * span, -0.07 * span),
+                  SIMD3<Float>(s2 * 0.45, 0.01 * span, 0.09 * span), SIMD3<Float>(0.02 * span, 0, 0.11 * span), .zero, .zero, .zero, .zero)
+        if big {
+            for k in 0..<5 {
+                let z0 = -0.07 * span + Float(k) * 0.032 * span
+                wing.quad(SIMD3<Float>(s2 * 0.45, 0.01 * span, z0), SIMD3<Float>(s2 * (0.92 + 0.04 * Float(k % 2)), 0.0, z0 + 0.03 * span - 0.025 * span * Float(k) / 4),
+                          SIMD3<Float>(s2 * (0.92 + 0.04 * Float(k % 2)), 0.0, z0 + 0.045 * span - 0.025 * span * Float(k) / 4), SIMD3<Float>(s2 * 0.45, 0.01 * span, z0 + 0.032 * span),
+                          .zero, .zero, .zero, .zero)
+            }
+        } else {
+            wing.quad(SIMD3<Float>(s2 * 0.45, 0.01 * span, -0.07 * span), SIMD3<Float>(s2, -0.005 * span, 0.0),
+                      SIMD3<Float>(s2 * 0.98, -0.005 * span, 0.03 * span), SIMD3<Float>(s2 * 0.45, 0.01 * span, 0.09 * span), .zero, .zero, .zero, .zero)
+        }
         guard let wm = wing.mesh("wing") else { return }
-        let body = MeshResource.generateBox(width: 0.06 * span, height: 0.05 * span, depth: 0.3 * span, cornerRadius: 0.02 * span)
+        // 몸: 꼬리에서 가슴으로 굵어졌다 머리·부리로 가늘어지는 둥근 몸 + 부채꼴 꼬리깃
+        var bodyG = Geo()
+        bodyG.trunk(from: SIMD3<Float>(0, 0, 0.16 * span), to: SIMD3<Float>(0, 0.005 * span, -0.05 * span), r0: 0.018 * span, r1: 0.042 * span, sides: 8, segs: 2)
+        bodyG.trunk(from: SIMD3<Float>(0, 0.005 * span, -0.05 * span), to: SIMD3<Float>(0, 0.02 * span, -0.15 * span), r0: 0.042 * span, r1: 0.022 * span, sides: 8, segs: 2)
+        bodyG.trunk(from: SIMD3<Float>(0, 0.02 * span, -0.15 * span), to: SIMD3<Float>(0, 0.015 * span, -0.2 * span), r0: 0.01 * span, r1: 0.001, sides: 6, segs: 1)
+        bodyG.quad(SIMD3<Float>(-0.015 * span, 0, 0.14 * span), SIMD3<Float>(0.015 * span, 0, 0.14 * span), SIMD3<Float>(0.05 * span, 0, 0.26 * span),
+                   SIMD3<Float>(-0.05 * span, 0, 0.26 * span), .zero, .zero, .zero, .zero)
+        guard let body = bodyG.mesh("birdBody") else { return }
         let flock = ring(R + Float.random(in: 15...40, using: &g), Float.random(in: 0...(2 * .pi), using: &g))
         for i in 0..<n {
             let f = Flyer()
@@ -185,7 +206,7 @@ final class Scenery {
             f.dir = big || i % 3 != 0 ? 1 : -1
             f.root.addChild(ModelEntity(mesh: body, materials: [mat]))
             for s: Float in [1, -1] {
-                let w = ModelEntity(mesh: wm, materials: [mat])
+                let w = ModelEntity(mesh: wm, materials: [wingMat])
                 w.scale = SIMD3<Float>(s, 1, 1)
                 f.root.addChild(w)
                 f.wings.append(w)
@@ -198,7 +219,7 @@ final class Scenery {
     // MARK: 바다
     private func addBoats<G: RandomNumberGenerator>(R: Float, floorY: Float, night: Bool, using g: inout G) {
         for i in 0..<4 {
-            let L: Float = Float.random(in: 8...13, using: &g)
+            let L: Float = [Float.random(in: 7...9, using: &g), Float.random(in: 10...13, using: &g), Float.random(in: 14...17, using: &g), Float.random(in: 8...12, using: &g)][i]
             let b = makeYacht(L: L, night: night, variant: i, using: &g)
             let rad = R + Float.random(in: 60...220, using: &g)
             let a = Float.random(in: 0...(2 * .pi), using: &g)
@@ -214,14 +235,26 @@ final class Scenery {
     private func makeYacht<G: RandomNumberGenerator>(L: Float, night: Bool, variant: Int, using g: inout G) -> Entity {
         let root = Entity()
         let line = look == .line
-        let B = L * 0.17                                    // 반폭
-        let hullCols: [SIMD3<Float>] = [[0.95, 0.95, 0.93], [0.93, 0.94, 0.95], [0.16, 0.22, 0.36], [0.96, 0.95, 0.92]]
-        let hullM = line ? Ink.paper(0) : UnlitMaterial(color: Tex.color(hullCols[variant % hullCols.count]))
-        let stripeM = line ? Ink.line : UnlitMaterial(color: Tex.color(variant % 4 == 2 ? [0.92, 0.92, 0.9] : [0.12, 0.18, 0.34]))
-        let deckM = line ? Ink.paper(1) : UnlitMaterial(color: Tex.color([0.62, 0.48, 0.32]))
-        let sailM = line ? Ink.paper(0) : UnlitMaterial(color: Tex.color([0.97, 0.96, 0.92]))
-        let rigM = line ? Ink.line : UnlitMaterial(color: Tex.color([0.3, 0.3, 0.32]))
+        // 배마다 다르게: 선체 색(흰·남색·짙은 초록·빨강·크림·하늘색), 줄무늬 색, 돛 빛깔(흰·크림·옛 갈색 돛·연회색), 돛대(알루미늄·니스 칠한 나무),
+        // 돛 모양(한 돛대 슬루프 / 뒤에 작은 돛대가 하나 더 있는 케치), 폭(날씬한·통통한)
+        let hulls: [(SIMD3<Float>, SIMD3<Float>)] = [([0.95, 0.95, 0.93], [0.12, 0.2, 0.42]), ([0.1, 0.16, 0.32], [0.86, 0.78, 0.5]),
+                                                     ([0.1, 0.26, 0.2], [0.9, 0.86, 0.72]), ([0.62, 0.12, 0.1], [0.95, 0.95, 0.92]),
+                                                     ([0.93, 0.89, 0.8], [0.45, 0.16, 0.12]), ([0.62, 0.78, 0.86], [0.95, 0.95, 0.95])]
+        let sails: [SIMD3<Float>] = [[0.97, 0.96, 0.93], [0.95, 0.92, 0.84], [0.72, 0.42, 0.28], [0.86, 0.87, 0.88], [0.97, 0.96, 0.93]]
+        let hc = hulls[Int.random(in: 0..<hulls.count, using: &g)]
+        let sc = sails[Int.random(in: 0..<sails.count, using: &g)]
+        let woodMast = Float.random(in: 0...1, using: &g) < 0.3
+        let ketch = L > 11 && Float.random(in: 0...1, using: &g) < 0.5
+        let B = L * Float.random(in: 0.15...0.19, using: &g)       // 반폭
+        let hullM = line ? Ink.paper(0) : UnlitMaterial(color: Tex.color(hc.0))
+        let stripeM = line ? Ink.line : UnlitMaterial(color: Tex.color(hc.1))
+        let deckM = line ? Ink.paper(1) : UnlitMaterial(color: Tex.color([0.6, 0.46, 0.3]))
+        let sailM = line ? Ink.paper(0) : UnlitMaterial(color: Tex.color(sc))
+        let seamM = line ? Ink.line : UnlitMaterial(color: Tex.color(sc * 0.82))
+        let rigM = line ? Ink.line : UnlitMaterial(color: Tex.color(woodMast ? [0.5, 0.33, 0.18] : [0.72, 0.74, 0.77]))
+        let wireM = line ? Ink.line : UnlitMaterial(color: Tex.color([0.32, 0.33, 0.35]))
         let winM = line ? Ink.line : UnlitMaterial(color: night ? Tex.color([1, 0.82, 0.5]) : Tex.color([0.12, 0.15, 0.2]))
+        let canvasM = line ? Ink.paper(1) : UnlitMaterial(color: Tex.color(hc.1 * 0.8 + SIMD3<Float>(repeating: 0.05)))
         // 선체: 고물(-L/2) → 뱃머리(+L/2) 단면들
         let n = 12
         func half(_ t: Float) -> Float { t < 0.6 ? B * (0.82 + 0.18 * sin(t / 0.6 * .pi / 2)) : B * cos((t - 0.6) / 0.4 * .pi / 2) }
@@ -262,6 +295,27 @@ final class Scenery {
         cab.addChild(win)
         cab.position = [0, sheer(0.35) + ch / 2, -L * 0.08]
         root.addChild(cab)
+        // 선실 앞 바람막이 천(도저) + 선체 옆 둥근 창 + 갑판 둘레 난간 줄
+        let dodger = ModelEntity(mesh: .generateBox(width: cw * 0.95, height: ch * 0.9, depth: cl * 0.22, cornerRadius: ch * 0.4), materials: [canvasM])
+        dodger.position = [0, sheer(0.3) + ch * 1.1, -L * 0.08 - cl * 0.55]
+        root.addChild(dodger)
+        var dots = Geo(), rails = Geo()
+        for side: Float in [-1, 1] {
+            for k in 0..<3 {
+                let t = 0.36 + Float(k) * 0.07
+                dots.bulb(at: SIMD3<Float>(side * half(t) * 1.002, sheer(t) * 0.55, zAt(t)), r: L * 0.008)
+            }
+            var prev: SIMD3<Float>? = nil
+            for k in 0...8 {
+                let t = 0.08 + Float(k) / 8 * 0.8
+                let p = SIMD3<Float>(side * half(t) * 0.96, sheer(t) + L * 0.045, zAt(t))
+                if let q = prev { rails.stroke(q, p, width: L * 0.0015) }
+                rails.stroke(p - SIMD3<Float>(0, L * 0.045, 0), p, width: L * 0.002)          // 난간 기둥
+                prev = p
+            }
+        }
+        if let e = dots.entity("yachtPorts", winM) { root.addChild(e) }
+        if let e = rails.entity("yachtRails", wireM) { root.addChild(e) }
         // 돛대·붐
         let mastH = L * 1.25
         let mz = L * 0.08
@@ -276,9 +330,12 @@ final class Scenery {
         rig.stroke(SIMD3<Float>(0, boomY, mz), boomEnd, width: L * 0.012)
         // 버팀줄: 뱃머리 → 돛대 꼭대기 → 고물
         let headT = SIMD3<Float>(0, deckY + mastH * 0.98, mz), bow = SIMD3<Float>(0, sheer(1), L / 2)
-        rig.stroke(bow, headT, width: L * 0.003)
-        rig.stroke(SIMD3<Float>(0, sheer(0), -L / 2), headT, width: L * 0.003)
+        var wires = Geo()
+        wires.stroke(bow, headT, width: L * 0.003)
+        wires.stroke(SIMD3<Float>(0, sheer(0), -L / 2), headT, width: L * 0.003)
+        for side: Float in [-1, 1] { wires.stroke(SIMD3<Float>(side * half(0.58), deckY, mz), headT, width: L * 0.002) }   // 옆 버팀줄
         if let e = rig.entity("yachtRig", rigM) { root.addChild(e) }
+        if let e = wires.entity("yachtWires", wireM) { root.addChild(e) }
         // 돛: 바람에 부푼 면 (가운데가 바깥으로 불룩) — 메인(돛대·붐 사이 세모), 지브(앞 버팀줄 쪽 세모)
         func sail(_ a: SIMD3<Float>, _ top: SIMD3<Float>, _ clew: SIMD3<Float>, belly: SIMD3<Float>) -> Geo {
             var s2 = Geo()
@@ -301,6 +358,30 @@ final class Scenery {
                        SIMD3<Float>(side.x * B * 0.9, deckY + L * 0.06, mz - L * 0.12), belly: side * L * 0.05)
         if let e = main.entity("yachtMain", sailM) { root.addChild(e) }
         if let e = jib.entity("yachtJib", sailM) { root.addChild(e) }
+        // 돛 이음매 (가로 천 조각 선) — 실제 돛처럼
+        var seams = Geo()
+        let mainTop = SIMD3<Float>(0, deckY + mastH * 0.95, mz - L * 0.02), tackP = SIMD3<Float>(0, boomY + 0.05, mz)
+        for k in 1..<6 {
+            let v = Float(k) / 6
+            let a2 = tackP + (mainTop - tackP) * v, b2 = (boomEnd + SIMD3<Float>(0, 0.05, 0)) + (mainTop - boomEnd) * v
+            let m2 = (a2 + b2) / 2 + side * L * 0.06 * (1 - v) * 0.9
+            seams.stroke(a2 + side * 0.01, m2 + side * 0.012, width: L * 0.002)
+            seams.stroke(m2 + side * 0.012, b2 + side * 0.01, width: L * 0.002)
+        }
+        if let e = seams.entity("yachtSeams", seamM) { root.addChild(e) }
+        // 케치: 고물 쪽에 작은 돛대와 돛 하나 더
+        if ketch {
+            let mzz = -L * 0.32, mh = mastH * 0.55
+            let mm = ModelEntity(mesh: .generateCylinder(height: mh, radius: L * 0.005), materials: [rigM])
+            mm.position = [0, sheer(0.18) + mh / 2, mzz]
+            root.addChild(mm)
+            let mb = SIMD3<Float>(sin(tack) * L * 0.2, sheer(0.18) + L * 0.1, mzz - cos(tack) * L * 0.2)
+            let miz = sail(SIMD3<Float>(0, sheer(0.18) + L * 0.1, mzz), SIMD3<Float>(0, sheer(0.18) + mh * 0.95, mzz), mb, belly: side * L * 0.035)
+            if let e = miz.entity("yachtMizzen", sailM) { root.addChild(e) }
+            var r2 = Geo()
+            r2.stroke(SIMD3<Float>(0, sheer(0.18) + L * 0.1, mzz), mb, width: L * 0.008)
+            if let e = r2.entity("yachtMizBoom", rigM) { root.addChild(e) }
+        }
         if line {
             let mt = SIMD3<Float>(0, deckY + mastH * 0.95, mz - L * 0.02)
             for (p, q) in [(SIMD3<Float>(0, boomY + 0.05, mz), mt), (mt, boomEnd), (bow, headT - SIMD3<Float>(0, mastH * 0.18, -L * 0.01))] {
@@ -324,9 +405,9 @@ final class Scenery {
 
     // MARK: 도시
     private func addCars<G: RandomNumberGenerator>(R: Float, floorY: Float, night: Bool, using g: inout G) {
-        let y = floorY - 30 + 0.8
-        let colors: [SIMD3<Float>] = [[0.8, 0.15, 0.12], [0.9, 0.9, 0.88], [0.15, 0.2, 0.35], [0.2, 0.2, 0.22], [0.85, 0.7, 0.2]]
-        let head = solid([1, 0.92, 0.7]), tail = solid([1, 0.15, 0.1])
+        let y = floorY - 30
+        let colors: [SIMD3<Float>] = [[0.72, 0.1, 0.1], [0.92, 0.92, 0.9], [0.12, 0.18, 0.34], [0.14, 0.14, 0.15], [0.62, 0.64, 0.66],
+                                      [0.24, 0.34, 0.28], [0.95, 0.76, 0.12], [0.48, 0.5, 0.56]]
         for k in 0..<8 {
             let along = k % 2 == 0 ? ex : ez
             let side = k % 2 == 0 ? ez : ex
@@ -334,40 +415,120 @@ final class Scenery {
             let len: Float = 360
             let a = center + side * off - along * (len / 2) + SIMD3<Float>(0, y - center.y, 0)
             for c in 0..<4 {
-                let car = Entity()
-                if night {
-                    for (m, z) in [(head, Float(-2.1)), (tail, Float(2.1))] {
-                        for x: Float in [-0.7, 0.7] {
-                            let l = ModelEntity(mesh: .generateSphere(radius: 0.35), materials: [m])
-                            l.position = [x, 0, z]
-                            car.addChild(l)
-                        }
-                    }
-                } else {
-                    car.addChild(ModelEntity(mesh: .generateBox(width: 1.9, height: 1.4, depth: 4.4, cornerRadius: 0.4),
-                                             materials: [solid(colors[(k + c) % colors.count])]))
-                }
+                // 승용차·SUV·택시(노랑)·버스(가끔): 차체 + 유리창 둘레 + 바퀴 넷 + 앞 등·뒤 등 (밤엔 불빛이 또렷)
+                let r = Float.random(in: 0...1, using: &g)
+                let kind = r < 0.5 ? 0 : (r < 0.8 ? 1 : (r < 0.93 ? 2 : 3))
+                let col = kind == 2 ? SIMD3<Float>(0.96, 0.78, 0.12) : (kind == 3 ? SIMD3<Float>(0.2, 0.42, 0.7) : colors[Int.random(in: 0..<colors.count, using: &g)])
+                let car = makeCar(kind: kind, color: col, night: night)
                 let dir = (k / 2) % 2 == 0 ? along : -along
-                let start = dir == along ? a : a + along * len
+                let lane: Float = dir == along ? 1.8 : -1.8
+                let start = (dir == along ? a : a + along * len) + side * lane
                 car.orientation = simd_quatf(angle: atan2(dir.x, dir.z), axis: [0, 1, 0])
                 far.addChild(car)
-                movers.append(Mover(e: car, a: start, d: dir, len: len, speed: Float.random(in: 9...16, using: &g),
-                                    s: Float.random(in: 0...len, using: &g), bob: 0))
+                movers.append(Mover(e: car, a: start, d: dir, len: len, speed: kind == 3 ? 8 : Float.random(in: 9...16, using: &g),
+                                    s: Float(c) * len / 4 + Float.random(in: 0...20, using: &g), bob: 0))
             }
         }
     }
 
+    /// 자동차 한 대 (앞 = +z). kind 0 승용차 1 SUV 2 택시 3 버스
+    private func makeCar(kind: Int, color: SIMD3<Float>, night: Bool) -> Entity {
+        let car = Entity()
+        let line = look == .line
+        let specs: [(Float, Float, Float, Float)] = [(4.5, 1.8, 0.75, 0.62), (4.7, 1.9, 0.95, 0.75), (4.6, 1.8, 0.75, 0.6), (11, 2.5, 2.2, 0.75)]
+        let (L, W, H, cab) = specs[kind]
+        let dim: Float = night ? 0.35 : 1
+        let bodyM = line ? Ink.paper(0) : UnlitMaterial(color: Tex.color(color * dim))
+        let glassM = line ? Ink.line : UnlitMaterial(color: Tex.color(night ? [0.08, 0.09, 0.12] : [0.24, 0.3, 0.38]))
+        let tireM = line ? Ink.line : UnlitMaterial(color: Tex.color([0.06, 0.06, 0.06]))
+        let body = ModelEntity(mesh: .generateBox(width: W, height: H, depth: L, cornerRadius: min(0.3, H * 0.3)), materials: [bodyM])
+        body.position = [0, 0.35 + H / 2, 0]
+        car.addChild(body)
+        if kind == 3 {
+            // 버스: 옆 창 띠
+            let win = ModelEntity(mesh: .generateBox(width: W * 1.01, height: H * 0.38, depth: L * 0.86), materials: [glassM])
+            win.position = [0, 0.35 + H * 0.66, -0.2]
+            car.addChild(win)
+        } else {
+            // 지붕(유리창 둘레): 앞뒤가 비스듬한 작은 상자 + 유리 띠
+            let cl = L * 0.5
+            let roof = ModelEntity(mesh: .generateBox(width: W * 0.86, height: cab * 0.5, depth: cl * 0.7, cornerRadius: 0.12), materials: [bodyM])
+            roof.position = [0, 0.35 + H + cab * 0.75, -L * 0.06]
+            car.addChild(roof)
+            let gl = ModelEntity(mesh: .generateBox(width: W * 0.88, height: cab * 0.55, depth: cl, cornerRadius: 0.15), materials: [glassM])
+            gl.position = [0, 0.35 + H + cab * 0.28, -L * 0.06]
+            car.addChild(gl)
+            if kind == 2 {
+                let sign = ModelEntity(mesh: .generateBox(width: 0.5, height: 0.16, depth: 0.2), materials: [line ? Ink.paper(0) : UnlitMaterial(color: Tex.color(night ? [1, 0.9, 0.5] : [0.95, 0.95, 0.9]))])
+                sign.position = [0, 0.35 + H + cab + 0.08, -L * 0.06]
+                car.addChild(sign)
+            }
+        }
+        for zx in [(L * 0.32, Float(1)), (L * 0.32, -1), (-L * 0.32, 1), (-L * 0.32, -1)] {
+            let wh = ModelEntity(mesh: .generateCylinder(height: 0.22, radius: kind == 3 ? 0.5 : 0.34), materials: [tireM])
+            wh.orientation = simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
+            wh.position = [zx.1 * (W / 2 - 0.08), kind == 3 ? 0.5 : 0.34, zx.0]
+            car.addChild(wh)
+        }
+        let headM = line ? Ink.line : UnlitMaterial(color: Tex.color(night ? [1, 0.95, 0.8] : [0.9, 0.9, 0.86]))
+        let tailM = line ? Ink.line : UnlitMaterial(color: Tex.color(night ? [1, 0.12, 0.08] : [0.6, 0.1, 0.08]))
+        for x: Float in [-1, 1] {
+            let h = ModelEntity(mesh: .generateBox(width: 0.32, height: 0.14, depth: 0.06, cornerRadius: 0.04), materials: [headM])
+            h.position = [x * (W / 2 - 0.3), 0.35 + H * 0.65, L / 2 + 0.01]
+            car.addChild(h)
+            let tl = ModelEntity(mesh: .generateBox(width: 0.3, height: 0.12, depth: 0.06, cornerRadius: 0.03), materials: [tailM])
+            tl.position = [x * (W / 2 - 0.3), 0.35 + H * 0.7, -L / 2 - 0.01]
+            car.addChild(tl)
+            if night && !line {
+                // 밤: 앞 등 불빛 번짐
+                let gl = ModelEntity(mesh: .generateSphere(radius: 0.3), materials: [UnlitMaterial(color: Tex.color([1, 0.95, 0.82]))])
+                gl.scale = [1, 0.6, 0.4]
+                gl.position = [x * (W / 2 - 0.3), 0.35 + H * 0.65, L / 2 + 0.08]
+                car.addChild(gl)
+            }
+        }
+        return car
+    }
+
+    /// 여객기 (앞 = +z): 둥근 몸통 + 뒤로 젖힌 날개·엔진 둘 + 꼬리 날개. 날개 끝 빨강(왼)·초록(오른) 등, 깜빡이는 흰 섬광등
     private func addPlane<G: RandomNumberGenerator>(floorY: Float, using g: inout G) {
         let p = Entity()
-        let red = ModelEntity(mesh: .generateSphere(radius: 0.9), materials: [solid([1, 0.2, 0.15])])
-        let white = ModelEntity(mesh: .generateSphere(radius: 0.9), materials: [solid([1, 1, 1])])
-        red.position = [-6, 0, 0]; white.position = [6, 0, 0]
-        p.addChild(red); p.addChild(white)
-        blinkers.append((red, 1.1)); blinkers.append((white, 1.7))
+        let line = look == .line
+        let skin = line ? Ink.paper(0) : solid([0.9, 0.91, 0.93])
+        let dark = line ? Ink.line : solid([0.3, 0.32, 0.36])
+        var body = Geo(), wings = Geo(), lines = Geo()
+        body.trunk(from: SIMD3<Float>(0, 0, -18), to: SIMD3<Float>(0, 0.3, 14), r0: 0.9, r1: 2.0, sides: 12, segs: 2)      // 꼬리 쪽은 가늘게
+        body.trunk(from: SIMD3<Float>(0, 0.3, 14), to: SIMD3<Float>(0, 0.1, 19), r0: 2.0, r1: 0.4, sides: 12, segs: 3)    // 둥근 기수
+        for sx: Float in [-1, 1] {
+            // 주날개: 뿌리 넓고 끝 좁게, 뒤로 젖힘
+            wings.quad(SIMD3<Float>(sx * 1.6, -0.6, 4), SIMD3<Float>(sx * 17, 0.6, -6), SIMD3<Float>(sx * 17, 0.6, -8), SIMD3<Float>(sx * 1.6, -0.6, -2.5), .zero, .zero, .zero, .zero)
+            // 꼬리 수평 날개
+            wings.quad(SIMD3<Float>(sx * 0.6, 0.6, -13), SIMD3<Float>(sx * 6, 0.9, -17.5), SIMD3<Float>(sx * 6, 0.9, -18.8), SIMD3<Float>(sx * 0.6, 0.6, -17.5), .zero, .zero, .zero, .zero)
+            body.trunk(from: SIMD3<Float>(sx * 6, -1.6, 4.2), to: SIMD3<Float>(sx * 6, -1.6, 0.4), r0: 1.0, r1: 0.85, sides: 10, segs: 1)   // 엔진
+            if line {
+                lines.stroke(SIMD3<Float>(sx * 1.6, -0.6, 4), SIMD3<Float>(sx * 17, 0.6, -6), width: 0.25)
+                lines.stroke(SIMD3<Float>(sx * 17, 0.6, -6), SIMD3<Float>(sx * 17, 0.6, -8), width: 0.25)
+                lines.stroke(SIMD3<Float>(sx * 17, 0.6, -8), SIMD3<Float>(sx * 1.6, -0.6, -2.5), width: 0.25)
+            }
+        }
+        wings.quad(SIMD3<Float>(0, 1.5, -12.5), SIMD3<Float>(0, 7.5, -17.5), SIMD3<Float>(0, 7.5, -19.3), SIMD3<Float>(0, 1.5, -18), .zero, .zero, .zero, .zero)    // 수직 꼬리
+        if let e = body.entity("planeBody", skin) { p.addChild(e) }
+        if let e = wings.entity("planeWings", line ? Ink.paper(0) : solid([0.82, 0.84, 0.87])) { p.addChild(e) }
+        if line, let e = lines.entity("planeLines", Ink.line) { p.addChild(e) }
+        let win = ModelEntity(mesh: .generateBox(width: 4.05, height: 0.3, depth: 22), materials: [dark])
+        win.position = [0, 0.6, -1]
+        p.addChild(win)
+        let red = ModelEntity(mesh: .generateSphere(radius: 0.5), materials: [solid([1, 0.2, 0.15])])
+        let green = ModelEntity(mesh: .generateSphere(radius: 0.5), materials: [solid([0.2, 1, 0.35])])
+        let white = ModelEntity(mesh: .generateSphere(radius: 0.6), materials: [solid([1, 1, 1])])
+        red.position = [-17, 0.6, -7]; green.position = [17, 0.6, -7]; white.position = [0, 7.6, -18.8]
+        p.addChild(red); p.addChild(green); p.addChild(white)
+        blinkers.append((white, 1.3))
         let a = Float.random(in: 0...(2 * .pi), using: &g)
         let dir = SIMD3<Float>(cos(a), 0, sin(a))
         let len: Float = 1400
         let start = center - dir * (len / 2) + SIMD3<Float>(0, floorY - center.y + 160, 0) + SIMD3<Float>(-dir.z, 0, dir.x) * 120
+        p.orientation = simd_quatf(angle: atan2(dir.x, dir.z), axis: [0, 1, 0])
         far.addChild(p)
         movers.append(Mover(e: p, a: start, d: dir, len: len, speed: 45, s: Float.random(in: 0...len, using: &g), bob: 0))
     }
@@ -375,6 +536,7 @@ final class Scenery {
     // MARK: 연기·불·낙엽·안개
     private func smoke(size: Float, rate: Float, dark: Float) -> ParticleEmitterComponent {
         var pe = ParticleEmitterComponent()
+        pe.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
         pe.emitterShape = .sphere
         pe.emitterShapeSize = SIMD3<Float>(repeating: size * 0.3)
         pe.birthDirection = .world
@@ -407,6 +569,7 @@ final class Scenery {
             guard free(p, 1.5) else { continue }
             let base = SIMD3<Float>(p.x, floorY, p.z)
             var fire = ParticleEmitterComponent()
+            fire.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
             fire.emitterShape = .sphere
             fire.emitterShapeSize = [0.35, 0.1, 0.35]
             fire.birthDirection = .world
@@ -440,6 +603,7 @@ final class Scenery {
             let p = ring(R + Float.random(in: 4...12, using: &g), Float.random(in: 0...(2 * .pi), using: &g))
             guard free(p, 3.2) else { continue }
             var pe = ParticleEmitterComponent()
+            pe.mainEmitter.image = Tex.particle("leaf_bit")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
             pe.emitterShape = .box
             pe.emitterShapeSize = [5, 0.5, 5]
             pe.birthLocation = .volume
@@ -467,6 +631,7 @@ final class Scenery {
             let p = ring(R + Float.random(in: 25...70, using: &g), Float.random(in: 0...(2 * .pi), using: &g))
             guard free(p, 12) else { continue }
             var pe = ParticleEmitterComponent()
+            pe.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
             pe.emitterShape = .box
             pe.emitterShapeSize = [24, 2, 24]
             pe.birthLocation = .volume
@@ -686,6 +851,7 @@ final class Scenery {
                     if kind == 0 && !steamDone && y < 1.7 {
                         steamDone = true
                         var pe = ParticleEmitterComponent()
+                        pe.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
                         pe.emitterShape = .point
                         pe.birthDirection = .world
                         pe.emissionDirection = [0, 1, 0]
@@ -865,6 +1031,7 @@ final class Scenery {
         }
         // 불: 주황빛 입자 + 깜빡이는 불빛
         var fire = ParticleEmitterComponent()
+        fire.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
         fire.emitterShape = .box
         fire.emitterShapeSize = [0.45, 0.05, 0.12]
         fire.birthLocation = .volume
@@ -921,6 +1088,7 @@ final class Scenery {
     // MARK: 전시관 먼지 빛
     private func addDust(floorY: Float) {
         var pe = ParticleEmitterComponent()
+        pe.mainEmitter.image = Tex.particle("spark_dot")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
         pe.emitterShape = .box
         pe.emitterShapeSize = SIMD3<Float>(max(0.5, halfSize.x * 2 - 0.8), 1.4, max(0.5, halfSize.y * 2 - 0.8))
         pe.birthLocation = .volume

@@ -1074,6 +1074,16 @@ def foliage_cards():
     im = im.resize((Wp, Hp), Image.LANCZOS)
     arr = np.asarray(im).astype(np.float32)
     save_png('palm_frond', arr[..., :3], arr[..., 3] / 255)
+    # 바람에 날리는 낙엽 입자 (흰 잎 모양 — 입자 색으로 물듦, 가운데 잎맥)
+    S3 = 64
+    im = Image.new('RGBA', (S3 * S2, S3 * S2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.polygon(leafpoly(S3 / 2, S3 / 2, S3 * 0.82, S3 * 0.44, 0.5), fill=(250, 250, 250, 255))
+    ca, sa = math.cos(0.5), math.sin(0.5)
+    d.line([((S3 / 2 - ca * S3 * 0.36) * S2, (S3 / 2 - sa * S3 * 0.36) * S2), ((S3 / 2 + ca * S3 * 0.36) * S2, (S3 / 2 + sa * S3 * 0.36) * S2)], fill=(200, 200, 200, 255), width=3)
+    im = im.resize((S3, S3), Image.LANCZOS)
+    arr = np.asarray(im).astype(np.float32)
+    save_png('leaf_bit', arr[..., :3], arr[..., 3] / 255)
 
 
 # ───────────── 바닥·벽·물건 무늬 (1024, jpg) ─────────────
