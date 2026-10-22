@@ -159,6 +159,17 @@ final class NeonCity {
         return true
     }
 
+    /// 건물 상자에서 그 쪽을 보는 면: (면 가운데(바닥 높이), 바깥 방향, 면을 따라가는 방향, 면 폭)
+    private func face(_ b: Box, toward c: SIMD3<Float>) -> Face {
+        let ax = SIMD3<Float>(cos(b.yaw), 0, -sin(b.yaw)), az = SIMD3<Float>(sin(b.yaw), 0, cos(b.yaw))
+        var to = c - b.base
+        to.y = 0
+        to = simd_length(to) > 0.01 ? simd_normalize(to) : SIMD3<Float>(1, 0, 0)
+        let cand: [(SIMD3<Float>, SIMD3<Float>, Float, Float)] = [(ax, az, b.w / 2, b.d), (-ax, az, b.w / 2, b.d), (az, ax, b.d / 2, b.w), (-az, ax, b.d / 2, b.w)]
+        let best = cand.max { simd_dot($0.0, to) < simd_dot($1.0, to) } ?? cand[0]
+        return (c: b.base + best.0 * best.2, n: best.0, tng: best.1, fw: best.3)
+    }
+
     private func mat(_ name: String, _ alpha: Float) -> UnlitMaterial {
         var m = UnlitMaterial(color: look == .line ? UIColor(white: 0.12, alpha: 1) : .white)
         if look != .line, let tx = Tex.with(look == .color ? .color : .mono, { Tex.get(name) }) {

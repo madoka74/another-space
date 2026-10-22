@@ -73,7 +73,7 @@ final class SkyStars {
         let verts: [SIMD3<Float>]
         let segs: [(SIMD3<Float>, SIMD3<Float>)]
         var stars: ModelEntity?
-        var lines: Entity?
+        var lines: ModelEntity?
         var label: Entity?
         var focus: Float = 0
         var level = -1
