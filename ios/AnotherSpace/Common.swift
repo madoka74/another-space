@@ -140,7 +140,7 @@ enum Tex {
     private static var missing: Set<String> = []
 
     /// 지금 만드는 방의 표시 방식 (RoomWorld 가 만드는 동안만 바꿈). 흑백: 그림·색에서 색을 뺌, 선 그림: 흰 바탕 + 윤곽선 그림
-    static var look: LookMode = .color
+    static var look: LookMode = .color { didSet { Geo.inkMin = look == .line ? 0.006 : 0 } }
 
     /// 잠깐 다른 표시 방식으로 재질을 만듦
     static func with<T>(_ l: LookMode, _ f: () -> T) -> T {

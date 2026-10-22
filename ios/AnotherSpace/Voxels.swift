@@ -630,7 +630,7 @@ final class VoxelWorld {
         }
         var geos: [Int: Geo] = [:]
         var lg = Geo()
-        let lw: Float = 0.012
+        let lw: Float = 0.01                 // 선 그림: 가구 테두리 (배경·소품 선과 비슷한 굵기로)
         // 윗면: 같은 높이·재질 칸을 큰 사각형으로
         for (g, cells) in tops {
             var left = cells

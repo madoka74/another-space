@@ -444,7 +444,7 @@ final class ValleyCreek {
 
     private func addFish(_ seed: Int) {
         let area = Float(waterCells.count) * 0.01
-        let n = max(6, min(16, Int(area / 0.35)))
+        let n = max(9, min(24, Int(area / 0.22)))                // 작은 물고기를 넉넉히
         var g = SeededRNG(seed: UInt64(seed * 733 + 41))
         var mats: [RealityKit.Material] = []
         for i in 0..<6 {
@@ -458,14 +458,14 @@ final class ValleyCreek {
         }
         for _ in 0..<n {
             let f = Fish()
-            // 크기 여러 가지: 작은 피라미(4~9cm) 45% · 중간(10~17cm) 35% · 큰 물고기(20~34cm, 느긋하게) 20%
+            // 크기 여러 가지 (얕고 좁은 개울에 맞게): 작은 피라미(3.5~8cm) 60% · 중간(8~13cm) 30% · 큰 물고기(13~18cm, 느긋하게) 10%
             let r = Float.random(in: 0...1, using: &g)
-            let big = r > 0.8
-            f.size = r < 0.45 ? Float.random(in: 0.04...0.09, using: &g) : (big ? Float.random(in: 0.2...0.34, using: &g) : Float.random(in: 0.1...0.17, using: &g))
-            f.cruise = Float.random(in: 0.06...0.14, using: &g) * (big ? 0.7 : (r < 0.45 ? 1.25 : 1))
+            let big = r > 0.9
+            f.size = r < 0.6 ? Float.random(in: 0.035...0.08, using: &g) : (big ? Float.random(in: 0.13...0.18, using: &g) : Float.random(in: 0.08...0.13, using: &g))
+            f.cruise = Float.random(in: 0.06...0.14, using: &g) * (big ? 0.75 : (r < 0.6 ? 1.25 : 1))
             f.speed = f.cruise
             f.depth = Float.random(in: 0.015...0.03, using: &g)
-            if f.size > 0.18 { f.e.scale = [1, 0.6, 1]; f.depth = 0.016 }        // 큰 물고기는 얕은 물에 맞게 조금 납작하게 (등이 물 밖으로 나오지 않게)
+            if f.size > 0.12 { f.e.scale = [1, 0.75, 1]; f.depth = 0.018 }       // 큰 물고기는 얕은 물에 맞게 조금 납작하게 (등이 물 밖으로 나오지 않게)
             f.head = Float.random(in: 0...(2 * .pi), using: &g)
             f.wag = Float.random(in: 0...6, using: &g)
             let k = waterCells[Int(g.next() % UInt64(waterCells.count))]

@@ -959,8 +959,12 @@ final class ExploreSession {
         head = simd_make_float3(m.columns.3)
         fwd = -simd_make_float3(m.columns.2)
         headUp = simd_make_float3(m.columns.1)
-        if let lh = lastHead, dt > 0 { speed += (simd_distance(lh.xz, head.xz) / dt - speed) * min(1, dt * 4) }
-        lastHead = head
+        // 몸 자리 = 목 뒤(눈에서 9cm 뒤·7cm 아래): 고개를 숙이거나 돌리면 눈(기기)은 앞뒤로 10~15cm 움직이지만 몸은 그대로.
+        // 걷는 빠르기·지금 방 판정은 이 자리로 함 — 예전엔 눈 자리로 해서, 아래를 내려다보면 '빨리 움직임'이나 '방 밖(벽 가까이)'으로
+        // 잘못 알아 안전 장치가 세계 전체를 흐리게 하고 현실이 겹쳐 보였음
+        let pivot = head - fwd * 0.09 - headUp * 0.07
+        if let lh = lastHead, dt > 0 { speed += (simd_distance(lh.xz, pivot.xz) / dt - speed) * min(1, dt * 3) }
+        lastHead = pivot
 
         if fit == nil, poses.isEmpty, !aligning, t > nextAlign, let d = data { startAlign(d) }
 
@@ -986,7 +990,8 @@ final class ExploreSession {
 
         if let fit, let L = layout, let I = info {
             let hs = fit.toSaved(head)
-            let r = L.roomNear(x: hs.x, z: hs.z, radius: 0.25)
+            let bs = fit.toSaved(head - fwd * 0.09 - headUp * 0.07)             // 몸 자리 (방 판정용)
+            let r = L.roomNear(x: bs.x, z: bs.z, radius: 0.3)
             if r != candidate { candidate = r; candidateT = 0 } else { candidateT += dt }
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
             outsideT = r == 0 ? outsideT + dt : 0
@@ -1025,8 +1030,8 @@ final class ExploreSession {
         var target: Float = 1
         var why: String?
         if fit == nil || !ready || !floorOK { target = 0 }
-        else if outsideT > 0.6 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
-        else if speed > 1.4 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
+        else if outsideT > 1.0 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
+        else if speed > 1.6 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
         let rate: Float = target < fade ? 3 : 1.1
         if let ii = intro {
             fade = min(target, ii.world)

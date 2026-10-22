@@ -458,6 +458,7 @@ final class HomeCat {
         floorY = c.floorY
         if let n = pending.first { _ = mat(n); pending.removeFirst() }            // 그림을 한 프레임에 하나씩 미리 읽음
         unstick(c)
+        settle(dt, c)
 
         // 나와의 관계
         let me = SIMD2<Float>(c.head.x, c.head.z)
@@ -748,6 +749,19 @@ final class HomeCat {
         if bellT <= 0 {
             bellT = running ? Float.random(in: 0.45...0.8) : Float.random(in: 1.1...2.0)
             Sfx.play("bell\(Int.random(in: 1...3))", in: root, at: [0.1, 0.22, 0], gain: running ? -10 : -15)
+        }
+    }
+
+    /// 받침 확인: 뛰어오르내리는 중이 아닌데 발밑 높이(가구 윗면 또는 바닥)보다 떠 있으면 바로 내려앉음.
+    /// (가구 위에 있다가 장난감·손짓 등으로 다른 일을 시작하면 그 높이 그대로 공중을 걸어 다니는 경우가 있었음)
+    private func settle(_ dt: Float, _ c: Ctx) {
+        guard ![Act.jumpUp, .jumpDown, .enter, .leave].contains(act), elev > 0.005 else { return }
+        let ground = c.height(pos)
+        if ground < elev - 0.05 {
+            elev = max(ground, elev - dt * 2.5)                  // 가장자리를 벗어나면 짧게 뛰어내리듯
+            if elev < 0.01 { elev = 0 }
+        } else if act != .onTop && ground > 0.05 {
+            elev = ground                                         // 가구 위를 걸을 땐 그 윗면 높이에 딱 붙어서
         }
     }
 

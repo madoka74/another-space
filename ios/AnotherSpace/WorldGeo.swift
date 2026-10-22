@@ -255,7 +255,12 @@ struct Geo {
     }
 
     /// 선 그림용 가는 선 (a→b, 굵기 w): 서로 직각인 얇은 띠 두 장 — 어느 쪽에서 봐도 선으로 보임
-    mutating func stroke(_ a: SIMD3<Float>, _ b: SIMD3<Float>, width w: Float) {
+    /// 선 그림일 때 가장 가는 선 굵기 (Tex.look 이 선 그림이면 0.6cm) — 실내 가구 테두리(1cm)와 배경·소품의 선 굵기가 너무 달라
+    /// 가는 선이 묻혀 보이던 것을 비슷한 굵기로 맞춤
+    static var inkMin: Float = 0
+
+    mutating func stroke(_ a: SIMD3<Float>, _ b: SIMD3<Float>, width w0: Float) {
+        let w = max(w0, Geo.inkMin)
         let d = b - a
         let l = simd_length(d)
         guard l > 1e-4 else { return }

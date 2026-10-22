@@ -326,6 +326,7 @@ final class HomeDog {
         floorY = c.floorY
         if let n = pending.first { _ = mat(n); pending.removeFirst() }
         unstick(c)
+        settle(dt, c)
 
         let me = SIMD2<Float>(c.head.x, c.head.z)
         let to = pos - me
@@ -573,6 +574,19 @@ final class HomeDog {
         if tagT <= 0 {
             tagT = running ? Float.random(in: 0.4...0.7) : Float.random(in: 1.0...1.8)
             Sfx.play("dog_tag\(Int.random(in: 1...2))", in: root, at: [0.15 * face, 0.3, 0], gain: running ? -10 : -15)
+        }
+    }
+
+    /// 받침 확인: 뛰어오르내리는 중이 아닌데 발밑 높이(가구 윗면 또는 바닥)보다 떠 있으면 바로 내려앉음.
+    /// (가구 위에 있다가 장난감·손짓 등으로 다른 일을 시작하면 그 높이 그대로 공중을 걸어 다니는 경우가 있었음)
+    private func settle(_ dt: Float, _ c: Ctx) {
+        guard ![Act.jumpUp, .jumpDown, .enter, .leave].contains(act), elev > 0.005 else { return }
+        let ground = c.height(pos)
+        if ground < elev - 0.05 {
+            elev = max(ground, elev - dt * 2.5)                  // 가장자리를 벗어나면 짧게 뛰어내리듯
+            if elev < 0.01 { elev = 0 }
+        } else if act != .onTop && ground > 0.05 {
+            elev = ground                                         // 가구 위를 걸을 땐 그 윗면 높이에 딱 붙어서
         }
     }
 

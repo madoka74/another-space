@@ -316,7 +316,7 @@ final class RoomWorld {
     /// 선 그림: 방의 꺾이는 곳만 검은 선으로 — 바닥·천장과 벽이 만나는 줄, 벽 모서리(방향이 바뀌거나 벽이 끝나는 곳), 창 테두리, 문 위 가로대
     private func addOutlines(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         var g = Geo()
-        let w: Float = 0.014
+        let w: Float = 0.011
         let off = w / 2 + 0.005                 // 선을 벽·바닥·천장에서 방 안쪽으로 띄움 — 면과 겹쳐 깜빡이거나 옆방 벽에 비쳐 보이지 않게
         let top = ceilY - floorY
         func p3(_ p: SIMD2<Float>, _ y: Float) -> SIMD3<Float> { let f = L.flat(p); return SIMD3<Float>(f.x, floorY + y, f.y) }
