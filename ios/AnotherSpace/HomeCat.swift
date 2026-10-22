@@ -3,12 +3,16 @@ import UIKit
 import RealityKit
 import simd
 
-/// 집 테마의 고양이 '방울이': 선 그림 카툰 고양이(납작한 그림 한 장이 늘 나를 바라봄)가 내 근처를 따라다니며 놂.
+/// 집 테마의 고양이 '방울이': 선 그림 카툰 고양이(그림 판이 늘 나를 바라봄)가 내 근처를 따라다니며 놂.
+/// - 보는 방향에 맞는 그림: 나에게 걸어오면 정면, 멀어지면 뒷모습, 옆으로 가면 옆모습. 방향을 바꿀 땐 정면을 거쳐 돌아섬
 /// - 늘 내 시야 안: 시야 밖으로 벗어나면 보이는 자리로 뛰어 들어옴. 내가 걸으면 앞쪽 옆을 종종걸음으로 따라옴
 /// - 가구와 놀기: 평평한 가구 위로 폴짝 올라가 앉거나 식빵 굽거나 잠, 가구 옆면을 긁기
-/// - 나와 놀기: 가만히 서 있으면 발치에 와서 부비부비(그르릉), 앉으면 옆에 와서 식빵·잠, 손을 내밀면 머리를 비빔,
-///   손을 빠르게 흔들면 냥냥펀치, 오래 바라보면 올려다보며 야옹, 톡 치면(탭) 뒹굴며 짹
-/// - 혼자서: 앉아 꼬리 살랑·눈 깜빡, 그루밍, 기지개, 식빵, 뒹굴기, 야옹
+/// - 털실 공: 혼자 꺼내 와서 사냥하듯 노려보다 덮치고 굴리며 놂. 공을 톡 치면 멀리 굴러가고 쫓아감
+/// - 나와 놀기: 가만히 서 있으면 발치에 와서 부비부비(그르릉), 앉으면 옆에 와서 꾹꾹이·식빵·잠, 손을 내밀면 머리를 비빔,
+///   손을 빠르게 흔들면 냥냥펀치, 오래 바라보면 올려다보며 야옹
+/// - 톡 치면(바라보고 탭): 그때그때 다르게 — 뒹굴며 짹, 지그시 눈 감고 그르릉, 고개 갸웃, 깜짝 폴짝, 다가와 부비, 덮치기, 야옹.
+///   자고 있으면 하품하며 깸, 너무 자꾸 치면 털을 세우고 하악 한 뒤 토라져 멀어짐
+/// - 머리 위 말풍선(♥ ? ! z ♪ 💢)과 여러 목소리(야옹 9가지·므릅·짹·하품·채터링·하악·그르릉), 걸을 때 목줄 방울 딸랑
 @MainActor
 final class HomeCat {
     /// 매 프레임 알려 주는 것 (모두 저장 좌표)
@@ -27,33 +31,42 @@ final class HomeCat {
     }
 
     let root = Entity()                          // 고양이 자리 (저장 좌표, 발밑)
+    let ballRoot = Entity()                      // 털실 공 (저장 좌표)
     private(set) var done = false
     private let card = ModelEntity()
-    private let flip = Entity()
+    private let bubble = ModelEntity()
     private var shadow: ModelEntity?
     private let look: LookMode
     private var mats: [String: UnlitMaterial] = [:]
     private var pending: [String] = []
 
-    private enum Act { case sit, walk, jumpUp, onTop, jumpDown, groom, stretch, loaf, sleep, scratch, roll, swat, rub, meow, look, enter, leave }
+    private enum Act {
+        case sit, walk, jumpUp, onTop, jumpDown, groom, stretch, loaf, sleep, flop, scratch, roll, swat, rub, meow, look,
+             tilt, love, knead, yawn, pounce, puff, chase, hop, enter, leave
+    }
     private var act: Act = .enter
     private var actT: Float = 0
     private var actDur: Float = 1
     private var pos: SIMD2<Float>
     private var elev: Float = 0                  // 바닥에서 높이 (가구 위면 그 높이)
-    private var face: Float = 1                  // 그림 방향 (1 오른쪽, -1 왼쪽)
+    private var face: Float = 1                  // 옆모습 방향 (1 오른쪽, -1 왼쪽)
+    private var turnFrom: Float = 1
+    private var turnT: Float = -1                // 돌아서는 중 (0~0.26초)
+    private var frontal = false                  // 앉을 때 나를 마주 봄
+    private var moveDir = SIMD2<Float>(1, 0)
     private var goal: SIMD2<Float>?
     private var running = false
     private var then: Act = .sit                 // 걸어가서 할 일
     private var thenDur: Float = 3
     private var jumpFrom = SIMD3<Float>(0, 0, 0), jumpTo = SIMD3<Float>(0, 0, 0)
-    private var topH: Float = 0
     private var t: Float = 0
     private var frameT: Float = 0
     private var blinkT: Float = 3
     private var hidden: Float = 0                // 시야 밖에 있은 시간
     private var gazeT: Float = 0
     private var meowCool: Float = 4
+    private var talkT: Float = 8                 // 다음 혼잣말
+    private var bellT: Float = 0
     private var followT: Float = 0
     private var lastHands: [SIMD3<Float>] = []
     private var purr: AudioPlaybackController?
@@ -61,13 +74,36 @@ final class HomeCat {
     private var opacity: Float = 0
     private var scratchDir: SIMD2<Float> = SIMD2<Float>(1, 0)
     private var floorY: Float = 0
+    private var yaw: Float = 0
+    private var lastHead = SIMD3<Float>(0, 1.5, 0)
+    private var lastDt: Float = 1 / 90
+    private var taps: [Float] = []
+    private var sulkUntil: Float = 0
+    // 덮치기
+    private var pounceTo = SIMD2<Float>(0, 0)
+    private var pounceFrom = SIMD2<Float>(0, 0)
+    // 털실 공
+    private var ball: ModelEntity?
+    private var ballPos = SIMD2<Float>(0, 0)
+    private var ballVel = SIMD2<Float>(0, 0)
+    private var ballSpin = simd_quatf(angle: 0, axis: [0, 1, 0])
+    private var hits = 0
+    private var hitsMax = 4
+    // 말풍선
+    private var bubbleT: Float = -1
+    private var bubbleDur: Float = 1.4
 
     private static let walkFrames = (0..<6).map { "cat_walk\($0)" }
     private static let runFrames = (0..<4).map { "cat_run\($0)" }
+    private static let fwalkFrames = (0..<4).map { "cat_fwalk\($0)" }
+    private static let bwalkFrames = (0..<4).map { "cat_bwalk\($0)" }
     private static let all: [String] = ["cat_sit0", "cat_sit1", "cat_blink", "cat_meow", "cat_look", "cat_lookmeow", "cat_groom0", "cat_groom1",
                                         "cat_swat0", "cat_swat1", "cat_loaf0", "cat_loaf1", "cat_sleep0", "cat_sleep1", "cat_stretch0", "cat_stretch1",
-                                        "cat_jump0", "cat_jump1", "cat_scratch0", "cat_scratch1", "cat_roll0", "cat_roll1", "cat_rub0", "cat_rub1"]
-                                       + walkFrames + runFrames
+                                        "cat_jump0", "cat_jump1", "cat_scratch0", "cat_scratch1", "cat_roll0", "cat_roll1", "cat_rub0", "cat_rub1",
+                                        "cat_fsit0", "cat_fsit1", "cat_fblink", "cat_fmeow", "cat_ftilt", "cat_flove", "cat_bsit",
+                                        "cat_yawn", "cat_tilt", "cat_slowblink", "cat_knead0", "cat_knead1", "cat_pounce0", "cat_pounce1", "cat_pounce2",
+                                        "cat_flop0", "cat_flop1", "cat_puff"]
+                                       + walkFrames + runFrames + fwalkFrames + bwalkFrames
 
     init(at p: SIMD2<Float>, floorY: Float, look: LookMode) {
         self.look = look
@@ -83,8 +119,16 @@ final class HomeCat {
         card.name = "homecat"
         card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.42, 0.36, 0.12]).offsetBy(translation: [0, 0.18, 0])]))
         card.components.set(InputTargetComponent())
-        flip.addChild(card)
-        root.addChild(flip)
+        card.components.set(HoverEffectComponent())                 // 바라보면 은은하게 빛남 (톡 칠 수 있다는 표시)
+        root.addChild(card)
+        // 말풍선 판 (16cm)
+        var bq = Geo()
+        let b: Float = 0.16
+        bq.quad(SIMD3<Float>(-b / 2, 0, 0), SIMD3<Float>(b / 2, 0, 0), SIMD3<Float>(b / 2, b, 0), SIMD3<Float>(-b / 2, b, 0),
+                SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+        if let m = bq.mesh("bubble") { bubble.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
+        bubble.isEnabled = false
+        root.addChild(bubble)
         // 발밑 그림자 (부드러운 타원)
         var sg = Geo()
         sg.quad(SIMD3<Float>(-0.26, 0.012, -0.12), SIMD3<Float>(0.26, 0.012, -0.12), SIMD3<Float>(0.26, 0.012, 0.12), SIMD3<Float>(-0.26, 0.012, 0.12),
@@ -100,15 +144,16 @@ final class HomeCat {
         root.position = SIMD3<Float>(p.x, floorY, p.y)
         root.components.set(OpacityComponent(opacity: 0))
         pending = Self.all
-        show("cat_walk0")
+        show("cat_fwalk0")
         Sfx.play("cat_trill", in: root, at: [0, 0.25, 0], gain: -4)
+        emote("heart")
     }
 
     // MARK: 그림
     private func mat(_ n: String) -> UnlitMaterial {
         if let m = mats[n] { return m }
         var m = UnlitMaterial(color: .white)
-        let mode: LookMode = look == .color ? .color : .mono          // 선 그림·흑백에선 목줄도 무채색
+        let mode: LookMode = look == .color ? .color : .mono          // 선 그림·흑백에선 목줄·말풍선도 무채색
         if let tx = Tex.with(mode, { Tex.get(n) }) {
             var p = MaterialParameters.Texture(tx); p.sampler = Tex.clamp
             m.color = .init(tint: .white, texture: p)
@@ -134,12 +179,24 @@ final class HomeCat {
         return frames[i]
     }
 
+    /// 머리 위 말풍선 (♥ ? ! z ♪ 💢)
+    private func emote(_ name: String, _ dur: Float = 1.5) {
+        bubble.model?.materials = [mat("emote_" + name)]
+        bubble.isEnabled = true
+        bubbleT = 0
+        bubbleDur = dur
+    }
+
     // MARK: 소리
-    private let meowNames = ["cat_meow1", "cat_meow2", "cat_meow3"]
-    private func meow(_ name: String? = nil, gain: Double = -2) {
-        guard meowCool <= 0 || name != nil else { return }
-        meowCool = Float.random(in: 5...10)
-        Sfx.play(name ?? (meowNames.randomElement() ?? "cat_meow1"), in: root, at: [0, 0.3, 0], gain: gain)
+    private func say(_ name: String, _ gain: Double = -3) {
+        meowCool = Float.random(in: 3...6)
+        Sfx.play(name, in: root, at: [0, 0.3, 0], gain: gain)
+    }
+    private func meow(_ gain: Double = -3) { say("cat_meow\(Int.random(in: 1...9))", gain) }
+    private func mrrp(_ gain: Double = -4) { say(Bool.random() ? "cat_mrrp\(Int.random(in: 1...3))" : "cat_trill", gain) }
+    private func chirp(_ gain: Double = -4) {
+        let n = Int.random(in: 1...3)
+        say(n == 1 ? "cat_chirp" : "cat_chirp\(n)", gain)
     }
 
     private func setPurr(_ on: Bool) {
@@ -172,7 +229,10 @@ final class HomeCat {
         actT = 0
         actDur = dur
         frameT = 0
-        if a != .rub && a != .loaf && a != .sleep { setPurr(false) }
+        switch a {
+        case .rub, .loaf, .sleep, .flop, .knead, .love: break
+        default: setPurr(false)
+        }
     }
 
     /// 걸어가서(멀면 뛰어서) 그 일을 함
@@ -184,16 +244,82 @@ final class HomeCat {
         start(.walk, 30)
     }
 
-    /// 톡 침: 뒹굴며 짹 (가구 위면 야옹)
+    /// 톡 침 (바라보고 탭)
     func poke() {
-        guard act != .jumpUp && act != .jumpDown && act != .leave else { return }
+        guard act != .jumpUp && act != .jumpDown && act != .leave && act != .enter else { return }
+        taps = taps.filter { t - $0 < 6 } + [t]
         goal = nil
+        // 너무 자꾸 치면 토라짐
+        if taps.count >= 4 {
+            taps.removeAll()
+            say("cat_hiss", -2)
+            emote("anger")
+            frontal = false
+            start(.puff, 1.3)
+            sulkUntil = t + 12
+            return
+        }
         if elev > 0.05 {
-            meow("cat_meow2", gain: 0)
-            start(.meow, 1.2)
-        } else {
-            Sfx.play("cat_chirp", in: root, at: [0, 0.25, 0], gain: 0)
-            start(.roll, 2.4)
+            mrrp(-2)
+            emote("question")
+            start(.tilt, 1.8)
+            return
+        }
+        switch act {
+        case .sleep, .flop, .loaf, .knead:
+            say("cat_yawn", -3)
+            emote("question")
+            start(.yawn, 1.6)
+            return
+        case .chase, .pounce:
+            chirp(-2)
+            emote("exclaim")
+            return
+        default: break
+        }
+        let me = SIMD2<Float>(lastHead.x, lastHead.z)
+        switch Int.random(in: 0...6) {
+        case 0:
+            chirp(-1); emote("heart"); start(.roll, 2.4)
+        case 1:
+            setPurr(true); emote("heart"); frontal = true; start(.love, 3.5)
+        case 2:
+            mrrp(-2); emote("question"); start(.tilt, 1.8)
+        case 3:
+            say("cat_mew", -2); emote("exclaim"); start(.hop, 0.55)
+        case 4:
+            let s = me + simd_normalize(pos - me) * 0.45
+            if simd_distance(pos, me) > 0.7 {
+                say("cat_trill", -2); emote("heart"); go(s, then: .rub, 3)
+            } else {
+                say("cat_trill", -2); emote("heart"); start(.rub, 3); setPurr(true)
+            }
+        case 5:
+            say("cat_chatter", -4); emote("exclaim")
+            let d = simd_length(me - pos) > 0.01 ? simd_normalize(me - pos) : moveDir
+            pounceFrom = pos
+            pounceTo = pos + d * 0.35
+            faceToward(pounceTo)
+            start(.pounce, 1.6)
+        default:
+            meow(-1); emote("note"); start(.meow, 1.4)
+        }
+    }
+
+    /// 털실 공을 톡 침: 나에게서 먼 쪽으로 굴러가고 고양이가 쫓아감
+    func kickBall(from head: SIMD3<Float>) {
+        guard ball != nil else { return }
+        let me = SIMD2<Float>(head.x, head.z)
+        var d = ballPos - me
+        d = simd_length(d) > 0.01 ? simd_normalize(d) : SIMD2<Float>(0, 1)
+        ballVel = d * 1.6
+        if let b = ball { Sfx.play("cup_clink1", in: b, at: .zero, gain: -30) }
+        if act != .jumpUp && act != .jumpDown && elev < 0.05 {
+            hits = 0
+            hitsMax = Int.random(in: 3...6)
+            chirp(-2)
+            emote("exclaim")
+            start(.chase, 12)
         }
     }
 
@@ -207,6 +333,7 @@ final class HomeCat {
     func remove() {
         purr?.stop()
         root.removeFromParent()
+        ballRoot.removeFromParent()
         done = true
     }
 
@@ -219,6 +346,7 @@ final class HomeCat {
         actT += dt
         frameT += dt
         meowCool -= dt
+        talkT -= dt
         floorY = c.floorY
         if let n = pending.first { _ = mat(n); pending.removeFirst() }            // 그림을 한 프레임에 하나씩 미리 읽음
 
@@ -230,7 +358,7 @@ final class HomeCat {
         let inView = dist > 0.25 && dist < 4.2 && simd_dot(dir, c.fwd) > 0.74
         hidden = inView ? 0 : hidden + dt
 
-        // 바라보고 있나 (고양이 쪽 2m 안에서 시선이 8도 안)
+        // 바라보고 있나 (고양이 쪽 3m 안에서 시선이 8도 안)
         let eye = SIMD3<Float>(pos.x, floorY + elev + 0.2, pos.y) - c.head
         let looking = simd_length(eye) < 3 && simd_dot(simd_normalize(eye), c.gaze) > 0.99
         gazeT = looking ? gazeT + dt : 0
@@ -248,29 +376,45 @@ final class HomeCat {
         }
         lastHands = c.hands
 
-        let busy = act == .jumpUp || act == .jumpDown || act == .leave || act == .enter
+        let busy = act == .jumpUp || act == .jumpDown || act == .leave || act == .enter || act == .puff || act == .hop
         if !busy {
-            if let h = handNear, act != .roll {
+            if let h = handNear, act != .roll && act != .chase {
                 faceToward(SIMD2<Float>(h.x, h.z))
                 if handFast {
-                    if act != .swat { goal = nil; start(.swat, 1.0); Sfx.play("cat_chirp", in: root, at: [0, 0.25, 0], gain: -3) }
+                    if act != .swat { goal = nil; start(.swat, 1.0); chirp(-3); emote("exclaim", 1) }
                 } else if act != .rub && act != .swat {
                     goal = nil
                     start(.rub, 3)
                     setPurr(true)
-                    if meowCool <= 0 { meow("cat_trill", gain: -3) }
+                    emote("heart")
+                    if meowCool <= 0 { say("cat_trill", -3) }
                 }
-            } else if hidden > 0.7 && (act != .walk || (hidden > 1.6 && !running)) {
+            } else if hidden > 0.7 && act != .chase && (act != .walk || (hidden > 1.6 && !running)) {
                 // 시야 밖 → 보이는 자리로
                 if elev > 0.05 { jumpDownNear(c, prefer: me + c.fwd * 1.4) } else if let s = viewSpot(c, near: 1.5) { go(s, then: .sit, 4, run: true) }
-            } else if c.userSpeed > 0.35 && act != .walk && elev < 0.05 {
+            } else if c.userSpeed > 0.35 && act != .walk && act != .chase && elev < 0.05 {
                 // 내가 걸으면 앞쪽 옆을 따라옴
                 followT -= dt
                 if followT <= 0, let s = viewSpot(c, near: 1.3) { followT = 0.6; go(s, then: .sit, 2.5) }
             } else if gazeT > 1.2 && (act == .sit || act == .loaf || act == .onTop || act == .groom) && meowCool <= 0 {
                 gazeT = 0
                 meow()
+                emote("note", 1.2)
                 start(.look, 2.2)
+            }
+        }
+
+        // 혼잣말 (자는 중엔 가끔 그르릉만)
+        if talkT <= 0 {
+            talkT = Float.random(in: 7...16)
+            switch act {
+            case .sleep, .flop: if Bool.random() { emote("zzz", 2) }
+            case .chase, .pounce: say("cat_chatter", -6)
+            case .walk: if Bool.random() { mrrp(-6) }
+            case .leave, .enter, .puff: break
+            default:
+                let r = Int.random(in: 0...3)
+                if r == 0 { meow(-6) } else if r == 1 { mrrp(-6) } else if r == 2 { chirp(-7) } else if dist < 1.5 { say("cat_trill", -6) }
             }
         }
 
@@ -278,8 +422,8 @@ final class HomeCat {
         case .enter:
             opacity = min(1, opacity + dt * 2.5)
             root.components.set(OpacityComponent(opacity: opacity))
-            if opacity >= 1 { start(.sit, 1.5) }
-            show("cat_sit0")
+            if opacity >= 1 { frontal = true; start(.sit, 1.5) }
+            show("cat_fsit0")
         case .leave:
             opacity = max(0, opacity - dt * 2)
             root.components.set(OpacityComponent(opacity: opacity))
@@ -296,14 +440,13 @@ final class HomeCat {
             if k >= 1 {
                 elev = jumpTo.y
                 if act == .jumpUp {
-                    topH = jumpTo.y
                     start(.onTop, Float.random(in: 8...16))
                 } else {
                     start(.sit, 2)
                 }
             }
         case .onTop:
-            // 가구 위: 앉아 있다가 식빵·그루밍·잠을 번갈아
+            // 가구 위: 앉아 있다가 그루밍·식빵·잠을 번갈아
             let phase = actT / actDur
             if phase < 0.3 { sitFrame() } else if phase < 0.55 { show(loop(["cat_groom0", "cat_groom1"], fps: 3)) } else { show(loop(["cat_loaf0", "cat_loaf1"], fps: 0.4)) }
             if actT > actDur { jumpDownNear(c, prefer: me + c.fwd * 1.3) }
@@ -320,10 +463,20 @@ final class HomeCat {
             show(loop(["cat_loaf0", "cat_loaf1"], fps: 0.35))
             if c.seated && dist < 1.4 { setPurr(true) }
             if actT > actDur || (c.userSpeed > 0.4 && actT > 1) { start(.stretch, 1.6) }
-        case .sleep:
-            show(loop(["cat_sleep0", "cat_sleep1"], fps: 0.45))
+        case .sleep, .flop:
+            show(act == .sleep ? loop(["cat_sleep0", "cat_sleep1"], fps: 0.45) : loop(["cat_flop0", "cat_flop1"], fps: 0.4))
             setPurr(c.seated)
-            if (actT > actDur && !c.seated) || c.userSpeed > 0.4 { start(.stretch, 2); meow("cat_meow2", gain: -6) }
+            if (actT > actDur && !c.seated) || c.userSpeed > 0.4 {
+                say("cat_yawn", -6)
+                start(.yawn, 1.4)
+            }
+        case .yawn:
+            show("cat_yawn")
+            if actT > actDur { start(.stretch, 1.8) }
+        case .knead:
+            show(loop(["cat_knead0", "cat_knead1"], fps: 2.2))
+            setPurr(true)
+            if actT > actDur { start(c.seated ? (Bool.random() ? .sleep : .loaf) : .loaf, Float.random(in: 12...25)) }
         case .scratch:
             faceToward(pos + scratchDir)
             show(loop(["cat_scratch0", "cat_scratch1"], fps: 5))
@@ -333,75 +486,173 @@ final class HomeCat {
             if actT > actDur { start(.sit, 2) }
         case .swat:
             show(loop(["cat_swat0", "cat_swat1"], fps: 6))
-            if actT > actDur { start(.sit, 1.5) }
+            if actT > actDur {
+                if ball != nil && hits > 0 && hits < hitsMax { start(.chase, 10) } else { start(.sit, 1.5) }
+            }
         case .rub:
             show(loop(["cat_rub0", "cat_rub1"], fps: 2.2))
-            if actT > actDur || (handNear == nil && c.userSpeed > 0.3) { setPurr(false); start(.sit, 2) }
+            if actT > actDur || (handNear == nil && c.userSpeed > 0.3) {
+                setPurr(false)
+                if c.still > 3 && Bool.random() { start(.knead, 4) } else { frontal = true; start(.sit, 2) }
+            }
         case .meow:
-            show(actT < 0.9 ? "cat_meow" : "cat_sit0")
+            show(actT < 0.9 ? (frontal ? "cat_fmeow" : "cat_meow") : (frontal ? "cat_fsit0" : "cat_sit0"))
             if actT > actDur { start(elev > 0.05 ? .onTop : .sit, elev > 0.05 ? 6 : 2) }
         case .look:
             show(actT < 0.9 ? "cat_lookmeow" : "cat_look")
             if actT > actDur { start(elev > 0.05 ? .onTop : .sit, elev > 0.05 ? 6 : 2.5) }
+        case .tilt:
+            show(frontal ? "cat_ftilt" : "cat_tilt")
+            if actT > actDur { start(elev > 0.05 ? .onTop : .sit, elev > 0.05 ? 6 : 2) }
+        case .love:
+            show(frontal ? (actT.truncatingRemainder(dividingBy: 2.2) < 1.6 ? "cat_flove" : "cat_fsit0") : "cat_slowblink")
+            if actT > actDur { setPurr(false); start(.sit, 2) }
+        case .hop:
+            // 깜짝 놀라 제자리에서 폴짝
+            let k = min(1, actT / actDur)
+            elev = 4 * k * (1 - k) * 0.16
+            show("cat_jump0")
+            if k >= 1 { elev = 0; start(.sit, 1.5) }
+        case .puff:
+            show("cat_puff")
+            if actT > actDur {
+                // 토라져서 멀어진 곳으로 가서 그루밍
+                if let s = viewSpot(c, near: 2.3) { go(s, then: .groom, 3) } else { start(.groom, 3) }
+            }
+        case .pounce:
+            // 엉덩이 씰룩 → 휙 덮침
+            if actT < actDur * 0.65 {
+                show(loop(["cat_pounce0", "cat_pounce1"], fps: 7))
+            } else {
+                let k = min(1, (actT - actDur * 0.65) / (actDur * 0.35))
+                let p = pounceFrom + (pounceTo - pounceFrom) * k
+                if c.free(p) { pos = p }
+                elev = 4 * k * (1 - k) * 0.1
+                show("cat_pounce2")
+            }
+            if actT > actDur {
+                elev = 0
+                if ball != nil && simd_distance(pos, ballPos) < 0.3 { hitBall(); start(.swat, 0.5) } else { start(.roll, 1.6) }
+            }
+        case .chase:
+            stepChase(dt, c)
         }
+        tickBall(dt, c)
+        tickBubble(dt)
         place(c)
     }
 
-    private var lastDt: Float = 1 / 90
     private func sitFrame() {
         blinkT -= lastDt
         if blinkT < 0 { blinkT = Float.random(in: 2.5...6) }
-        if blinkT < 0.15 { show("cat_blink"); return }
-        show(loop(["cat_sit0", "cat_sit1"], fps: 1.1))
+        if blinkT < 0.15 { show(frontal ? "cat_fblink" : "cat_blink"); return }
+        show(frontal ? loop(["cat_fsit0", "cat_fsit1"], fps: 1.1) : loop(["cat_sit0", "cat_sit1"], fps: 1.1))
     }
 
-    /// 그림 판을 나에게 향하게, 좌우 뒤집기, 그림자
+    /// 그림 판을 나에게 향하게(부드럽게), 돌아설 땐 정면을 거쳐 좌우가 바뀜, 그림자·말풍선
     private func place(_ c: Ctx) {
         let p3 = SIMD3<Float>(pos.x, floorY + elev, pos.y)
         root.position = p3
         let d = c.head - p3
-        let yaw = atan2(d.x, d.z)
-        card.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0])
-        card.scale = SIMD3<Float>(face, 1, 1)
+        let want = atan2(d.x, d.z)
+        var diff = want - yaw
+        while diff > .pi { diff -= 2 * .pi }
+        while diff < -.pi { diff += 2 * .pi }
+        yaw += diff * min(1, lastDt * 8)
+        let q = simd_quatf(angle: yaw, axis: [0, 1, 0])
+        card.orientation = q
+        bubble.orientation = q
+        // 돌아서기: 0.26초 동안 정면 그림을 거침 (가로로 살짝 좁아졌다 넓어짐)
+        var sx = face
+        if turnT >= 0 {
+            turnT += lastDt
+            let k = min(1, turnT / 0.26)
+            let w = 0.82 + 0.18 * abs(cos(k * .pi))
+            sx = (k < 0.5 ? turnFrom : face) * w
+            if k >= 1 { turnT = -1 }
+        }
+        card.scale = SIMD3<Float>(sx, 1, 1)
         if let sh = shadow {
             if act == .jumpUp || act == .jumpDown {
-                // 뛰는 동안 그림자는 바닥(또는 가구 위)에 남음
-                sh.position = [0, min(0, (jumpTo.y > jumpFrom.y ? jumpFrom.y : jumpTo.y) - elev), 0]
+                sh.position = [0, min(0, min(jumpTo.y, jumpFrom.y) - elev), 0]       // 뛰는 동안 그림자는 바닥(또는 가구 위)에 남음
+            } else if act == .hop || act == .pounce {
+                sh.position = [0, -elev, 0]
             } else {
                 sh.position = [0, 0, 0]
             }
         }
     }
 
-    /// 그림의 오른쪽(+X)이 가리키는 수평 방향 (나를 보는 판 기준)
-    private func cardRight(_ head: SIMD3<Float>) -> SIMD2<Float> {
-        let d = SIMD2<Float>(head.x - pos.x, head.z - pos.y)
-        let yaw = atan2(d.x, d.y)
-        return SIMD2<Float>(cos(yaw), -sin(yaw))
+    private func tickBubble(_ dt: Float) {
+        guard bubbleT >= 0 else { return }
+        bubbleT += dt
+        let k = bubbleT
+        // 톡 튀어나와(살짝 커졌다) 둥실 떠 있다가 사라짐
+        let pop: Float = k < 0.18 ? (k / 0.18) * 1.15 : (k < 0.3 ? 1.15 - (k - 0.18) / 0.12 * 0.15 : 1)
+        let fade: Float = k > bubbleDur - 0.3 ? max(0, (bubbleDur - k) / 0.3) : 1
+        bubble.scale = SIMD3<Float>(repeating: max(0.01, pop * fade))
+        let top: Float = (act == .sleep || act == .flop || act == .loaf || act == .knead) ? 0.32 : 0.48
+        bubble.position = [0.08 * face, top + 0.02 * sin(t * 3), 0]
+        if k > bubbleDur { bubble.isEnabled = false; bubbleT = -1 }
     }
-    private var lastHead = SIMD3<Float>(0, 1.5, 0)
+
+    /// 그림의 오른쪽(+X)이 가리키는 수평 방향 (나를 보는 판 기준)
+    private func cardRight() -> SIMD2<Float> {
+        let d = SIMD2<Float>(lastHead.x - pos.x, lastHead.z - pos.y)
+        let y = atan2(d.x, d.y)
+        return SIMD2<Float>(cos(y), -sin(y))
+    }
+
+    /// 옆모습 방향 정하기 — 바뀌면 정면을 거쳐 돌아섬
     private func faceToward(_ p: SIMD2<Float>) {
         let v = p - pos
         guard simd_length(v) > 0.02 else { return }
-        face = simd_dot(v, cardRight(lastHead)) >= 0 ? 1 : -1
+        let nf: Float = simd_dot(v, cardRight()) >= 0 ? 1 : -1
+        if nf != face {
+            turnFrom = face
+            face = nf
+            turnT = 0
+        }
+    }
+
+    /// 걷는 방향이 나를 향하면 정면, 멀어지면 뒷모습, 옆이면 옆모습
+    private func walkFrame(_ v: SIMD2<Float>) -> String {
+        let toMe = SIMD2<Float>(lastHead.x - pos.x, lastHead.z - pos.y)
+        let c = simd_length(toMe) > 0.01 ? simd_dot(simd_normalize(v), simd_normalize(toMe)) : 0
+        if turnT >= 0 { return running ? "cat_fwalk0" : "cat_fwalk1" }
+        if c > 0.6 { return loop(Self.fwalkFrames, fps: running ? 10 : 6) }
+        if c < -0.6 { return loop(Self.bwalkFrames, fps: running ? 10 : 6) }
+        return running ? loop(Self.runFrames, fps: 11) : loop(Self.walkFrames, fps: 8)
+    }
+
+    private func jingle(_ dt: Float) {
+        bellT -= dt
+        if bellT <= 0 {
+            bellT = running ? Float.random(in: 0.45...0.8) : Float.random(in: 1.1...2.0)
+            Sfx.play("bell\(Int.random(in: 1...3))", in: root, at: [0.1, 0.22, 0], gain: running ? -10 : -15)
+        }
     }
 
     private func stepWalk(_ dt: Float, _ c: Ctx) {
-        lastHead = c.head
         guard let g = goal else { start(.sit, 2); return }
         let v = g - pos
         let d = simd_length(v)
         let speed: Float = running ? 1.35 : 0.5
-        show(running ? loop(Self.runFrames, fps: 11) : loop(Self.walkFrames, fps: 8))
+        if d > 0.001 { moveDir = v / d }
+        show(walkFrame(moveDir))
+        jingle(dt)
         if d < 0.06 {
             goal = nil
+            // 나를 향해 오다가 멈추면 마주 보고 앉음
+            let toMe = SIMD2<Float>(lastHead.x - pos.x, lastHead.z - pos.y)
+            frontal = simd_length(toMe) > 0.01 && simd_dot(moveDir, simd_normalize(toMe)) > 0.3 ? true : Float.random(in: 0...1) < 0.35
             if then == .jumpUp {
                 faceToward(SIMD2<Float>(jumpTo.x, jumpTo.z))
                 start(.jumpUp, 0.55)
             } else {
                 start(then, thenDur)
                 switch then {
-                case .rub: setPurr(true); meow("cat_trill", gain: -3)
+                case .rub: setPurr(true); say("cat_trill", -3); emote("heart")
                 case .scratch: faceToward(pos + scratchDir)
                 default: break
                 }
@@ -419,36 +670,160 @@ final class HomeCat {
         pos = np
     }
 
+    // MARK: 털실 공
+    private func makeBall(near p: SIMD2<Float>, _ c: Ctx) -> Bool {
+        if ball != nil { return true }
+        var spot: SIMD2<Float>? = nil
+        for k in 0..<12 {
+            let a = Float(k) / 12 * 2 * .pi
+            let q = p + SIMD2<Float>(cos(a), sin(a)) * 0.45
+            if c.free(q) { spot = q; break }
+        }
+        guard let s = spot else { return false }
+        let m: RealityKit.Material
+        if look == .line {
+            m = Ink.paper(0)
+        } else {
+            var um = UnlitMaterial(color: look == .color ? UIColor(red: 0.8, green: 0.2, blue: 0.24, alpha: 1) : UIColor(white: 0.55, alpha: 1))
+            if let tx = Tex.with(look == .color ? .color : .mono, { Tex.get("yarn") }) {
+                var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.tiling
+                um.color = .init(tint: .white, texture: tp)
+            }
+            m = um
+        }
+        let e = ModelEntity(mesh: .generateSphere(radius: 0.045), materials: [m])
+        e.name = "catball"
+        e.components.set(CollisionComponent(shapes: [ShapeResource.generateSphere(radius: 0.09)]))
+        e.components.set(InputTargetComponent())
+        e.components.set(HoverEffectComponent())
+        if look == .line {
+            var l = Geo()
+            for k in 0..<16 {
+                let a0 = Float(k) / 16 * 2 * .pi, a1 = Float(k + 1) / 16 * 2 * .pi
+                l.stroke(SIMD3<Float>(cos(a0) * 0.046, sin(a0) * 0.046, 0), SIMD3<Float>(cos(a1) * 0.046, sin(a1) * 0.046, 0), width: 0.004)
+                l.stroke(SIMD3<Float>(0, sin(a0) * 0.046, cos(a0) * 0.046), SIMD3<Float>(0, sin(a1) * 0.046, cos(a1) * 0.046), width: 0.004)
+            }
+            if let le = l.entity("ballLines", Ink.line) { e.addChild(le) }
+        }
+        ballRoot.addChild(e)
+        ball = e
+        ballPos = s
+        ballVel = .zero
+        return true
+    }
+
+    private func tickBall(_ dt: Float, _ c: Ctx) {
+        guard let b = ball else { return }
+        let sp = simd_length(ballVel)
+        if sp > 0.01 {
+            var np = ballPos + ballVel * dt
+            if !c.free(np) {                                    // 벽·가구에 부딪히면 튕김
+                let tx = SIMD2<Float>(ballPos.x + ballVel.x * dt, ballPos.y)
+                let tz = SIMD2<Float>(ballPos.x, ballPos.y + ballVel.y * dt)
+                if !c.free(tx) { ballVel.x = -ballVel.x * 0.6 }
+                if !c.free(tz) { ballVel.y = -ballVel.y * 0.6 }
+                np = ballPos
+            }
+            ballPos = np
+            ballVel *= max(0, 1 - dt * 1.4)                    // 바닥 마찰
+            let axis = simd_normalize(SIMD3<Float>(ballVel.y, 0, -ballVel.x))
+            ballSpin = simd_quatf(angle: sp * dt / 0.045, axis: axis) * ballSpin
+        } else {
+            ballVel = .zero
+        }
+        b.position = SIMD3<Float>(ballPos.x, floorY + 0.047, ballPos.y)
+        b.orientation = ballSpin
+    }
+
+    private func hitBall() {
+        guard ball != nil else { return }
+        hits += 1
+        let me = SIMD2<Float>(lastHead.x, lastHead.z)
+        // 대체로 내 앞쪽 시야 안으로 굴러가게
+        var d = ballPos - pos
+        d = simd_length(d) > 0.01 ? simd_normalize(d) : moveDir
+        let side = SIMD2<Float>(-d.y, d.x) * Float.random(in: -0.7...0.7)
+        var v = simd_normalize(d + side)
+        if simd_distance(ballPos + v * 1.0, me) > 3.0 { v = simd_normalize(me - ballPos + side) }
+        ballVel = v * Float.random(in: 0.8...1.5)
+        if Int.random(in: 0...2) == 0 { chirp(-6) }
+    }
+
+    private func stepChase(_ dt: Float, _ c: Ctx) {
+        guard ball != nil else { start(.sit, 1); return }
+        let v = ballPos - pos
+        let d = simd_length(v)
+        running = d > 0.5
+        if d > 0.001 { moveDir = v / d }
+        if d < 0.2 && simd_length(ballVel) < 0.6 {
+            faceToward(ballPos)
+            hitBall()
+            start(.swat, 0.45)
+            return
+        }
+        if actT > actDur { start(.sit, 2); return }
+        show(walkFrame(moveDir))
+        jingle(dt)
+        let speed: Float = running ? 1.5 : 0.6
+        let np = pos + moveDir * min(max(0, d - 0.15), speed * dt)
+        if c.free(np) { pos = np } else if !c.free(ballPos) { start(.sit, 2) }
+        faceToward(ballPos)
+    }
+
     // MARK: 무엇을 할지
     private func decide(_ c: Ctx) {
-        lastHead = c.head
         let me = SIMD2<Float>(c.head.x, c.head.z)
         let dist = simd_distance(pos, me)
-        // 내가 앉아 있으면 옆에 와서 식빵·잠
-        if c.seated {
-            if dist > 1.0, let s = sideSpot(c, 0.7) { go(s, then: Bool.random() ? .loaf : .sleep, Float.random(in: 20...40)); return }
-            start(Bool.random() ? .loaf : .sleep, Float.random(in: 15...30))
+        // 토라진 동안은 혼자 놂
+        let sulking = t < sulkUntil
+        // 내가 앉아 있으면 옆에 와서 꾹꾹이·식빵·잠
+        if c.seated && !sulking {
+            if dist > 1.0, let s = sideSpot(c, 0.7) { go(s, then: .knead, 4); return }
+            let r = Int.random(in: 0...2)
+            start(r == 0 ? .knead : (r == 1 ? .loaf : .sleep), r == 0 ? 4 : Float.random(in: 15...30))
             return
         }
         // 가만히 서 있으면 발치에 와서 부비부비
-        if c.still > 4, dist > 0.55, Float.random(in: 0...1) < 0.45 {
+        if !sulking, c.still > 4, dist > 0.55, Float.random(in: 0...1) < 0.45 {
             let s = me + c.fwd * 0.42 + SIMD2<Float>(-c.fwd.y, c.fwd.x) * Float.random(in: -0.15...0.15)
             if c.free(s) && pathOK(pos, s, c) { go(s, then: .rub, 3.5); return }
         }
         var opts: [(Float, () -> Bool)] = []
-        opts.append((3, { [unowned self] in start(.sit, Float.random(in: 2.5...5)); return true }))
-        opts.append((1.6, { [unowned self] in start(.groom, Float.random(in: 2.5...4.5)); return true }))
-        opts.append((1.2, { [unowned self] in start(.loaf, Float.random(in: 5...10)); return true }))
+        opts.append((2.4, { [unowned self] in start(.sit, Float.random(in: 2.5...5)); return true }))
+        opts.append((1.4, { [unowned self] in start(.groom, Float.random(in: 2.5...4.5)); return true }))
+        opts.append((1.0, { [unowned self] in start(.loaf, Float.random(in: 5...10)); return true }))
         opts.append((0.8, { [unowned self] in start(.stretch, 1.8); return true }))
-        opts.append((0.7, { [unowned self] in start(.roll, 2.4); Sfx.play("cat_chirp", in: root, at: [0, 0.25, 0], gain: -5); return true }))
-        opts.append((0.8, { [unowned self] in meow(); start(.meow, 1.4); return true }))
-        opts.append((2.6, { [unowned self] in
+        opts.append((0.5, { [unowned self] in say("cat_yawn", -6); start(.yawn, 1.4); return true }))
+        opts.append((0.7, { [unowned self] in start(.roll, 2.4); chirp(-6); return true }))
+        opts.append((0.9, { [unowned self] in meow(-4); emote("note", 1.2); start(.meow, 1.4); return true }))
+        opts.append((0.6, { [unowned self] in emote("question", 1.2); start(.tilt, 1.6); return true }))
+        if !sulking { opts.append((0.7, { [unowned self] in frontal = true; emote("heart", 1.2); start(.love, 3); return true })) }
+        opts.append((2.4, { [unowned self] in
             guard let s = viewSpot(c, near: Float.random(in: 1.1...2.2)) else { return false }
             go(s, then: .sit, Float.random(in: 2...4)); return true
         }))
-        opts.append((1.8, { [unowned self] in jumpUpSomewhere(c) }))
-        opts.append((1.1, { [unowned self] in scratchSomewhere(c) }))
-        if c.still > 20 { opts.append((1.0, { [unowned self] in start(.sleep, Float.random(in: 12...25)); return true })) }
+        opts.append((1.6, { [unowned self] in jumpUpSomewhere(c) }))
+        opts.append((1.0, { [unowned self] in scratchSomewhere(c) }))
+        // 털실 공 놀이: 공이 보이면 노려보다 덮침, 없으면 꺼내 옴
+        opts.append((1.8, { [unowned self] in
+            guard makeBall(near: pos, c) else { return false }
+            if simd_distance(ballPos, pos) > 0.9 || !pathOK(pos, ballPos, c) { hits = 0; hitsMax = Int.random(in: 2...5); start(.chase, 10); return true }
+            pounceFrom = pos
+            let dv = ballPos - pos
+            pounceTo = pos + (simd_length(dv) > 0.01 ? simd_normalize(dv) : moveDir) * max(0.1, simd_length(dv) - 0.12)
+            faceToward(ballPos)
+            hits = 0
+            hitsMax = Int.random(in: 2...5)
+            say("cat_chatter", -6)
+            start(.pounce, 1.8)
+            return true
+        }))
+        // 우다다: 보이는 곳 이곳저곳을 신나게 뜀
+        opts.append((0.5, { [unowned self] in
+            guard let s = viewSpot(c, near: Float.random(in: 1.4...2.5)) else { return false }
+            go(s, then: .hop, 0.55, run: true); return true
+        }))
+        if c.still > 20 { opts.append((1.0, { [unowned self] in start(Bool.random() ? .sleep : .flop, Float.random(in: 12...25)); return true })) }
         // 가중치 뽑기 (안 되면 다음 것)
         var pool = opts
         while !pool.isEmpty {

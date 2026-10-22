@@ -26,6 +26,15 @@ final class Campfire {
     private let storm: Bool
 
     private var flames: [(Entity, Float, Float)] = []    // 불꽃, 흔들림 위상, 크기
+    private var flameCards: [(ModelEntity, Int)] = []      // 일렁이는 불길 그림 판, 시작 장
+    private var frameMats: [UnlitMaterial] = []            // 불길 16장
+    private var frameT: Float = 0
+    private var logs: [ModelEntity] = []
+    private var logT: Float = 0
+    private var emberE = Entity()
+    private var nextPop: Float = 3
+    private var popT: Float = -1
+    private let wetFire: Bool
     private let flameRoot = Entity()
     private var glow: ModelEntity?
     private var ember: ModelEntity?
@@ -45,6 +54,7 @@ final class Campfire {
     init(at base: SIMD3<Float>, room: RoomRec, look: LookMode, windDir: SIMD3<Float>) {
         self.look = look
         let w = room.weather, tm = room.time
+        wetFire = ["drizzle", "rain", "storm"].contains(w)
         let night = tm == "night"
         let twilight = tm == "dusk" || tm == "dawn"
         let wet = ["drizzle", "rain", "storm"].contains(w)
@@ -96,7 +106,8 @@ final class Campfire {
             if let e = d.entity("fireGround", dm) { remains.addChild(e) }
         }
         // 장작: 원뿔처럼 세운 네 개 + 밑에 엇갈려 누운 두 개
-        let logM: RealityKit.Material = line ? Ink.paper(1) : Tex.with(look) { Tex.unlit("bark", tint: [0.55, 0.45, 0.38], folder: "tex", sampler: Tex.tiling) }
+        // 장작: 겉은 검게 타고 갈라진 틈에 불씨가 숨 쉼 (밝기가 일렁임)
+        let logM: RealityKit.Material = line ? Ink.paper(1) : Tex.with(look) { Tex.unlit("charlog", tint: [1, 1, 1], folder: "tex", sampler: Tex.tiling) }
         for k in 0..<4 {
             let a = Float(k) / 4 * 2 * .pi + 0.4
             let log = ModelEntity(mesh: .generateCylinder(height: 0.46 * size + 0.08, radius: 0.035), materials: [logM])
@@ -104,12 +115,14 @@ final class Campfire {
             log.position = out * 0.1 + SIMD3<Float>(0, 0.19 * size + 0.03, 0)
             log.orientation = simd_quatf(angle: -0.42, axis: simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), out)))
             remains.addChild(log)
+            logs.append(log)
         }
         for (k, a) in [Float(0.3), Float(1.9)].enumerated() {
             let log = ModelEntity(mesh: .generateCylinder(height: 0.5, radius: 0.045), materials: [logM])
             log.orientation = simd_quatf(angle: a, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
             log.position = [0, 0.045 + Float(k) * 0.05, 0]
             remains.addChild(log)
+            logs.append(log)
         }
         if line {
             var l = Geo()
@@ -158,29 +171,44 @@ final class Campfire {
         glow = gl
         if let gl { gl.components.set(OpacityComponent(opacity: 0)); root.addChild(gl) }
 
-        // 불꽃 갈래: 가운데 큰 것 + 둘레 작은 것들 (불꽃 그림을 십자로 세워 흔들림)
-        var flameM = UnlitMaterial(color: line ? UIColor(white: 0.12, alpha: 1) : Tex.with(look) { Tex.color([1, 0.75, 0.35]) })
+        // 불길: 일렁이는 불 그림 16장을 판마다 다른 장에서 시작해 넘김 (가운데 큰 불 + 둘레 작은 불혀). 그림이 없으면 예전 불꽃 모양
+        let inkC = UIColor(white: 0.12, alpha: 1)
+        for f in 0..<16 {
+            let nm = String(format: "fire_%02d", f)
+            guard let mask = Tex.get(nm + "_a", raw: true) else { break }
+            var m = UnlitMaterial(color: line ? inkC : .white)
+            if !line, let tx = Tex.with(look, { Tex.get(nm) }) {
+                var p = MaterialParameters.Texture(tx); p.sampler = Tex.clamp
+                m.color = .init(tint: .white, texture: p)
+            }
+            var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
+            m.blending = .transparent(opacity: .init(scale: line ? 0.85 : 1, texture: mp))
+            frameMats.append(m)
+        }
+        var flameM = UnlitMaterial(color: line ? inkC : Tex.with(look) { Tex.color([1, 0.75, 0.35]) })
         if let tx = Tex.get("flame", color: look == .color) {
             var p = MaterialParameters.Texture(tx); p.sampler = Tex.clamp
-            flameM.color = .init(tint: line ? UIColor(white: 0.12, alpha: 1) : (look == .mono ? UIColor(white: 1, alpha: 1) : .white), texture: p)
+            flameM.color = .init(tint: line ? inkC : .white, texture: p)
         }
         if let mask = Tex.get("flame_a", raw: true) {
             var p = MaterialParameters.Texture(mask); p.sampler = Tex.clamp
             flameM.blending = .transparent(opacity: .init(scale: 1, texture: p))
         }
-        let spots: [(SIMD2<Float>, Float)] = [([0, 0], 0.62), ([0.09, 0.04], 0.42), ([-0.08, 0.06], 0.4), ([0.02, -0.09], 0.38),
-                                               ([-0.05, -0.05], 0.3), ([0.11, -0.06], 0.26)]
+        let spots: [(SIMD2<Float>, Float)] = [([0, 0], 0.78), ([0.02, 0.01], 0.66), ([0.09, 0.04], 0.46), ([-0.08, 0.06], 0.44),
+                                               ([0.02, -0.09], 0.42), ([-0.06, -0.05], 0.34), ([0.11, -0.06], 0.3), ([-0.11, 0.0], 0.28)]
         for (k, sp) in spots.enumerated() {
             let h = sp.1 * size
             var q = Geo()
-            q.crossTree(at: .zero, width: h * 0.55, height: h, yaw: Float(k) * 0.7)
-            guard let fl = q.entity("flame", flameM) else { continue }
+            q.crossTree(at: .zero, width: h * 0.5, height: h, yaw: Float(k) * 0.7)
+            let start = (k * 5) % 16
+            guard let fl = q.entity("flame", frameMats.isEmpty ? flameM : frameMats[start]) else { continue }
             let holder = Entity()
-            holder.position = SIMD3<Float>(sp.0.x, 0.05, sp.0.y)
+            holder.position = SIMD3<Float>(sp.0.x, 0.03, sp.0.y)
             holder.addChild(fl)
             holder.scale = SIMD3<Float>(repeating: 0.05)
             flameRoot.addChild(holder)
             flames.append((holder, Float(k) * 1.37 + Float.random(in: 0...1, using: &g), h))
+            if !frameMats.isEmpty { flameCards.append((fl, start)) }
         }
         flameRoot.components.set(OpacityComponent(opacity: tm == "morning" || tm == "afternoon" ? 0.85 : 1))
         root.addChild(flameRoot)
@@ -238,8 +266,9 @@ final class Campfire {
             spark.mainEmitter.blendMode = .alpha
         } else {
             spark.mainEmitter.color = .evolving(start: .single(sp1), end: .single(sp2))
-            spark.mainEmitter.blendMode = .additive
+                spark.mainEmitter.blendMode = .additive
         }
+        if let im = Tex.get("spark_dot", color: true) { spark.mainEmitter.image = im }
         spark.mainEmitter.opacityCurve = .linearFadeOut
         spark.isEmitting = false
 
@@ -268,6 +297,12 @@ final class Campfire {
         smoke.mainEmitter.color = .constant(.single(smokeCol))
         smoke.mainEmitter.blendMode = .alpha
         smoke.mainEmitter.opacityCurve = .gradualFadeInOut
+        let puff = Tex.get("smoke_puff", color: true)
+        if let puff {
+            smoke.mainEmitter.image = puff
+            smoke.mainEmitter.angularSpeed = 0.4
+            smoke.mainEmitter.angularSpeedVariation = 0.6
+        }
         smoke.isEmitting = false
 
         // 김: 비·눈이 불에 닿아 하얗게 피어오름
@@ -289,10 +324,39 @@ final class Campfire {
         steam.mainEmitter.color = .constant(.single(line ? UIColor(white: 0.5, alpha: 0.15) : UIColor(white: 0.95, alpha: 0.22)))
         steam.mainEmitter.blendMode = .alpha
         steam.mainEmitter.opacityCurve = .gradualFadeInOut
+        if let puff { steam.mainEmitter.image = puff }
+
+        // 숯불 알갱이: 장작 밑에서 작은 불씨가 살짝 떠올랐다 사라짐
+        var emb = ParticleEmitterComponent()
+        emb.emitterShape = .box
+        emb.emitterShapeSize = [0.32 * size, 0.02, 0.32 * size]
+        emb.birthLocation = .volume
+        emb.birthDirection = .world
+        emb.emissionDirection = [0, 1, 0]
+        emb.speed = 0.05
+        emb.speedVariation = 0.04
+        var er: Float = night ? 30 : 14
+        if wet { er *= 0.5 }
+        emb.mainEmitter.birthRate = er
+        emb.mainEmitter.lifeSpan = 1.4
+        emb.mainEmitter.lifeSpanVariation = 0.6
+        emb.mainEmitter.size = 0.005
+        emb.mainEmitter.noiseStrength = 0.05
+        if line {
+            emb.mainEmitter.color = .constant(.single(UIColor(white: 0.15, alpha: 1)))
+            emb.mainEmitter.blendMode = .alpha
+        } else {
+            emb.mainEmitter.color = .evolving(start: .single(sp1), end: .single(sp2))
+            emb.mainEmitter.blendMode = .additive
+        }
+        if let im = Tex.get("spark_dot", color: true) { emb.mainEmitter.image = im }
+        emb.mainEmitter.opacityCurve = .quickFadeInOut
+        emb.isEmitting = false
         steam.isEmitting = false
 
         baseRates = (fr, sr, mr, tr)
-        for (e, pe, y) in [(fireE, fire, Float(0.06)), (sparkE, spark, Float(0.25)), (smokeE, smoke, Float(0.55)), (steamE, steam, Float(0.15))] {
+        for (e, pe, y) in [(fireE, fire, Float(0.06)), (sparkE, spark, Float(0.25)), (smokeE, smoke, Float(0.55)), (steamE, steam, Float(0.15)),
+                           (emberE, emb, Float(0.03))] {
             e.components.set(pe)
             e.position = [0, y, 0]
             root.addChild(e)
@@ -337,6 +401,7 @@ final class Campfire {
         dieT = 0
         setRate(fireE, 0, on: false)
         setRate(sparkE, 0, on: false)
+        if var pe = emberE.components[ParticleEmitterComponent.self] { pe.isEmitting = false; emberE.components.set(pe) }
         setRate(smokeE, baseRates.2 * 3 + 6, on: true)            // 꺼지며 연기가 확 오름
         setRate(steamE, baseRates.3 > 0 ? baseRates.3 * 1.5 : 8, on: true)
         loop?.fade(to: -60, duration: 2.5)
@@ -353,6 +418,7 @@ final class Campfire {
         setRate(steamE, baseRates.3, on: true)
         setRate(fireE, baseRates.0, on: true)
         setRate(sparkE, baseRates.1, on: true)
+        if var pe = emberE.components[ParticleEmitterComponent.self] { pe.isEmitting = true; emberE.components.set(pe) }
         loop?.fade(to: 0, duration: 1.5)
         hiss?.fade(to: -5, duration: 1.5)
     }
@@ -368,6 +434,18 @@ final class Campfire {
                 setRate(sparkE, baseRates.1, on: true)
                 setRate(smokeE, baseRates.2, on: true)
                 setRate(steamE, baseRates.3, on: true)
+                if var pe = emberE.components[ParticleEmitterComponent.self] { pe.isEmitting = true; emberE.components.set(pe) }
+            }
+            // 장작이 탁 튐: 불티가 한 번에 확 오르고 '탁' 소리 (비 오면 드물게)
+            if amt > 0.6 && t > nextPop {
+                nextPop = t + Float.random(in: wetFire ? 6...14 : 2.5...7)
+                popT = t
+                setRate(sparkE, baseRates.1 * 10 + 30, on: true)
+                Sfx.play("fire_pop\(Int.random(in: 1...3))", in: root, at: [Float.random(in: -0.1...0.1), 0.15, Float.random(in: -0.1...0.1)], gain: wetFire ? -10 : -4)
+            }
+            if popT > 0 && t - popT > 0.15 {
+                popT = -1
+                setRate(sparkE, baseRates.1, on: true)
             }
         } else {
             dieT += dt
@@ -396,6 +474,20 @@ final class Campfire {
         let axis = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), wind))
         // 비가 세면 불이 숨 가쁘게 줄었다 커졌다
         let breath = 1 - sputter * (0.5 + 0.5 * sin(t * 1.7) * sin(t * 0.63 + 1.1))
+        // 불길 그림 넘기기 (초당 18장) + 장작 불씨 밝기 일렁임
+        frameT += dt
+        if !frameMats.isEmpty && frameT > 1.0 / 18 {
+            frameT = 0
+            let step = Int(t * 18)
+            for (card, start) in flameCards { card.model?.materials = [frameMats[(start + step) % frameMats.count]] }
+        }
+        logT += dt
+        if look != .line && logT > 0.12 {
+            logT = 0
+            let k: Float = dying ? max(0.45, 1 - dieT / 4) : 0.85 + 0.3 * (0.5 + 0.5 * sin(t * 2.3) * sin(t * 0.9 + 1))
+            let m = Tex.with(look) { Tex.unlit("charlog", tint: SIMD3<Float>(k, k * 0.95, k * 0.9), folder: "tex", sampler: Tex.tiling) }
+            for l in logs { l.model?.materials = [m] }
+        }
         for (e, ph, _) in flames {
             let k = (0.78 + 0.22 * sin(t * 9 + ph) * sin(t * 5.3 + ph * 2)) * breath * amt
             e.scale = SIMD3<Float>(max(0.001, amt) * (1 + 0.08 * sin(t * 7 + ph)), max(0.001, k), max(0.001, amt))

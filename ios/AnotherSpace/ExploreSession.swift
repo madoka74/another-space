@@ -21,15 +21,19 @@ struct ExploreView: View {
             if let hud = attachments.entity(for: "hud") { s.attachHud(hud) }
             if let card = attachments.entity(for: "docent") { s.attachDocent(card) }
             if let tp = attachments.entity(for: "theme") { s.attachTheme(tp) }
+            if let sc = attachments.entity(for: "stars") { s.attachStars(sc) }
             s.updateSub = content.subscribe(to: SceneEvents.Update.self) { e in s.tick(Float(e.deltaTime)) }
         } attachments: {
             Attachment(id: "hud") { ExploreHud(s: s) }
             Attachment(id: "docent") { DocentCard(s: s) }
             Attachment(id: "theme") { ThemePanel(s: s) }
+            Attachment(id: "stars") { StarCard(s: s) }
         }
         // 탭은 한 번씩만 받고, 싱글·더블은 앱이 시간으로 가름 (두 번째 탭이 0.4초 안에 오면 더블탭).
         // 보는 곳 어디든 받도록 머리 둘레에 보이지 않는 '탭 받는 상자'를 둠. 열쇠·그림 버튼은 바로 처리
-        .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { v in s.tapped(v.entity) })
+        .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { v in
+            s.tapped(v.entity, at: v.convert(v.location3D, from: .local, to: .scene))
+        })
         // 해설 창 아래 막대를 잡고 끌면 창을 옮김
         .simultaneousGesture(DragGesture().targetedToEntity(where: .has(GrabTag.self)).onChanged { v in
             s.dragDocent(to: v.convert(v.location3D, from: .local, to: .scene))
@@ -146,6 +150,7 @@ final class ExploreSession {
     var unified = false             // 모든 방이 같은 세계 (테마를 바꾸면 모든 방이 같이 바뀜)
     var hudMenu = false             // 싱글탭으로 띄운 메뉴판 (아니면 알림판)
     var docent: DocentState?        // 지금 펼친 그림 설명
+    var starPick: Constellation?    // 지금 펼친 별자리 정보판
 
     let root = Entity()
     @ObservationIgnored var updateSub: EventSubscription?
@@ -256,6 +261,13 @@ final class ExploreSession {
     @ObservationIgnored private var sitT: Float = 0
     @ObservationIgnored private var standT: Float = 0
     @ObservationIgnored private var seated = false
+    // 시골 밤하늘 별자리 · 카페 음악·테이블
+    @ObservationIgnored private var stars: SkyStars?
+    @ObservationIgnored private var starsKey = ""
+    @ObservationIgnored private var starCard: Entity?
+    @ObservationIgnored private let music = CafeMusic()
+    @ObservationIgnored private var tables: CafeTables?
+    @ObservationIgnored private var tablesKey = ""
     // 집 고양이
     @ObservationIgnored private var cat: HomeCat?
     @ObservationIgnored private var catLook: LookMode?
@@ -281,6 +293,7 @@ final class ExploreSession {
         allIds = SpaceStore.allAnchorIds()
         root.addChild(spaceRoot)
         root.addChild(player.root)
+        spaceRoot.addChild(music.root)
         let v = VoxelWorld(L)
         v.material = { [unowned self] r, s in self.material(r, s) }
         v.sun = { [unowned self] r in self.info?.sun[min(255, max(0, r))] ?? SIMD3<Float>(0, 1, 0) }
@@ -460,6 +473,8 @@ final class ExploreSession {
 
     func stop() {
         fire?.remove(); fire = nil
+        music.remove()
+        tables?.remove(); tables = nil
         cat?.remove(); cat = nil
         updateSub?.cancel()
         ar.stop()
@@ -474,6 +489,8 @@ final class ExploreSession {
         ended = true
         fire?.remove(); fire = nil
         cat?.remove(); cat = nil
+        music.remove()
+        tables?.remove(); tables = nil
         player.stopAll()
         AppModel.shared.finish()
     }
@@ -937,6 +954,78 @@ final class ExploreSession {
         placeDocent(dt)
         campTick(dt)
         catTick(dt)
+        themeFeatures(dt)
+    }
+
+    // MARK: 테마마다의 특별한 것 (시골: 별자리, 카페: 재즈·테이블 차림)
+    func attachStars(_ e: Entity) {
+        starCard = e
+        e.isEnabled = false
+        root.addChild(e)
+    }
+
+    func closeStars() {
+        lastUITap = t
+        starPick = nil
+        stars?.unpick()
+        starCard?.isEnabled = false
+    }
+
+    /// 정보판: 내 앞 1m, 눈높이보다 조금 아래, 시선에서 오른쪽으로 비켜 (하늘의 별자리를 가리지 않게)
+    private func placeStarCard() {
+        guard let card = starCard else { return }
+        var f = SIMD3<Float>(fwd.x, 0, fwd.z)
+        f = simd_length(f) > 0.01 ? simd_normalize(f) : SIMD3<Float>(0, 0, -1)
+        let right = SIMD3<Float>(-f.z, 0, f.x)
+        card.position = head + f * 0.95 + right * 0.32 - SIMD3<Float>(0, 0.18, 0)
+        faceDocent(card)
+        card.isEnabled = true
+    }
+
+    private func themeFeatures(_ dt: Float) {
+        guard let f = fit, let L = layout, let d = data, ready, let rm = d.rec.room(current), let wld = worlds[current] else {
+            music.set(false)
+            return
+        }
+        let gaze = f.dirToSaved(fwd)
+        // 시골 별자리
+        if rm.place == "village" {
+            let key = "\(rm.id)-\(rm.time)-\(rm.weather)-\(rm.lookMode.rawValue)"
+            if stars == nil || key != starsKey || stars?.root.parent !== wld.world {
+                stars?.root.removeFromParent()
+                let st = SkyStars(room: rm, center: wld.center, look: rm.lookMode)
+                wld.world.addChild(st.root)
+                stars = st
+                starsKey = key
+                if starPick != nil { closeStars() }
+            }
+            stars?.tick(dt, gaze: gaze)
+        } else if stars != nil {
+            stars?.root.removeFromParent()
+            stars = nil
+            if starPick != nil { closeStars() }
+        }
+        // 카페: 천장 스피커에서 재즈, 탁자 위 차림
+        if rm.place == "cafe" && fade > 0.5 {
+            music.set(true, at: wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))
+            let key = "\(rm.id)-\(rm.time)-\(rm.lookMode.rawValue)"
+            if tables == nil || key != tablesKey {
+                tables?.remove()
+                let tb = CafeTables(look: rm.lookMode, time: rm.time)
+                spaceRoot.addChild(tb.root)
+                tables = tb
+                tablesKey = key
+            }
+            let v = vox
+            let rid = rm.id
+            tables?.tick(dt, head: f.toSaved(head), floorY: L.floorY,
+                         top: { p in v?.flatTop(L.plane(p.x, p.y)) },
+                         inRoom: { p in L.at(x: p.x, z: p.y).room == rid })
+        } else {
+            music.set(false)
+            if tables != nil { tables?.remove(); tables = nil }
+        }
+        music.tick(dt)
     }
 
     // MARK: 집 고양이
@@ -963,6 +1052,7 @@ final class ExploreSession {
                 if catFree(p, L, homeRooms) {
                     let c = HomeCat(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color)
                     spaceRoot.addChild(c.root)
+                    spaceRoot.addChild(c.ballRoot)
                     cat = c
                     catLook = rm?.lookMode
                     break
@@ -1080,6 +1170,7 @@ final class ExploreSession {
             Task { await hangGallery(prev) }
         }
         if docent != nil { closeDocent() }
+        if starPick != nil { closeStars() }
         if current != r { fire?.die(); seated = false; sitT = 0 }
         current = r
         if t > themeQuiet { hudUntil = max(hudUntil, t + 4) }      // 방이 바뀌면 알림판으로 잠깐 알려 줌
@@ -1380,7 +1471,7 @@ final class ExploreSession {
 
     // MARK: 탭
     /// 탭 하나: 열쇠·그림 버튼이면 바로 처리, 그 밖(탭 받는 상자)이면 0.4초 안에 또 오는지 기다림
-    func tapped(_ e: Entity) {
+    func tapped(_ e: Entity, at point: SIMD3<Float>? = nil) {
         var cur: Entity? = e
         while let c = cur {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {
@@ -1393,6 +1484,11 @@ final class ExploreSession {
                 cat?.poke()
                 return
             }
+            if c.name == "catball" {
+                pendingTap = nil
+                if let f = fit { cat?.kickBall(from: f.toSaved(head)) }
+                return
+            }
             if c.name.hasPrefix("art-") {
                 pendingTap = nil
                 openDocent(c.name)
@@ -1401,6 +1497,16 @@ final class ExploreSession {
             cur = c.parent
         }
         if t - lastUITap < 0.25 { return }                         // 안내판을 누른 탭
+        // 밤하늘 별자리: 탭한 방향(머리 → 탭한 곳)에 별자리가 있으면 그 별자리를 이어 보여 주고 정보판을 띄움
+        if let p = point, let st = stars, st.visible, let f = fit, simd_distance(p, head) > 0.05 {
+            let dir = f.dirToSaved(simd_normalize(p - head))
+            if let c = st.pick(dir) {
+                pendingTap = nil
+                starPick = c
+                placeStarCard()
+                return
+            }
+        }
         // 싱글탭은 기다리지 않고 바로 반응 (탭이 먹혔는지 바로 보이게). 0.45초 안에 두 번째 탭이 오면
         // 첫 탭이 한 일을 되돌리고 더블탭으로 처리
         if let p = pendingTap, t - p <= 0.45 {

@@ -31,6 +31,12 @@ final class Scenery {
     private var boats: [(Entity, SIMD3<Float>, Float, Float, Float)] = []     // 배, 가운데, 각도, 반지름, 각속도
     private var blinkers: [(ModelEntity, Float)] = []                       // 깜빡이는 불빛, 주기
     private var flames: [(Entity, Float)] = []                              // 흔들리는 불빛 (벽난로)
+    // 카페: 에스프레소 머신 스팀·잔 소리
+    private var cafeSteam: Entity?
+    private var cafeSpot: SIMD3<Float>?
+    private var nextSteam: Float = 12
+    private var steamOff: Float = -1
+    private var nextClink: Float = 8
     private var t: Float = 0
 
     private let look: LookMode
@@ -400,6 +406,25 @@ final class Scenery {
         }
         let wood = look == .line ? Ink.paper(0) : Tex.unlit("planks", tint: [0.9, 0.82, 0.74], folder: "tex", sampler: Tex.tiling)
         var lines = Geo()
+        func paper(_ c: SIMD3<Float>) -> UnlitMaterial { look == .line ? Ink.paper(0) : UnlitMaterial(color: Tex.color(c)) }
+        // 벽 아래쪽 나무 판벽(징두리) + 위 끝 몰딩: 붉은 벽돌 위아래로 나뉘어 아늑한 카페 벽
+        var wain = Geo(), rail = Geo()
+        for sg in segs {
+            let a2 = L.flat(sg.a), b2 = L.flat(sg.b)
+            let len = simd_distance(a2, b2)
+            guard len > 0.1 else { continue }
+            let nw = L.flat(sg.n) - L.flat(.zero)
+            let n3 = SIMD3<Float>(nw.x, 0, nw.y)
+            let h: Float = sg.window ? 0.84 : 0.9
+            let a = SIMD3<Float>(a2.x, floorY, a2.y) + n3 * 0.012, b = SIMD3<Float>(b2.x, floorY, b2.y) + n3 * 0.012
+            wain.face(a, b, toward: n3, y0: 0, y1: h, u0: 0, u1: len / 1.2, v0: 0, v1: h / 1.2)
+            rail.face(a + n3 * 0.012, b + n3 * 0.012, toward: n3, y0: h - 0.02, y1: h + 0.035, u0: 0, u1: len / 0.8, v0: 0, v1: 0.05)
+            if look == .line {
+                lines.stroke(a + n3 * 0.03 + SIMD3<Float>(0, h + 0.035, 0), b + n3 * 0.03 + SIMD3<Float>(0, h + 0.035, 0), width: 0.01)
+            }
+        }
+        if let e = wain.entity("wainscot", look == .line ? Ink.paper(1) : Tex.unlit("planks_dark", tint: [0.85, 0.72, 0.6], folder: "tex", sampler: Tex.tiling)) { near.addChild(e) }
+        if let e = rail.entity("rail", wood) { near.addChild(e) }
         // 메뉴판 (가장 긴 벽 가운데)
         if let s = walls.first, let sp = span(s), top > 2.1 {
             let (a, b, dir) = sp
@@ -429,6 +454,94 @@ final class Scenery {
                 for (p, q) in [(o - fw - fh, o + fw - fh), (o + fw - fh, o + fw + fh), (o + fw + fh, o - fw + fh), (o - fw + fh, o - fw - fh)] {
                     lines.stroke(p, q, width: 0.012)
                 }
+            }
+            // 메뉴판 아래 바 카운터 (깊이 42cm): 나무 앞판·대리석 상판, 에스프레소 머신·그라인더·케이크 진열
+            let cw = min(2.4, simd_distance(a, b) - 0.2)
+            if cw >= 1.2 {
+                let yaw = atan2(n3.x, n3.z)
+                let rot = simd_quatf(angle: yaw, axis: [0, 1, 0])
+                let base = p3(mid, 0) + n3 * 0.21
+                decorCells.formUnion(frontCells(s, mid: mid, width: cw + 0.2, depth: 0.9))
+                func box(_ w: Float, _ h: Float, _ d: Float, _ at: SIMD3<Float>, _ m: RealityKit.Material, outline: Bool = true) {
+                    let e = ModelEntity(mesh: .generateBox(width: w, height: h, depth: d), materials: [m])
+                    e.position = at
+                    e.orientation = rot
+                    near.addChild(e)
+                    if look == .line && outline {
+                        lines.boxOutline(base: at - SIMD3<Float>(0, h / 2, 0), w: w, d: d, h: h, yaw: yaw, width: 0.008)
+                    }
+                }
+                func cyl(_ r: Float, _ h: Float, _ at: SIMD3<Float>, _ m: RealityKit.Material) {
+                    let e = ModelEntity(mesh: .generateCylinder(height: h, radius: r), materials: [m])
+                    e.position = at
+                    near.addChild(e)
+                }
+                let front = look == .line ? Ink.paper(1) : Tex.unlit("planks_dark", tint: [0.8, 0.66, 0.54], folder: "tex", sampler: Tex.tiling)
+                box(cw, 0.93, 0.42, base + SIMD3<Float>(0, 0.465, 0), front)
+                box(cw + 0.06, 0.04, 0.48, base + SIMD3<Float>(0, 0.95, 0.0) + n3 * 0.02, look == .line ? Ink.paper(0) : Tex.unlit("marble", tint: [0.95, 0.93, 0.9], folder: "tex", sampler: Tex.tiling))
+                let topY: Float = 0.97
+                // 에스프레소 머신 (스테인리스 몸통, 그룹 헤드 두 개, 포터필터 손잡이, 위에 잔)
+                let mPos = base + r3 * (-cw / 4) + SIMD3<Float>(0, topY, 0) - n3 * 0.02
+                let steel = paper([0.74, 0.76, 0.79]), darkM = paper([0.12, 0.12, 0.13]), cupW = paper([0.96, 0.95, 0.92])
+                box(0.56, 0.36, 0.34, mPos + SIMD3<Float>(0, 0.18, 0), steel)
+                box(0.56, 0.03, 0.34, mPos + SIMD3<Float>(0, 0.375, 0), darkM)
+                box(0.5, 0.025, 0.12, mPos + SIMD3<Float>(0, 0.0125, 0) + n3 * 0.2, darkM)
+                for k: Float in [-0.13, 0.13] {
+                    cyl(0.036, 0.05, mPos + r3 * k + n3 * 0.19 + SIMD3<Float>(0, 0.14, 0), darkM)
+                    box(0.022, 0.022, 0.13, mPos + r3 * k + n3 * 0.29 + SIMD3<Float>(0, 0.12, 0), darkM, outline: false)
+                    cyl(0.03, 0.055, mPos + r3 * k + n3 * 0.2 + SIMD3<Float>(0, 0.053, 0), cupW)
+                }
+                for k in 0..<3 { cyl(0.035, 0.06, mPos + r3 * (Float(k) * 0.08 - 0.08) + SIMD3<Float>(0, 0.42, 0), cupW) }
+                let wand = ModelEntity(mesh: .generateCylinder(height: 0.16, radius: 0.006), materials: [steel])
+                wand.position = mPos + r3 * 0.31 + n3 * 0.17 + SIMD3<Float>(0, 0.13, 0)
+                wand.orientation = simd_quatf(angle: 0.25, axis: simd_normalize(r3))
+                near.addChild(wand)
+                cafeSpot = mPos + r3 * 0.31 + n3 * 0.19 + SIMD3<Float>(0, 0.05, 0)
+                var pe = ParticleEmitterComponent()
+                pe.emitterShape = .point
+                pe.birthDirection = .world
+                pe.emissionDirection = [0, 1, 0]
+                pe.speed = 0.25
+                pe.speedVariation = 0.1
+                pe.mainEmitter.birthRate = 40
+                pe.mainEmitter.lifeSpan = 1.6
+                pe.mainEmitter.size = 0.02
+                pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 6
+                pe.mainEmitter.noiseStrength = 0.05
+                pe.mainEmitter.color = .constant(.single(pcolor([1, 1, 1], 0.3)))
+                pe.mainEmitter.opacityCurve = .gradualFadeInOut
+                if let puff = Tex.get("smoke_puff", color: true) { pe.mainEmitter.image = puff }
+                pe.isEmitting = false
+                let se = Entity()
+                se.components.set(pe)
+                se.position = cafeSpot ?? mPos
+                se.components.set(ModelSortGroupComponent(group: sortGroup, order: 18))
+                near.addChild(se)
+                cafeSteam = se
+                // 그라인더 (원두 통)
+                let gPos = mPos + r3 * 0.42
+                box(0.16, 0.3, 0.2, gPos + SIMD3<Float>(0, 0.15, 0), darkM)
+                cyl(0.07, 0.13, gPos + SIMD3<Float>(0, 0.365, 0), paper([0.36, 0.22, 0.12]))
+                // 케이크 진열: 접시 + 케이크 + 유리 덮개
+                let cPos = base + r3 * (cw / 4) + SIMD3<Float>(0, topY, 0)
+                cyl(0.15, 0.012, cPos + SIMD3<Float>(0, 0.006, 0), cupW)
+                cyl(0.1, 0.07, cPos + SIMD3<Float>(0, 0.047, 0), paper([0.42, 0.24, 0.14]))
+                cyl(0.1, 0.014, cPos + SIMD3<Float>(0, 0.089, 0), paper([0.96, 0.9, 0.78]))
+                if look != .line {
+                    var glass = UnlitMaterial(color: UIColor(white: 1, alpha: 1))
+                    glass.blending = .transparent(opacity: .init(floatLiteral: 0.16))
+                    let dome = ModelEntity(mesh: .generateSphere(radius: 0.155), materials: [glass])
+                    dome.position = cPos + SIMD3<Float>(0, 0.012, 0)
+                    dome.scale = [1, 1.05, 1]
+                    near.addChild(dome)
+                }
+                // 작은 화분
+                let pPos = base + r3 * (cw / 2 - 0.15) + SIMD3<Float>(0, topY, 0) - n3 * 0.08
+                cyl(0.055, 0.1, pPos + SIMD3<Float>(0, 0.05, 0), paper([0.72, 0.38, 0.24]))
+                let leaf = ModelEntity(mesh: .generateSphere(radius: 0.085), materials: [paper([0.24, 0.46, 0.22])])
+                leaf.position = pPos + SIMD3<Float>(0, 0.16, 0)
+                leaf.scale = [1, 0.85, 1]
+                near.addChild(leaf)
             }
         }
         // 선반 (다음 벽 두 개): 1.55m·1.9m, 깊이 14cm
@@ -759,6 +872,23 @@ final class Scenery {
         for (e, period) in blinkers where period > 0 {
             let on = (t / period).truncatingRemainder(dividingBy: 1) < 0.15
             if e.isEnabled != on { e.isEnabled = on }
+        }
+        // 카페: 가끔 우유 스팀 (치이익 + 김), 잔 달그락
+        if let spot = cafeSpot {
+            if t > nextSteam {
+                nextSteam = t + Float.random(in: 25...55)
+                steamOff = t + 3
+                if var pe = cafeSteam?.components[ParticleEmitterComponent.self] { pe.isEmitting = true; cafeSteam?.components.set(pe) }
+                Sfx.play("espresso_steam", in: near, at: spot, gain: -6)
+            }
+            if steamOff > 0 && t > steamOff {
+                steamOff = -1
+                if var pe = cafeSteam?.components[ParticleEmitterComponent.self] { pe.isEmitting = false; cafeSteam?.components.set(pe) }
+            }
+            if t > nextClink {
+                nextClink = t + Float.random(in: 10...28)
+                Sfx.play("cup_clink\(Int.random(in: 1...2))", in: near, at: spot + SIMD3<Float>(Float.random(in: -0.6...0.6), 0, Float.random(in: -0.3...0.3)), gain: -4)
+            }
         }
         for (e, ph) in flames {
             let k = 0.8 + 0.2 * sin(t * 9 + ph) * sin(t * 5.3 + ph * 2)

@@ -74,8 +74,9 @@ struct Decor {
             d.bands = [Band(tex: "far_city", night: "far_city_night", radius: 260, height: 160, base: -30, aspect: 2, layer: 1)]
             d.city = true
         case "cafe":
-            d.bands = [Band(tex: "far_city", night: "far_city_night", radius: 35, relative: true, height: 60, base: -1, aspect: 2, layer: 2)]
-            d.stringLights = true
+            // 창밖: 길 건너 가게들이 늘어선 거리 (1층은 차양 달린 가게), 그 뒤로 먼 도시
+            d.bands = [Band(tex: "street_shops", night: "street_shops_night", radius: 9, relative: true, height: 9, base: -0.3, aspect: 4, layer: 2),
+                       Band(tex: "far_city", night: "far_city_night", radius: 70, relative: true, height: 90, base: -2, aspect: 2, layer: 1)]
         case "gallery":
             d.bands = [Band(tex: "far_mtn", radius: 270, height: 60, base: -6, aspect: 4, layer: 0)]
             d.trees = [Trees(tex: "tree_broad", count: 6, h: 7...11, d: 4...14)]
@@ -243,7 +244,7 @@ final class RoomWorld {
             openWalls(segs, L, floorY: floorY, ceilY: ceilY)
         } else {
             solidWalls(segs, L, floorY: floorY, ceilY: ceilY)
-            addSkylightFrame(rects, L, y: ceilY - 0.06)
+            if room.place == "cafe" { addCafeCeiling(rects, L, y: ceilY - 0.03) } else { addSkylightFrame(rects, L, y: ceilY - 0.06) }
         }
         addDoors(L, floorY: floorY, ceilY: ceilY)
 
@@ -689,6 +690,39 @@ final class RoomWorld {
         if let e = g.entity("beams", ink(SIMD3<Float>(0.18, 0.15, 0.12) * Worlds.safe(tint))) {
             local.addChild(e)
         }
+    }
+
+    /// 카페: 하늘 대신 짙은 나무 천장 + 1.1m 간격 굵은 들보 (아늑한 실내)
+    private func addCafeCeiling(_ rects: [PRect], _ L: Layout, y: Float) {
+        let wood = Worlds.safe(tint * 0.9, min: 0.3)
+        if let m = Self.flatMesh(rects, L, y: y, tile: 1.4) {
+            let e = ModelEntity(mesh: m, materials: [lineMode ? Ink.paper(1) : Tex.unlit("planks_dark", tint: wood)])
+            local.addChild(e)
+        }
+        var g = Geo()
+        var lines = Geo()
+        for r in rects {
+            var v = (r.0.y).rounded(.down) + 0.55
+            while v < r.1.y - 0.2 {
+                guard r.1.x - r.0.x > 0.3 else { break }
+                for side: Float in [-0.06, 0.06] {
+                    let a = L.flat(SIMD2<Float>(r.0.x, v + side)), b = L.flat(SIMD2<Float>(r.1.x, v + side))
+                    g.wall(SIMD3<Float>(a.x, y, a.y), SIMD3<Float>(b.x, y, b.y), y0: -0.16, y1: 0, u0: 0, u1: (r.1.x - r.0.x) / 1.2, v0: 0, v1: 0.15)
+                }
+                let a0 = L.flat(SIMD2<Float>(r.0.x, v - 0.06)), b0 = L.flat(SIMD2<Float>(r.1.x, v - 0.06))
+                let a1 = L.flat(SIMD2<Float>(r.0.x, v + 0.06)), b1 = L.flat(SIMD2<Float>(r.1.x, v + 0.06))
+                g.quad(SIMD3<Float>(a0.x, y - 0.16, a0.y), SIMD3<Float>(b0.x, y - 0.16, b0.y), SIMD3<Float>(b1.x, y - 0.16, b1.y), SIMD3<Float>(a1.x, y - 0.16, a1.y),
+                       SIMD2<Float>(0, 0), SIMD2<Float>((r.1.x - r.0.x) / 1.2, 0), SIMD2<Float>((r.1.x - r.0.x) / 1.2, 0.1), SIMD2<Float>(0, 0.1))
+                if lineMode {
+                    for (p, q) in [(a0, b0), (a1, b1)] {
+                        lines.stroke(SIMD3<Float>(p.x, y - 0.16, p.y), SIMD3<Float>(q.x, y - 0.16, q.y), width: 0.01)
+                    }
+                }
+                v += 1.1
+            }
+        }
+        if let e = g.entity("cafeBeams", lineMode ? Ink.paper(0) : Tex.unlit("planks_dark", tint: wood * 0.7)) { local.addChild(e) }
+        if let e = lines.entity("cafeBeamLines", Ink.line) { local.addChild(e) }
     }
 
     // MARK: 하늘 세계

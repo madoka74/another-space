@@ -1114,6 +1114,7 @@ def sfx():
     save_wav('scan', buf, -8)
     fire_sounds(r)
     cat_sounds(r)
+    misc_sounds(r)
 
 
 def _formant_voice(f0, F, amp, r, breath=0.06, nasal=None):
@@ -1190,6 +1191,68 @@ def cat_sounds(r):
     x = (noise / (np.std(noise) + 1e-9) * 0.5 + buzz) * pulse * breath
     save_wav('cat_purr', _loop(x, 0.5), -10)
 
+    # ── 더 많은 목소리 (매번 다르게 들리도록 같은 종류도 여러 개) ──
+    for i in range(4, 10):                                          # 야옹 4~9: 길이·높이·모음이 조금씩 다른 야옹
+        dur = r.uniform(0.38, 0.95)
+        base = r.uniform(380, 620)
+        peak = base * r.uniform(1.25, 1.75)
+        endp = base * r.uniform(0.7, 1.15)
+        mid = r.uniform(0.2, 0.45)
+        meow(f'cat_meow{i}', dur, [(0, base), (mid, peak), (min(0.9, mid + 0.3), peak * 0.85), (1, endp)],
+             [(0, 450), (mid * 0.6, 560), (mid + 0.15, r.uniform(900, 1150)), (0.85, 800), (1, 520)],
+             [(0, r.uniform(1700, 2300)), (mid, r.uniform(2300, 2700)), (0.7, r.uniform(1500, 1900)), (1, 1050)],
+             [(0, 3400), (1, 3000)], -10 - r.uniform(0, 3), roll=r.choice([0, 0, 0.4]), nas=r.uniform(0.05, 0.25))
+    for i in range(1, 4):                                           # 므릅 (짧게 굴리는 인사)
+        dur = r.uniform(0.22, 0.34)
+        b = r.uniform(420, 560)
+        meow(f'cat_mrrp{i}', dur, [(0, b), (0.6, b * 1.15), (1, b * r.uniform(1.2, 1.5))],
+             [(0, 420), (1, 640)], [(0, 1300), (1, 1800)], [(0, 2800), (1, 3100)], -12, roll=1.0, nas=0.35)
+    for i in range(2, 4):                                           # 짹 (신남)
+        b = r.uniform(850, 1150)
+        meow(f'cat_chirp{i}', r.uniform(0.09, 0.15), [(0, b), (0.5, b * 1.3), (1, b * 1.05)],
+             [(0, 700), (1, 820)], [(0, 2500), (1, 2300)], [(0, 3700), (1, 3500)], -14, nas=0.0)
+    # 아기 고양이 같은 미야 (높고 가늘게)
+    meow('cat_mew', 0.28, [(0, 900), (0.4, 1150), (1, 820)], [(0, 600), (0.4, 950), (1, 700)],
+         [(0, 2600), (0.5, 2300), (1, 1900)], [(0, 3800), (1, 3500)], -13, nas=0.05)
+    # 하품: 숨소리 섞인 높은 '아아앙' 끝이 내려감
+    n = int(SR * 1.1)
+    f0 = _contour(n, [(0, 520), (0.2, 900), (0.5, 760), (1, 300)])
+    F = [(_contour(n, [(0, 700), (0.3, 1100), (1, 600)]), 200), (_contour(n, [(0, 1700), (1, 1100)]), 260), (_contour(n, [(0, 3000), (1, 2700)]), 320)]
+    env = np.interp(np.linspace(0, 1, n), [0, 0.15, 0.6, 1], [0, 0.8, 0.6, 0])
+    save_wav('cat_yawn', _formant_voice(f0, F, env, r, breath=0.35), -14)
+    # 채터링 (창밖 새·장난감을 노려볼 때 '깍깍깍')
+    buf = np.zeros(int(SR * 1.0))
+    at = 0.05
+    while at < 0.85:
+        n = int(SR * 0.05)
+        b = r.uniform(700, 900)
+        f0 = np.full(n, b)
+        F = [(np.full(n, 800.0), 200), (np.full(n, 2000.0), 260), (np.full(n, 3200.0), 320)]
+        env = np.sin(np.linspace(0, np.pi, n)) ** 2
+        _place(buf, _formant_voice(f0, F, env, r, breath=0.2), at)
+        at += r.uniform(0.07, 0.1)
+    save_wav('cat_chatter', buf, -15)
+    # 하악 (화났을 때)
+    n = int(SR * 0.7)
+    h = r.standard_normal(n)
+    h = _lowpass(h - _lowpass(h, 1800), 7000)
+    env = np.interp(np.linspace(0, 1, n), [0, 0.05, 0.6, 1], [0, 1, 0.7, 0])
+    save_wav('cat_hiss', h * env, -12)
+    # 낮게 그르르 (불만)
+    n = int(SR * 0.9)
+    f0 = _contour(n, [(0, 160), (0.5, 180), (1, 150)])
+    F = [(np.full(n, 500.0), 180), (np.full(n, 1200.0), 240), (np.full(n, 2500.0), 300)]
+    t = _t(0.9)
+    env = np.interp(np.linspace(0, 1, n), [0, 0.1, 0.8, 1], [0, 1, 0.8, 0]) * (0.6 + 0.4 * np.sin(2 * np.pi * 22 * t))
+    save_wav('cat_growl', _formant_voice(f0, F, env, r, breath=0.15), -14)
+    # 목줄 방울 딸랑 (걸을 때 가끔, 뛰면 자주)
+    for i in range(1, 4):
+        buf = np.zeros(int(SR * 0.9))
+        for k in range(r.integers(2, 5)):
+            f = r.uniform(4200, 5600)
+            _place(buf, _bell(f, 0.6, 9, partials=((1, 1), (1.47, 0.4), (2.09, 0.2))) * r.uniform(0.4, 1), k * r.uniform(0.04, 0.09))
+        save_wav(f'bell{i}', buf, -20)
+
 
 def _loop(x, fade_sec=1.0):
     """끝 1초를 앞 1초와 겹쳐 이어 붙임 → 되풀이해도 이음매가 들리지 않음"""
@@ -1252,6 +1315,45 @@ def fire_sounds(r):
     hiss = _lowpass(h - _lowpass(h, 2000), 8000) * np.interp(t, [0, 0.08, 1.2, dur], [0, 1, 0.35, 0])
     w = _lowpass(r.standard_normal(n), 500) * np.interp(t, [0, 0.4, 2.0, dur], [0, 1, 0.6, 0]) * 4
     save_wav('fire_out', hiss + w, -14)
+
+    # 장작이 탁 튀는 소리 (불티가 확 오를 때) 3가지
+    for i in range(1, 4):
+        buf = np.zeros(int(SR * 0.5))
+        c = r.standard_normal(int(SR * 0.012))
+        c = c - _lowpass(c, 900)
+        c *= np.exp(-_t(0.012) * 500)
+        _place(buf, c, 0)
+        for k in range(r.integers(2, 6)):                          # 뒤따르는 잔 타닥
+            ln = r.uniform(0.002, 0.005)
+            cc = r.standard_normal(int(SR * ln))
+            cc = (cc - _lowpass(cc, 2500)) * np.exp(-_t(ln) * 1500)
+            _place(buf, cc * r.uniform(0.15, 0.4), r.uniform(0.03, 0.35))
+        t = _t(0.2)
+        _place(buf, np.sin(2 * np.pi * 110 * t) * np.exp(-t * 40) * 0.3, 0)
+        save_wav(f'fire_pop{i}', buf, -8)
+
+
+def misc_sounds(r):
+    """별자리 반짝(맑은 종 두 음), 카페 에스프레소 머신 스팀, 잔 부딪히는 소리"""
+    buf = np.zeros(int(SR * 2.4))
+    _place(buf, _bell(1318.5, 2.2, 1.6) * 0.6, 0)
+    _place(buf, _bell(1975.5, 2.0, 1.8) * 0.45, 0.12)
+    _place(buf, _bell(2637.0, 1.8, 2.2) * 0.25, 0.22)
+    save_wav('star_chime', buf, -16)
+    # 스팀 (우유 데우는 치이익 → 보글보글)
+    dur = 3.2
+    n = int(SR * dur)
+    t = _t(dur)
+    h = r.standard_normal(n)
+    hiss = _lowpass(h - _lowpass(h, 3000), 9000) * np.interp(t, [0, 0.1, 2.6, dur], [0, 1, 0.8, 0])
+    gurgle = _lowpass(r.standard_normal(n), 600) * (0.5 + 0.5 * np.sin(2 * np.pi * 9 * t)) * np.interp(t, [0, 1.2, 2.4, dur], [0, 0, 1, 0]) * 2
+    save_wav('espresso_steam', hiss + gurgle, -22)
+    # 잔·접시 달그락
+    for i in range(1, 3):
+        buf = np.zeros(int(SR * 0.8))
+        for k in range(r.integers(1, 3)):
+            _place(buf, _bell(r.uniform(2400, 3400), 0.5, 14, partials=((1, 1), (2.32, 0.5), (4.1, 0.25))), k * r.uniform(0.08, 0.2))
+        save_wav(f'cup_clink{i}', buf, -24)
 
 
 def scan_grid():
@@ -1329,6 +1431,152 @@ def flame():
     save_png('flame', rgb, a)
 
 
+def fire_art():
+    """모닥불: 일렁이는 불길 16장(이어 돌리면 끊김 없이 타오름), 연기 한 덩이, 숯이 된 장작 무늬"""
+    W, H, F = 128, 256, 16
+    n1 = noise(beta=2.6, size=256, seed=911, aniso=(1.0, 0.45))   # 위로 흘러가는 큰 불길 덩어리 (세로로 길쭉, 가장자리가 이어짐)
+    n2 = noise(beta=2.2, size=256, seed=912, aniso=(1.0, 0.6))    # 작은 불혀
+    n3 = noise(beta=3.0, size=256, seed=913)                      # 옆으로 흔들림
+    yy, xx = np.mgrid[0:H, 0:W].astype(float)
+    y = 1 - yy / (H - 1)                                # 0 아래 ~ 1 위
+    x = (xx - W / 2) / (W / 2)
+    for f in range(F):
+        sh = int(f * 256 / F)
+        a1 = np.roll(n1, sh, axis=0)[:H, :W]
+        a2 = np.roll(n2, sh * 2, axis=0)[:H, :W]
+        a3 = np.roll(n3, sh, axis=0)[:H, 64:64 + W]
+        xd = x + (a3 - 0.5) * 0.9 * y ** 1.3           # 위로 갈수록 크게 흔들림
+        width = 0.68 * (1 - y) ** 0.7 + 0.04
+        shape = np.clip(1 - (np.abs(xd) / np.maximum(width, 1e-3)) ** 2, 0, 1)
+        base = np.clip(y * 10, 0, 1)                    # 바닥은 부드럽게
+        heat = shape * base * (1.15 - y * 0.8) * (1 - (a1 - 0.38) * 1.7 * y ** 0.7 - (a2 - 0.5) * 0.6 * y)
+        heat = np.clip(heat, 0, 1)
+        heat = np.asarray(Image.fromarray((heat * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.2))) / 255
+        col = colorize(heat, [(0, (110, 16, 0)), (0.3, (196, 44, 6)), (0.55, (246, 108, 18)),
+                              (0.78, (255, 178, 56)), (0.93, (255, 232, 160)), (1, (255, 250, 225))])
+        alpha = np.clip((heat - 0.1) * 3.2, 0, 1)
+        save_png(f'fire_{f:02d}', col, alpha)
+    # 연기 한 덩이 (입자 그림: 흰색 + 투명도)
+    S2 = 128
+    yy, xx = np.mgrid[0:S2, 0:S2].astype(float)
+    d = np.hypot(xx - S2 / 2, yy - S2 / 2) / (S2 / 2)
+    nz = noise(beta=1.8, size=S2, seed=921)
+    a = np.clip((1 - d) * 1.3 - (nz - 0.5) * 0.9, 0, 1) ** 1.5
+    rgba = np.concatenate([np.full((S2, S2, 3), 245.0), (a * 255)[..., None]], axis=-1)
+    os.makedirs(os.path.join(OUT, 'tex'), exist_ok=True)
+    Image.fromarray(rgba.astype(np.uint8), 'RGBA').save(os.path.join(OUT, 'tex', 'smoke_puff.png'), optimize=True)
+    # 불티·숯불 알갱이 (가운데가 밝은 작은 점)
+    a = np.clip(1 - d, 0, 1) ** 2.5
+    rgba = np.concatenate([np.full((S2, S2, 3), 255.0), (a * 255)[..., None]], axis=-1)
+    Image.fromarray(rgba.astype(np.uint8), 'RGBA').save(os.path.join(OUT, 'tex', 'spark_dot.png'), optimize=True)
+    # 숯이 된 장작: 검게 탄 나무결 + 갈라진 틈에 주황 불씨
+    N2 = 256
+    grain = noise(beta=1.4, size=N2, seed=931, aniso=(4, 0.25))
+    crack = noise(beta=2.0, size=N2, seed=932, aniso=(1.5, 0.6))
+    v = 0.6 * grain + 0.4 * crack
+    rgb = colorize(v, [(0, (18, 14, 12)), (0.5, (44, 36, 30)), (1, (70, 58, 48))])
+    sparse = noise(beta=2.4, size=N2, seed=933) > 0.55
+    glow = np.clip((np.abs(crack - 0.5) < 0.022) * sparse * 1.0, 0, 1)
+    glow = np.asarray(Image.fromarray((glow * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.6))) / 255
+    rgb = rgb * (1 - glow[..., None]) + np.array([255, 110, 30]) * glow[..., None]
+    save_jpg('charlog', rgb)
+
+
+def street_shops(night=False):
+    """카페 창밖 맞은편 거리: 2~4층 건물이 늘어서고 1층은 차양 달린 가게(진열창·문·간판), 가로등.
+    가로 2048 × 세로 512 (= 높이 9m 띠), 하늘은 투명. 밤엔 가게 창과 일부 위층 창, 가로등에 불"""
+    W, H = 2048, 512
+    r = rng(1501)
+    rgb = np.zeros((H, W, 3))
+    a = np.zeros((H, W))
+    lit = np.zeros((H, W), bool)
+    tex = noise(1.2, 512, 1502)
+    ground = int(H * 0.98)                        # 길 높이 (띠 아래 끝 근처)
+    m = 57                                        # 1m = 약 57px
+    x = 0
+    palettes = [(150, 84, 66), (196, 176, 140), (120, 128, 132), (86, 120, 116), (172, 120, 84), (210, 196, 170), (98, 86, 110)]
+    awn = [((176, 40, 44), (240, 232, 220)), ((40, 96, 70), (236, 228, 210)), ((32, 60, 120), (232, 226, 210)), ((200, 140, 40), (90, 50, 30))]
+    while x < W:
+        bw = int(r.integers(int(4.5 * m), int(8 * m)))
+        bw = min(bw, W - x) if W - x - bw < 2 * m else bw
+        floors = int(r.integers(2, 4))
+        fh = int(2.6 * m)
+        top = ground - fh * floors - int(0.4 * m)
+        x1 = min(W, x + bw)
+        base = np.array(palettes[int(r.integers(len(palettes)))], float)
+        t2 = np.tile(tex, (H // 512 + 1, W // 512 + 1))[:H, :W]
+        rgb[top:ground, x:x1] = base * (0.85 + 0.25 * t2[top:ground, x:x1, None])
+        a[top:ground, x:x1] = 1
+        rgb[top:top + 10, x:x1] = base * 0.6                 # 지붕 처마 줄
+        rgb[top + 10:top + 14, x:x1] = base * 1.15
+        # 위층 창
+        cols = max(2, (x1 - x) // int(1.6 * m))
+        cw = (x1 - x) / cols
+        for f in range(1, floors):
+            y0 = ground - fh * (f + 1) + int(0.9 * m)
+            for c in range(cols):
+                wx0 = int(x + c * cw + cw * 0.28)
+                wx1 = int(x + c * cw + cw * 0.72)
+                wy1 = y0 + int(1.4 * m)
+                if night:
+                    on = r.random() < 0.45
+                    col = np.array([255, 206, 130.0]) * r.uniform(0.75, 1) if on else np.array([18, 22, 30.0])
+                else:
+                    col = np.array([150, 170, 190.0]) * r.uniform(0.75, 1)
+                rgb[y0:wy1, wx0:wx1] = col
+                if night and col[0] > 100:
+                    lit[y0:wy1, wx0:wx1] = True
+                rgb[y0 - 4:y0, wx0 - 4:wx1 + 4] = base * 0.7          # 창 위 장식
+                rgb[wy1:wy1 + 6, wx0 - 6:wx1 + 6] = base * 1.2         # 창턱
+        # 1층 가게: 큰 진열창 + 문 + 차양 + 간판
+        gy0 = ground - fh
+        rgb[gy0:ground, x:x1] = base * 0.55
+        sx0, sx1 = x + int(0.4 * m), x1 - int(1.6 * m)
+        wy0, wy1 = gy0 + int(1.0 * m), ground - int(0.5 * m)
+        if sx1 - sx0 > m:
+            if night:
+                glow = np.array([255, 196, 120.0])
+                rgb[wy0:wy1, sx0:sx1] = glow * (0.85 + 0.1 * t2[wy0:wy1, sx0:sx1, None])
+                lit[wy0:wy1, sx0:sx1] = True
+            else:
+                rgb[wy0:wy1, sx0:sx1] = np.array([70, 84, 96.0]) * (0.9 + 0.3 * t2[wy0:wy1, sx0:sx1, None])
+                rgb[wy0:wy0 + int(0.4 * m), sx0:sx1] = np.array([150, 166, 180.0])      # 유리에 비친 하늘
+            for mx in range(sx0, sx1, int(1.3 * m)):                                     # 창살
+                rgb[wy0:wy1, mx:mx + 4] = base * 0.4
+        dx0, dx1 = x1 - int(1.3 * m), x1 - int(0.4 * m)
+        rgb[gy0 + int(0.8 * m):ground, dx0:dx1] = np.array([60, 40, 30.0]) if not night else np.array([200, 150, 90.0])
+        if night:
+            lit[gy0 + int(0.8 * m):ground, dx0:dx1] = True
+        ac = awn[int(r.integers(len(awn)))]
+        ay0, ay1 = gy0 + int(0.25 * m), gy0 + int(0.95 * m)
+        for sx in range(x, x1, 18):                                                      # 줄무늬 차양
+            col = np.array(ac[(sx // 18) % 2], float)
+            rgb[ay0:ay1, sx:min(x1, sx + 18)] = col * (0.75 if night else 1)
+        yy = np.arange(ay0, ay1)
+        rgb[ay1 - 6:ay1, x:x1] = np.array(ac[0], float) * 0.6
+        # 간판 (글자 대신 단순한 무늬)
+        bx0, bx1 = x + (x1 - x) // 4, x + 3 * (x1 - x) // 4
+        rgb[gy0 - int(0.45 * m):gy0 - 2, bx0:bx1] = np.array([40, 34, 30.0])
+        for k in range(bx0 + 12, bx1 - 12, 22):
+            rgb[gy0 - int(0.32 * m):gy0 - int(0.14 * m), k:k + 12] = np.array([236, 206, 140.0]) if night else np.array([214, 196, 160.0])
+        x = x1
+    # 가로등
+    for lx in range(140, W, 520):
+        rgb[ground - int(4.4 * m):ground, lx:lx + 8] = [30, 32, 34]
+        a[ground - int(4.4 * m):ground, lx:lx + 8] = 1
+        hy = ground - int(4.4 * m)
+        rgb[hy - 26:hy, lx - 18:lx + 26] = [30, 32, 34]
+        a[hy - 26:hy, lx - 18:lx + 26] = 1
+        if night:
+            rgb[hy - 18:hy - 4, lx - 10:lx + 18] = [255, 226, 160]
+            lit[hy - 18:hy - 4, lx - 10:lx + 18] = True
+    rgb[ground:, :] = [40, 40, 44]
+    a[ground:, :] = 1
+    if night:
+        rgb = rgb * np.where(lit[..., None], 1.0, 0.42)                            # 불 켜진 곳만 밝게
+    save_png('street_shops_night' if night else 'street_shops', rgb, a)
+
+
 def menu_board():
     """카페 메뉴판 (칠판에 분필 글씨)"""
     W, H = 600, 700
@@ -1372,7 +1620,7 @@ def line_art():
 
 def line_folder(folder, sky=False):
     for fn in sorted(os.listdir(folder)):
-        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid') or fn.startswith('cat_'):
+        if not fn.endswith('_a.png') or fn.endswith('_lna.png') or fn.startswith('haze') or fn.startswith('scan_grid') or fn.startswith('cat_') or fn.startswith('fire_') or fn.startswith('emote_'):
             continue
         name = fn[:-6]
         m = Image.open(os.path.join(folder, fn)).convert('L')
@@ -1391,6 +1639,13 @@ def line_folder(folder, sky=False):
             continue
         Image.fromarray(out).save(os.path.join(folder, name + '_ln.png'), optimize=True)
         mask.save(os.path.join(folder, name + '_lna.png'), optimize=True)      # 선 그림에서 쓰는 매끄러운 가림 그림
+
+
+def _jazz():
+    """카페 배경 재즈 (tools/jazz.py) → sfx/jazz_XX.m4a + sfx/jazz.json"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import jazz
+    jazz.make_all(os.path.join(OUT, 'sfx'))
 
 
 def _cat():
@@ -1442,9 +1697,10 @@ def main():
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
-            people(), menu_board(), flame()),
+            people(), menu_board(), flame(), fire_art(), street_shops(), street_shops(night=True)),
         'sfx': lambda: sfx(),
         'cat': lambda: _cat(),
+        'jazz': lambda: _jazz(),
         'art': lambda: _fetch_art(),
         'lines': lambda: line_art(),          # 오려 내기 그림을 다 만든 뒤에
     }

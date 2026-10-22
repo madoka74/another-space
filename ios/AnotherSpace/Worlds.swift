@@ -123,7 +123,7 @@ enum Worlds {
                               groundFar: [0.16, 0.16, 0.18], skylight: false)
         case "cafe":
             return WorldStyle(floor: "planks_dark", floorTile: 1.6, wall: "brick", wallTile: 1.6, prop: "planks", propTile: 0.8,
-                              propTint: [0.9, 0.82, 0.74], open: false, barrier: "", barrierH: 0, ground: "roof", groundTile: 2.4,
+                              propTint: [0.9, 0.82, 0.74], open: false, barrier: "", barrierH: 0, ground: "asphalt", groundTile: 2.4,
                               groundFar: [0.20, 0.20, 0.22], skylight: true)
         case "gallery":
             return WorldStyle(floor: "marble", floorTile: 2.0, wall: "plaster", wallTile: 2.0, prop: "marble", propTile: 1.0, propTint: w,
