@@ -180,6 +180,48 @@ enum Tex {
         return t
     }
 
+    /// 입자(연기·물보라·불티) 그림: 입자는 '미리 곱한 투명도' 그림만 제대로 그림 → 그림 파일을 투명 바탕에 다시 그려(미리 곱한 RGBA) 만듦.
+    /// 그냥 읽으면 그림이 무시되고 기본 동그라미로 그려져 둥근 원반처럼 보였음
+    private static var particles: [String: TextureResource] = [:]
+    static func particle(_ name: String) -> TextureResource? {
+        if let t = particles[name] { return t }
+        guard let u = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "tex"),
+              let img = UIImage(contentsOfFile: u.path) else { return nil }
+        let f = UIGraphicsImageRendererFormat()
+        f.scale = 1
+        f.opaque = false
+        let r = UIGraphicsImageRenderer(size: img.size, format: f).image { _ in img.draw(in: CGRect(origin: .zero, size: img.size)) }
+        guard let cg = r.cgImage, let t = try? TextureResource.generate(from: cg, options: .init(semantic: .color)) else { return nil }
+        particles[name] = t
+        return t
+    }
+
+    /// 선 그림용 만화 그림 (고양이·강아지): 짙은 윤곽선·눈·코만 검게 남기고 나머지 칠은 흰 종이로
+    private static var inkedCache: [String: TextureResource] = [:]
+    static func inked(_ name: String) -> TextureResource? {
+        if let t = inkedCache[name] { return t }
+        guard let u = Bundle.main.url(forResource: name, withExtension: "png", subdirectory: "tex"),
+              let img = UIImage(contentsOfFile: u.path), let cg = img.cgImage else { return nil }
+        let w = cg.width, h = cg.height
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = ctx.data else { return nil }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let px = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        for i in 0..<(w * h) {
+            let a = Int(px[i * 4 + 3])
+            guard a > 0 else { continue }
+            // 미리 곱한 색 → 원래 밝기
+            let l = (Int(px[i * 4]) * 77 + Int(px[i * 4 + 1]) * 151 + Int(px[i * 4 + 2]) * 28) / max(1, a)
+            let v: Int = l < 70 ? 18 : (l < 110 ? 18 + (l - 70) * 6 : 255)
+            let pv = UInt8(min(255, v * a / 255))
+            px[i * 4] = pv; px[i * 4 + 1] = pv; px[i * 4 + 2] = pv
+        }
+        guard let out = ctx.makeImage(), let t = try? TextureResource.generate(from: out, options: .init(semantic: .color)) else { return nil }
+        inkedCache[name] = t
+        return t
+    }
+
     /// 색을 뺀 그림 (투명도는 그대로 — 구름처럼 투명한 그림이 네모 판으로 보이지 않게)
     nonisolated static func gray(_ cg: CGImage) -> CGImage? {
         let w = cg.width, h = cg.height

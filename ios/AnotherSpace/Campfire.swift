@@ -281,7 +281,7 @@ final class Campfire {
             spark.mainEmitter.color = .evolving(start: .single(sp1), end: .single(sp2))
                 spark.mainEmitter.blendMode = .additive
         }
-        if let im = Tex.get("spark_dot", color: true) { spark.mainEmitter.image = im }
+        if let im = Tex.particle("spark_dot") { spark.mainEmitter.image = im }
         spark.mainEmitter.opacityCurve = .linearFadeOut
         spark.isEmitting = false
 
@@ -313,7 +313,7 @@ final class Campfire {
         smoke.mainEmitter.color = .constant(.single(smokeCol))
         smoke.mainEmitter.blendMode = .alpha
         smoke.mainEmitter.opacityCurve = .quickFadeInOut
-        let puff = Tex.get("smoke_puff", color: true)
+        let puff = Tex.particle("smoke_puff")
         if let puff {
             smoke.mainEmitter.image = puff
             smoke.mainEmitter.angularSpeed = 0.4
@@ -398,7 +398,7 @@ final class Campfire {
             emb.mainEmitter.color = .evolving(start: .single(sp1), end: .single(sp2))
             emb.mainEmitter.blendMode = .additive
         }
-        if let im = Tex.get("spark_dot", color: true) { emb.mainEmitter.image = im }
+        if let im = Tex.particle("spark_dot") { emb.mainEmitter.image = im }
         emb.mainEmitter.opacityCurve = .quickFadeInOut
         emb.isEmitting = false
         steam.isEmitting = false

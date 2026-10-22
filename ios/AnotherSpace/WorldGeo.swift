@@ -62,6 +62,129 @@ struct Geo {
         }
     }
 
+    // MARK: 입체 나무 (얇은 판 두 장을 엇갈린 나무 대신: 줄기는 둥근 기둥, 잎은 잎 덩이 판 수십 장을 사방으로 꽂아 어느 쪽에서 봐도 부피가 있게)
+    /// 위로 가늘어지는 둥근 기둥 (줄기·가지). bend: 가운데가 휘는 정도(방향·크기). 나무껍질 무늬는 둘레 1바퀴 = u 1, 세로 1.2m = v 1
+    mutating func trunk(from a: SIMD3<Float>, to b: SIMD3<Float>, r0: Float, r1: Float, sides: Int = 8, segs: Int = 4, bend: SIMD3<Float> = .zero) {
+        let ax = simd_normalize(b - a)
+        let ref = abs(ax.y) > 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)
+        let e1 = simd_normalize(simd_cross(ax, ref)), e2 = simd_cross(ax, e1)
+        let len = simd_distance(a, b)
+        func ring(_ t: Float) -> [SIMD3<Float>] {
+            let c = a + (b - a) * t + bend * (4 * t * (1 - t))
+            let r = r0 + (r1 - r0) * t
+            return (0...sides).map { (k: Int) -> SIMD3<Float> in
+                let ang = Float(k) / Float(sides) * 2 * .pi
+                return c + (e1 * cos(ang) + e2 * sin(ang)) * r
+            }
+        }
+        var prev = ring(0)
+        for i in 1...segs {
+            let t1 = Float(i) / Float(segs), t0 = Float(i - 1) / Float(segs)
+            let cur = ring(t1)
+            for k in 0..<sides {
+                let u0 = Float(k) / Float(sides), u1 = Float(k + 1) / Float(sides)
+                quad(prev[k], prev[k + 1], cur[k + 1], cur[k], SIMD2<Float>(u0, t0 * len / 1.2), SIMD2<Float>(u1, t0 * len / 1.2),
+                     SIMD2<Float>(u1, t1 * len / 1.2), SIMD2<Float>(u0, t1 * len / 1.2))
+            }
+            prev = cur
+        }
+    }
+
+    /// 잎 판 하나: 가운데 c, 판 안의 두 축 ua(가로)·ub(세로), 크기 w×h (그림 전체)
+    mutating func card(_ c: SIMD3<Float>, _ ua: SIMD3<Float>, _ ub: SIMD3<Float>, w: Float, h: Float) {
+        let x = ua * (w / 2), y = ub * (h / 2)
+        quad(c - x - y, c + x - y, c + x + y, c - x + y, SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+    }
+
+    /// 가지 판: 뿌리 p에서 dir 쪽으로 길이 L, 폭 w (그림의 왼쪽 = 뿌리, 오른쪽 = 끝). side: 판의 폭 방향
+    mutating func branchCard(_ p: SIMD3<Float>, dir: SIMD3<Float>, side: SIMD3<Float>, L: Float, w: Float, u0: Float = 0, u1: Float = 1) {
+        let s = side * (w / 2)
+        quad(p - s, p + dir * L - s, p + dir * L + s, p + s, SIMD2<Float>(u0, 0), SIMD2<Float>(u1, 0), SIMD2<Float>(u1, 1), SIMD2<Float>(u0, 1))
+    }
+
+    /// 넓은잎나무: 줄기 + 굵은 가지 몇 개 + 둥근 수관 (잎 덩이 판 30여 장을 타원체 둘레에 엇갈려)
+    static func broadTree<G: RandomNumberGenerator>(_ trunk: inout Geo, _ leaves: inout Geo, at p: SIMD3<Float>, height h: Float, width w: Float, using g: inout G) {
+        let lean = SIMD3<Float>(Float.random(in: -0.04...0.04, using: &g), 0, Float.random(in: -0.04...0.04, using: &g)) * h
+        let top = p + SIMD3<Float>(0, h * 0.6, 0) + lean
+        trunk.trunk(from: p - SIMD3<Float>(0, 0.2, 0), to: top, r0: h * 0.038, r1: h * 0.02, sides: 9, segs: 5,
+                    bend: SIMD3<Float>(Float.random(in: -0.3...0.3, using: &g), 0, Float.random(in: -0.3...0.3, using: &g)))
+        let c = p + SIMD3<Float>(0, h * 0.66, 0) + lean
+        let rx = w * 0.7, ry = h * 0.3
+        for _ in 0..<Int.random(in: 3...5, using: &g) {
+            let a = Float.random(in: 0...(2 * .pi), using: &g)
+            let from = p + SIMD3<Float>(0, h * Float.random(in: 0.42...0.56, using: &g), 0) + lean * 0.8
+            let to = c + SIMD3<Float>(cos(a) * rx * 0.6, Float.random(in: -0.1...0.25, using: &g) * ry, sin(a) * rx * 0.6)
+            trunk.trunk(from: from, to: to, r0: h * 0.014, r1: h * 0.005, sides: 6, segs: 2)
+        }
+        let n = 26 + Int(w * 1.5)
+        for i in 0..<n {
+            // 바깥쪽에 많이 (안쪽은 조금): 타원체 위 점, 판은 바깥을 향하되 조금씩 엇갈림
+            let az = Float.random(in: 0...(2 * .pi), using: &g)
+            let el = asin(Float.random(in: -0.75...1, using: &g))
+            let rr: Float = i < n / 6 ? Float.random(in: 0.2...0.55, using: &g) : Float.random(in: 0.62...0.98, using: &g)
+            let dir = SIMD3<Float>(cos(el) * cos(az), sin(el), cos(el) * sin(az))
+            let q = c + SIMD3<Float>(dir.x * rx, dir.y * ry, dir.z * rx) * rr
+            var nrm = simd_normalize(dir + SIMD3<Float>(Float.random(in: -0.6...0.6, using: &g), Float.random(in: -0.4...0.6, using: &g), Float.random(in: -0.6...0.6, using: &g)))
+            if simd_length(nrm) < 0.1 { nrm = SIMD3<Float>(0, 1, 0) }
+            let ref = abs(nrm.y) > 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)
+            var ua = simd_normalize(simd_cross(ref, nrm))
+            let spin = Float.random(in: -0.6...0.6, using: &g)
+            ua = simd_quatf(angle: spin, axis: nrm).act(ua)
+            let ub = simd_cross(nrm, ua)
+            let sz = w * Float.random(in: 0.34...0.5, using: &g)
+            leaves.card(q, ua, ub, w: sz, h: sz)
+        }
+    }
+
+    /// 침엽수: 꼭대기까지 곧은 줄기 + 층층이 둘러 난 처진 가지 판 (아래가 넓고 위로 갈수록 짧아 원뿔 모양)
+    static func pineTree<G: RandomNumberGenerator>(_ trunk: inout Geo, _ leaves: inout Geo, at p: SIMD3<Float>, height h: Float, width w: Float, using g: inout G) {
+        trunk.trunk(from: p - SIMD3<Float>(0, 0.2, 0), to: p + SIMD3<Float>(0, h * 0.97, 0), r0: h * 0.03, r1: h * 0.004, sides: 8, segs: 5)
+        let tiers = 10 + Int(h / 3)
+        for k in 0..<tiers {
+            let t = Float(k) / Float(tiers - 1)                         // 0 아래 → 1 위
+            let y = h * (0.22 + 0.74 * t)
+            let L = (w / 2) * (1 - t * 0.88) + 0.25
+            let m = max(4, Int(7 - t * 3))
+            let off = Float.random(in: 0...(2 * .pi), using: &g)
+            for j in 0..<m {
+                let a = off + Float(j) / Float(m) * 2 * .pi + Float.random(in: -0.2...0.2, using: &g)
+                let droop = -0.18 - 0.22 * (1 - t) + Float.random(in: -0.08...0.08, using: &g)
+                let dir = simd_normalize(SIMD3<Float>(cos(a), droop, sin(a)))
+                var side = simd_normalize(simd_cross(dir, SIMD3<Float>(0, 1, 0)))
+                side = simd_normalize(side + SIMD3<Float>(0, Float.random(in: -0.35...0.35, using: &g), 0))
+                leaves.branchCard(p + SIMD3<Float>(0, y, 0), dir: dir, side: side, L: L, w: L * 0.62)
+            }
+        }
+        // 뾰족한 꼭대기
+        for k in 0..<3 {
+            let a = Float(k) / 3 * .pi
+            let s = SIMD3<Float>(cos(a), 0, sin(a))
+            leaves.branchCard(p + SIMD3<Float>(0, h * 0.86, 0), dir: SIMD3<Float>(0, 1, 0), side: s, L: h * 0.16, w: h * 0.08)
+        }
+    }
+
+    /// 야자나무(바닷가): 한쪽으로 휜 줄기 + 꼭대기에서 사방으로 뻗어 끝이 처지는 잎 10여 장
+    static func palmTree<G: RandomNumberGenerator>(_ trunk: inout Geo, _ leaves: inout Geo, at p: SIMD3<Float>, height h: Float, width w: Float, using g: inout G) {
+        let a0 = Float.random(in: 0...(2 * .pi), using: &g)
+        let leanDir = SIMD3<Float>(cos(a0), 0, sin(a0))
+        let top = p + SIMD3<Float>(0, h, 0) + leanDir * h * Float.random(in: 0.12...0.25, using: &g)
+        trunk.trunk(from: p - SIMD3<Float>(0, 0.2, 0), to: top, r0: h * 0.03, r1: h * 0.019, sides: 8, segs: 7, bend: leanDir * h * 0.08)
+        let n = 11
+        for j in 0..<n {
+            let a = Float(j) / Float(n) * 2 * .pi + Float.random(in: -0.15...0.15, using: &g)
+            let hd = SIMD3<Float>(cos(a), 0, sin(a))
+            let L = h * Float.random(in: 0.4...0.5, using: &g)
+            let up = Float.random(in: 0.25...0.6, using: &g)
+            let d1 = simd_normalize(hd + SIMD3<Float>(0, up, 0))
+            let d2 = simd_normalize(hd + SIMD3<Float>(0, up - 1.1, 0))
+            var side = simd_normalize(simd_cross(hd, SIMD3<Float>(0, 1, 0)))
+            side = simd_normalize(side + SIMD3<Float>(0, Float.random(in: -0.3...0.3, using: &g), 0))
+            let mid = top + d1 * L * 0.5
+            leaves.branchCard(top, dir: d1, side: side, L: L * 0.5, w: L * 0.28, u0: 0, u1: 0.5)
+            leaves.branchCard(mid, dir: d2, side: side, L: L * 0.5, w: L * 0.28, u0: 0.5, u1: 1)
+        }
+    }
+
     /// 평평한 원판 (바닥·물). tile m마다 무늬 되풀이
     mutating func disc(center c: SIMD3<Float>, radius r: Float, tile: Float, segments: Int = 48) {
         let base = UInt32(pos.count)

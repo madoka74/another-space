@@ -369,6 +369,18 @@ def moon_art():
     v = np.clip(v * limb, 0, 1)
     rgb = np.stack([v * 248, v * 244, v * 232], axis=-1)
     save_png('moon', rgb, disc)
+    # 달의 모양 일곱 가지 (차는 초승달·상현·차는 반달 넘은 달·보름·기우는 달·하현·그믐달): 해가 비추는 쪽만 밝고,
+    # 어두운 쪽은 지구빛으로 아주 희미하게. 앱이 방마다 하나를 고름 (moon_ph0~6)
+    nx = (xx - cx) / R; ny = (yy - cy) / R
+    nz = np.sqrt(np.clip(1 - nx ** 2 - ny ** 2, 0, 1))
+    for k, (e, wane) in enumerate([(0.75, False), (math.pi / 2, False), (2.3, False), (math.pi, False), (2.3, True), (math.pi / 2, True), (0.75, True)]):
+        sx = math.sin(e) * (-1 if wane else 1)
+        lit = nx * sx - nz * math.cos(e)
+        lit = np.clip((lit + 0.04) / 0.1, 0, 1)
+        lit = lit * lit * (3 - 2 * lit)
+        vv = v * (0.07 + 0.93 * lit)
+        rgbk = np.stack([vv * 248, vv * 244, vv * 232], axis=-1)
+        save_png(f'moon_ph{k}', rgbk, disc * (0.05 + 0.95 * lit))
 
 
 # 먼 풍경 띠의 위·아래 끝 (방 바닥 기준 높이 / 반지름 → 고도각) — RoomWorld Decor 의 pano 띠와 같은 값
@@ -435,7 +447,8 @@ def photo_textures():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import fetch_env
     target = {'grass': 92, 'moss': 82, 'pebble': 132, 'sand': 182, 'dirt': 118, 'planks': 128, 'planks_dark': 78,
-              'brick': 118, 'plaster': 218, 'rock': 124, 'mossrock': 100, 'bark': 86, 'cliff': 112}
+              'brick': 118, 'plaster': 218, 'rock': 124, 'mossrock': 100, 'bark': 86, 'cliff': 112,
+              'fabric': 150, 'walnut': 92, 'concrete': 138}
     for name, i in fetch_env.TEXTURES.items():
         path = fetch_env.tex_path(i)
         if not os.path.exists(path):
@@ -447,18 +460,41 @@ def photo_textures():
 
 
 def cloud_sprites():
-    """하늘을 천천히 흐르는 구름 한 장 (투명, 아래쪽이 조금 어두움)"""
-    W = 512
-    for i in range(3):
-        n = noise(2.1, W, 40 + i)
-        yy, xx = np.mgrid[0:W, 0:W]
-        d = np.hypot((xx - W / 2) / (W / 2), (yy - W / 2) / (W / 2.4))
-        mask = np.clip(1 - d, 0, 1) ** 0.7
-        a = np.clip((n * 1.35 - 0.4) * mask * 2.6, 0, 1)
-        s = 0.72 + 0.28 * noise(1.4, W, 50 + i)
-        rgb = np.stack([s * 255] * 3, axis=-1)
-        a = np.asarray(Image.fromarray((a * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(2))) / 255
+    """하늘을 천천히 흐르는 구름 여섯 가지 (아래에서 올려다본 구름 밑면, 투명):
+    0~2 뭉게구름, 3 조각조각 흩어진 층적운, 4 길게 쓸린 새털구름, 5 넓게 덮인 비구름.
+    큰 덩어리 모양(부드러운 잡음)을 문턱값으로 잘라 윤곽이 실제 구름처럼 불규칙하고, 두꺼운 가운데는 그늘져 어둡고 얇은 가장자리는 밝게 비침"""
+    W, H = 1024, 512
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    u, v = xx / W - 0.5, yy / H - 0.5
+    def env(rx, ry, seed, warp=0.25):
+        wx = (noise(3.2, W, seed, h=H) - 0.5) * warp
+        wy = (noise(3.2, W, seed + 1, h=H) - 0.5) * warp
+        return np.clip(1 - np.sqrt(((u + wx) / rx) ** 2 + ((v + wy) / ry) ** 2), 0, 1)
+    def finish(i, d, lo, hi, base_dark=0.36):
+        a = np.clip((d - lo) / (hi - lo), 0, 1)
+        a = a * a * (3 - 2 * a)
+        thick = np.clip((d - hi) / max(0.05, (d.max() - hi)), 0, 1)
+        lit = 0.98 - base_dark * thick ** 0.8 + 0.04 * (noise(2.0, W, 90 + i, h=H) - 0.5)
+        rgb = np.stack([lit * 244, lit * 247, lit * 252], axis=-1)
         save_png(f'cloud_{i}', rgb, a, folder='sky')
+    for i, (rx, ry, sd) in enumerate([(0.42, 0.36, 11), (0.46, 0.3, 12), (0.36, 0.42, 13)]):
+        big = noise(3.0, W, sd + 100, h=H)
+        mid = noise(2.2, W, sd + 200, h=H)
+        d = env(rx, ry, sd) * 1.6 * (0.55 * big + 0.3 * mid + 0.15)
+        finish(i, d, 0.42, 0.75)
+    # 층적운: 넓게 퍼진 잡음을 촘촘히 잘라 조각조각
+    cells = noise(2.4, W, 301, h=H, aniso=(1.0, 0.7))
+    d = np.clip(env(0.5, 0.46, 300, 0.15) * 2.2, 0, 1) * (0.25 + 1.0 * cells)
+    finish(3, d, 0.6, 0.85, base_dark=0.25)
+    # 새털구름: 바람에 길게 쓸린 결
+    st = noise(2.0, W, 311, h=H, aniso=(1.0, 0.07))
+    d = np.clip(env(0.48, 0.34, 310, 0.3) * 2.0, 0, 1) * (0.2 + 1.1 * st)
+    finish(4, d, 0.55, 0.95, base_dark=0.06)
+    # 비구름: 넓게 덮인 무거운 덩어리
+    big = noise(2.8, W, 321, h=H)
+    mid = noise(2.0, W, 322, h=H)
+    d = np.clip(env(0.5, 0.48, 320, 0.3) * 2.0, 0, 1) * (0.7 * big + 0.3 * mid)
+    finish(5, d, 0.3, 0.62, base_dark=0.5)
 
 
 # ───────────── 지평선 띠 (원기둥에 둘러 붙임, 위는 투명) ─────────────
@@ -971,6 +1007,75 @@ def tree_line_single(W, H, seed, kind, dark, lit):
     return rgb, a
 
 
+def foliage_cards():
+    """입체 나무용 잎 덩어리 그림 (투명): 넓은잎 덩이 leaf_clump, 소나무 가지 pine_branch, 야자 잎 palm_frond.
+    나무 하나를 이런 잎 판 수십 장을 사방으로 엇갈려 꽂아 만들어, 어느 쪽에서 봐도 둥근 부피가 있는 나무로 보임"""
+    S2 = 2
+    def leafpoly(cx, cy, L, Wd, ang):
+        pts = []
+        for k in range(12):
+            t = k / 11
+            x = (t - 0.5) * L
+            y = math.sin(t * math.pi) * Wd / 2
+            pts.append((x, y))
+        for k in range(10, 0, -1):
+            t = k / 11
+            pts.append(((t - 0.5) * L, -math.sin(t * math.pi) * Wd / 2))
+        ca, sa = math.cos(ang), math.sin(ang)
+        return [((cx + x * ca - y * sa) * S2, (cy + x * sa + y * ca) * S2) for x, y in pts]
+    # 넓은잎 덩이: 둥근 덩어리 안에 잎 수백 장, 위(빛 쪽)는 밝고 아래·안쪽은 어둡게
+    W = 512
+    r = rng(2101)
+    im = Image.new('RGBA', (W * S2, W * S2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    for i in range(900):
+        ang = r.uniform(0, 2 * math.pi); rad = (r.random() ** 0.6) * W * 0.4
+        cx, cy = W / 2 + math.cos(ang) * rad, W / 2 + math.sin(ang) * rad * 0.9
+        light = np.clip(0.55 - (cy - W / 2) / W * 0.9 + (rad / W) * 0.3 + r.normal(0, 0.12), 0, 1)
+        col = tuple(int(c) for c in lerp(np.array([22, 44, 18.0]), np.array([118, 158, 62.0]), light)) + (255,)
+        d.polygon(leafpoly(cx, cy, r.uniform(26, 44), r.uniform(12, 20), r.uniform(0, math.pi)), fill=col)
+    im = im.resize((W, W), Image.LANCZOS)
+    arr = np.asarray(im).astype(np.float32)
+    save_png('leaf_clump', arr[..., :3], arr[..., 3] / 255)
+    # 소나무 가지: 가운데 가는 가지에서 바늘잎이 양쪽으로, 끝으로 갈수록 짧게 (가지 끝이 오른쪽)
+    Wb, Hb = 512, 256
+    r = rng(2102)
+    im = Image.new('RGBA', (Wb * S2, Hb * S2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.line([(8 * S2, Hb / 2 * S2), ((Wb - 10) * S2, (Hb / 2 - 6) * S2)], fill=(70, 52, 36, 255), width=6 * S2)
+    for i in range(1400):
+        t = r.random()
+        x = 10 + t * (Wb - 24); y = Hb / 2 - 6 * t
+        L = (1 - t * 0.6) * r.uniform(40, 100)
+        side = r.choice([-1, 1]); ang = side * r.uniform(0.5, 1.3) + 0.25
+        x2, y2 = x + math.cos(ang) * L * 0.6, y + math.sin(ang) * L
+        light = np.clip(0.5 - side * 0.2 + r.normal(0, 0.15), 0, 1)
+        col = tuple(int(c) for c in lerp(np.array([14, 36, 22.0]), np.array([70, 112, 60.0]), light)) + (255,)
+        d.line([(x * S2, y * S2), (x2 * S2, y2 * S2)], fill=col, width=2 * S2)
+    im = im.resize((Wb, Hb), Image.LANCZOS)
+    arr = np.asarray(im).astype(np.float32)
+    save_png('pine_branch', arr[..., :3], arr[..., 3] / 255)
+    # 야자 잎: 가운데 잎줄기에서 길쭉한 작은 잎이 빗살처럼 늘어짐 (잎 끝이 오른쪽)
+    Wp, Hp = 1024, 256
+    r = rng(2103)
+    im = Image.new('RGBA', (Wp * S2, Hp * S2), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.line([(4 * S2, Hp / 2 * S2), ((Wp - 6) * S2, Hp / 2 * S2)], fill=(120, 110, 60, 255), width=7 * S2)
+    for i in range(170):
+        t = i / 170
+        x = 20 + t * (Wp - 40)
+        for side in (-1, 1):
+            L = (math.sin(min(1, t * 1.15) * math.pi) * 0.85 + 0.15) * Hp * 0.48 * r.uniform(0.85, 1.05)
+            ang = side * (1.0 + r.normal(0, 0.08)) + 0.35
+            x2, y2 = x + math.cos(ang) * L * 0.45, Hp / 2 + math.sin(ang) * L
+            light = np.clip(0.55 - side * 0.15 + r.normal(0, 0.1), 0, 1)
+            col = tuple(int(c) for c in lerp(np.array([30, 62, 22.0]), np.array([120, 160, 64.0]), light)) + (255,)
+            d.polygon([(x * S2, Hp / 2 * S2), ((x + 3) * S2, Hp / 2 * S2), (x2 * S2, y2 * S2), ((x2 - 4) * S2, (y2 - side * 2) * S2)], fill=col)
+    im = im.resize((Wp, Hp), Image.LANCZOS)
+    arr = np.asarray(im).astype(np.float32)
+    save_png('palm_frond', arr[..., :3], arr[..., 3] / 255)
+
+
 # ───────────── 바닥·벽·물건 무늬 (1024, jpg) ─────────────
 N = 1024
 
@@ -1082,8 +1187,17 @@ def floor_marble():
 
 
 def wall_plaster():
+    """전시관 벽: 매끈한 흰 대리석 느낌 (아주 옅은 회색 결 + 가는 물결 무늬)"""
     v = 0.7 * noise(0.5, N, 381) + 0.3 * noise(2.4, N, 382)
-    save_jpg('plaster', colorize(v, [(0, (222, 218, 210)), (1, (246, 244, 238))]))
+    rgb = colorize(v, [(0, (230, 228, 222)), (1, (248, 247, 243))])
+    warp = noise(2.6, N, 383) * 6
+    yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)
+    vein = np.abs(np.sin((xx * 0.004 + yy * 0.007) * 6 + warp)) < 0.035
+    vein2 = np.abs(np.sin((xx * 0.006 - yy * 0.003) * 5 + warp * 1.3)) < 0.02
+    rgb[vein] *= 0.9
+    rgb[vein2] *= 0.94
+    rgb = np.asarray(Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.2))).astype(np.float32)
+    save_jpg('plaster', rgb)
 
 
 def wall_brick():
@@ -1138,11 +1252,18 @@ def facade(night=False):
     lit = rng(463).random((S // 32, S // 32))
     win = ((xx % 32) > 5) & ((xx % 32) < 27) & ((yy % 32) > 7) & ((yy % 32) < 26)
     if night:
-        rgb = rgb * 0.3
-        on = lit[yy // 32, xx // 32] > 0.5
-        warm = np.array([255, 210, 140.0]) * (0.75 + 0.25 * noise(0.5, S, 464)[..., None])
-        rgb[win & on] = warm[win & on]
-        rgb[win & ~on] = [16, 20, 28]
+        # 밤: 불 켜진 창은 4분의 1쯤만, 창마다 밝기·빛깔(따뜻한 빛·형광등·커튼 너머 어스름)이 다름 → 네온이 돋보이게 차분히
+        rgb = rgb * 0.22
+        cell = lit[yy // 32, xx // 32]
+        tone = rng(465).random((S // 32, S // 32))[yy // 32, xx // 32]
+        on = cell > 0.74
+        dimw = (cell > 0.62) & ~on
+        warm = np.array([255, 204, 136.0]) * (0.55 + 0.45 * tone)[..., None]
+        cool = np.array([196, 214, 236.0]) * (0.5 + 0.4 * tone)[..., None]
+        col = np.where((tone > 0.7)[..., None], cool, warm)
+        rgb[win] = [12, 15, 22]
+        rgb[win & on] = col[win & on]
+        rgb[win & dimw] = (np.array([96, 70, 48.0]) * (0.6 + 0.4 * tone)[..., None])[win & dimw]
     else:
         sky_ = np.array([150, 172, 196.0]) * (0.8 + 0.2 * lit[yy // 32, xx // 32])[..., None]
         sky_ = sky_ * (0.9 + 0.15 * (yy % 32) / 32)[..., None]
@@ -2283,7 +2404,8 @@ def main():
         'trees': lambda: (
             tree_single('tree_pine', 'pine', 501, (16, 36, 24), (72, 110, 64)),
             tree_single('tree_broad', 'broad', 502, (24, 44, 20), (110, 148, 64)),
-            tree_single('tree_twisted', 'twisted', 503, (20, 40, 28), (78, 112, 70))),
+            tree_single('tree_twisted', 'twisted', 503, (20, 40, 28), (78, 112, 70)),
+            foliage_cards()),
         'floors': lambda: (
             floor_grass(), floor_moss(), floor_pebble(), floor_sand(), floor_roof(), floor_dirt(),
             floor_planks('planks', [(0, (96, 62, 36)), (0.5, (142, 98, 58)), (1, (184, 136, 88))]),
@@ -2293,6 +2415,8 @@ def main():
             prop_rock('mossrock', [(0, (40, 56, 34)), (0.5, (88, 104, 70)), (1, (140, 150, 116))], 413),
             prop_rock('basalt', [(0, (28, 30, 34)), (0.5, (58, 60, 64)), (1, (98, 100, 102))], 415),
             prop_simple('cliff', [(0, (60, 56, 50)), (0.5, (112, 104, 94)), (1, (160, 152, 140))], 427, aniso=(0.35, 1.6)),
+            prop_simple('fabric', [(0, (120, 104, 88)), (0.5, (164, 148, 128)), (1, (196, 184, 166))], 429, beta=0.4),
+            prop_simple('walnut', [(0, (52, 34, 22)), (0.5, (92, 62, 40)), (1, (136, 96, 62))], 431, aniso=(4, 0.2)),
             prop_simple('bark', [(0, (52, 38, 28)), (0.5, (98, 74, 52)), (1, (140, 110, 80))], 417, aniso=(3, 0.2)),
             prop_simple('driftwood', [(0, (100, 96, 88)), (0.5, (150, 144, 132)), (1, (196, 190, 176))], 419, aniso=(0.2, 3)),
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),

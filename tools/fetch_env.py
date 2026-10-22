@@ -44,12 +44,15 @@ TEXTURES = {
     'planks': 'plank_flooring',
     'planks_dark': 'dark_wooden_planks',
     'brick': 'red_brick',
-    'plaster': 'rough_plaster_03',
     'rock': 'aerial_rocks_02',
     'mossrock': 'mossy_rock',
     'bark': 'bark_brown_02',
     'cliff': 'cliff_side',          # 계곡 폭포 뒤 절벽·절벽 띠 (세로 암벽 사진)
+    'fabric': 'wool_boucle',        # 통나무집 가구 (포근한 털실 천)
+    'walnut': 'american_walnut_veneer',   # 카페 가구 (윤나는 호두나무)
+    'concrete': 'concrete_wall_003',      # 도시 옥상 구조물 (콘크리트)
 }
+# 전시관 벽(plaster)은 실사 대신 직접 그린 흰 대리석 느낌 벽을 씀 (실사 거친 회벽은 통나무집처럼 투박해 보였음)
 
 
 def sky_url(i):

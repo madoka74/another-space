@@ -1075,43 +1075,51 @@ final class ExploreSession {
         starCard?.isEnabled = false
     }
 
-    /// 정보판 자리: 눈높이보다 조금 아래, 별자리 반대쪽으로 28도쯤 비켜 (하늘을 올려다보던 고개를 내리면 바로 읽게).
-    /// 판의 네 귀퉁이·가장자리·옮기기 막대까지 모두 방 안(벽·천장·문·가구에서 6cm 넘게 떨어짐)이고 내 눈에서 가로막는 것이 없는 자리만.
-    /// 천장·벽 너머로 삐져나가면 판이 그 면에 잘려 보였음 → 들어갈 때까지 가까이(그만큼 작게, 보이는 크기는 같게)·옆으로 옮김
+    /// 정보판 자리: 탭한 별자리를 보던 그 높이(위로 젖힌 고개 그대로), 별자리 옆으로 28도쯤 비켜 — 별자리를 가리지 않고 바로 읽힘.
+    /// 판은 늘 나를 정면으로 보고(기울어짐), 네 귀퉁이·옮기기 막대까지 모두 방 안(천장·벽·문·가구에서 떨어짐)인 자리만.
+    /// 높이 올려다보면 천장에 걸리므로 들어갈 때까지 가까이(그만큼 작게 — 보이는 크기는 같음), 그래도 안 되면 조금씩 낮춤
     private func placeStarCard(away cdir: SIMD3<Float>) {
         guard let card = starCard else { return }
         card.isEnabled = true
+        var hz = SIMD3<Float>(cdir.x, 0, cdir.z)
+        if simd_length(hz) < 0.05 { hz = SIMD3<Float>(fwd.x, 0, fwd.z) }
+        hz = simd_length(hz) > 0.01 ? simd_normalize(hz) : SIMD3<Float>(0, 0, -1)
+        let elev0 = min(0.87, max(0.05, asin(min(1, max(-1, simd_normalize(cdir).y)))))      // 별자리 높이 (최대 50도)
         var g = fwd; g.y = 0
-        g = simd_length(g) > 0.01 ? simd_normalize(g) : SIMD3<Float>(0, 0, -1)
+        g = simd_length(g) > 0.01 ? simd_normalize(g) : hz
         let right = simd_normalize(simd_cross(g, SIMD3<Float>(0, 1, 0)))
-        let side: Float = simd_dot(cdir, right) > 0 ? 1 : -1                   // 별자리가 오른쪽이면 왼쪽으로
+        let side: Float = simd_dot(hz, right) > 0 ? 1 : -1                     // 별자리가 오른쪽이면 판은 그 왼쪽에
         let full: Float = 0.95
         var hw: Float = 0.25, hh: Float = 0.28
         card.scale = SIMD3<Float>(repeating: 1)
         let bb = card.visualBounds(relativeTo: card)
         if bb.extents.x > 0.05 && bb.extents.y > 0.05 { hw = bb.extents.x / 2; hh = bb.extents.y / 2 }
         var best: (SIMD3<Float>, Float)? = nil
-        search: for yaw: Float in [0.49, 0.72, 0.3, 0.95, 0.12, 1.25] {
-            let d = simd_normalize(simd_quatf(angle: side * yaw, axis: [0, 1, 0]).act(g))
-            let cr = simd_normalize(simd_cross(d, SIMD3<Float>(0, 1, 0)))
-            var dist = full
-            while dist >= 0.38 {
-                let k = dist / full
-                let c = head + d * dist + SIMD3<Float>(0, -0.1 * k, 0)
-                var ok = clearance(simd_normalize(c - head)) > simd_distance(c, head) + 0.04
-                if ok {
-                    pts: for sx: Float in [-1, -0.5, 0, 0.5, 1] {
-                        for sy: Float in [-1.25, -1, 0, 1] {                  // -1.25 = 아래 옮기기 막대
-                            let q = c + cr * (sx * (hw + 0.04) * k) + SIMD3<Float>(0, sy * (hh + 0.04) * k, 0)
-                            if !spaceFree(q) { ok = false; break pts }
+        search: for drop: Float in [0, 0.15, 0.3, 0.45, 0.6] {
+            let elev = max(-0.1, elev0 - drop)
+            for yaw: Float in [0.49, 0.7, 0.32, 0.95] {
+                let h2 = simd_normalize(simd_quatf(angle: side * yaw, axis: [0, 1, 0]).act(hz))
+                let d = simd_normalize(h2 * cos(elev) + SIMD3<Float>(0, sin(elev), 0))
+                let cr = simd_normalize(simd_cross(d, SIMD3<Float>(0, 1, 0)))       // 판의 가로
+                let cu = simd_normalize(simd_cross(cr, d))                            // 판의 세로 (나를 향해 기운 판)
+                var dist = full
+                while dist >= 0.36 {
+                    let k = dist / full
+                    let c = head + d * dist
+                    var ok = clearance(d) > dist + 0.04
+                    if ok {
+                        pts: for sx: Float in [-1, -0.5, 0, 0.5, 1] {
+                            for sy: Float in [-1.25, -1, 0, 1] {                   // -1.25 = 아래 옮기기 막대
+                                let q = c + cr * (sx * (hw + 0.04) * k) + cu * (sy * (hh + 0.04) * k)
+                                if !spaceFree(q) { ok = false; break pts }
+                            }
                         }
                     }
+                    if ok { best = (c, k); break search }
+                    dist -= 0.04
                 }
-                if ok { best = (c, k); break search }
-                dist -= 0.05
             }
         }
-        // 어디에도 다 들어가지 않으면 시선 정면 가장 가까운 자리에 작게
         let spot = best ?? (head + g * 0.4 + SIMD3<Float>(0, -0.05, 0), 0.4 / full)
         card.scale = SIMD3<Float>(repeating: spot.1)
         card.position = spot.0
@@ -1154,6 +1162,7 @@ final class ExploreSession {
         stars?.tick(dt, gaze: gaze)
         // 바다 해파리: 머리 자리(가까이 오면 비켜 감) · 계곡 물고기: 손(물에 대면 흩어짐)
         wld.jelly?.head = f.toSaved(head)
+        if wld.jelly?.furnitureH == nil, let v = vox { wld.jelly?.furnitureH = { p in v.heightAt(L.plane(p.x, p.y)) } }
         wld.creek?.tick(dt, hands: handPts, feet: f.toSaved(head))
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
@@ -1340,8 +1349,8 @@ final class ExploreSession {
         func free(_ p: SIMD2<Float>, _ r: Float) -> Bool {
             let c = L.at(x: p.x, z: p.y)
             guard c.room == current, c.wall > r + 0.05 else { return false }
-            for ring in [Float(0), r * 0.5, r] {
-                let n = ring == 0 ? 1 : 10
+            for ring in [Float(0), r * 0.33, r * 0.66, r] {
+                let n = ring == 0 ? 1 : 16
                 for k in 0..<n {
                     let a = Float(k) / Float(n) * 2 * .pi
                     let q = p + SIMD2<Float>(cos(a), sin(a)) * ring
@@ -1368,7 +1377,9 @@ final class ExploreSession {
             }
         }
         cands.sort { $0.1 < $1.1 }
-        guard let pick = cands.first(where: { free($0.0, $0.2) }) else { return }      // 앞에 18cm 빈 바닥도 없으면 피우지 않음
+        // 불 자리 = 모래 바닥 원(돌 둘레의 1.1배, 눈 오면 1.45배) + 연기·불꽃 여유 22cm 안에 가구·벽·문이 없어야 (사물과 겹치지 않게)
+        let snowy = ["snow", "heavysnow"].contains(rm.weather)
+        guard let pick = cands.first(where: { free($0.0, $0.2 * (snowy ? 1.45 : 1.1) + 0.22) }) else { return }      // 들어갈 자리가 없으면 피우지 않음
         let wd = simd_quatf(angle: -w.angle, axis: [0, 1, 0]).act(SIMD3<Float>(1, 0, 0.35))
         let cf = Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd, ceilH: rm.ceil, sky: w.world,
                           scale: pick.2 / 0.55)

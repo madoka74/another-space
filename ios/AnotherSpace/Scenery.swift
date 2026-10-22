@@ -197,29 +197,129 @@ final class Scenery {
 
     // MARK: 바다
     private func addBoats<G: RandomNumberGenerator>(R: Float, floorY: Float, night: Bool, using g: inout G) {
-        let hullM = solid([0.45, 0.32, 0.22]), sailM = solid([0.96, 0.94, 0.9])
-        for _ in 0..<4 {
-            let b = Entity()
-            let L: Float = Float.random(in: 4...7, using: &g)
-            let hull = ModelEntity(mesh: .generateBox(width: L * 0.28, height: L * 0.14, depth: L, cornerRadius: L * 0.05), materials: [hullM])
-            hull.position = [0, L * 0.05, 0]
-            b.addChild(hull)
-            var sail = Geo()
-            sail.quad(SIMD3<Float>(0, L * 0.12, -L * 0.3), SIMD3<Float>(0, L * 0.12, L * 0.25), SIMD3<Float>(0, L * 0.95, -L * 0.15),
-                      SIMD3<Float>(0, L * 0.95, -L * 0.15), .zero, .zero, .zero, .zero)
-            if let e = sail.entity("sail", sailM) { b.addChild(e) }
-            if night {
-                let lamp = ModelEntity(mesh: .generateSphere(radius: L * 0.05), materials: [solid([1, 0.85, 0.5])])
-                lamp.position = [0, L * 0.6, 0]
-                b.addChild(lamp)
-                blinkers.append((lamp, 0))
-            }
-            let rad = R + Float.random(in: 70...230, using: &g)
+        for i in 0..<4 {
+            let L: Float = Float.random(in: 8...13, using: &g)
+            let b = makeYacht(L: L, night: night, variant: i, using: &g)
+            let rad = R + Float.random(in: 60...220, using: &g)
             let a = Float.random(in: 0...(2 * .pi), using: &g)
             let w = Float.random(in: 0.6...1.4, using: &g) / rad * (Bool.random(using: &g) ? 1 : -1)
             far.addChild(b)
             boats.append((b, SIMD3<Float>(center.x, floorY - 0.4, center.z), a, rad, w))
         }
+    }
+
+    /// 세일링 요트 (길이 L, 뱃머리 = +z): 뾰족한 뱃머리에서 넓어졌다 고물에서 조금 좁아지는 흰 선체(현호가 앞으로 살짝 솟음) +
+    /// 물에 닿는 짙은 띠 + 나무 갑판 + 작은 선실(창 띠) + 돛대·붐 + 바람에 부푼 큰 돛(메인)·앞 돛(지브) + 앞뒤 버팀줄.
+    /// 밤: 돛대 꼭대기 흰 등, 왼쪽 빨강·오른쪽 초록 항해등, 선실 창 불빛. 선 그림: 흰 면 + 검은 윤곽선
+    private func makeYacht<G: RandomNumberGenerator>(L: Float, night: Bool, variant: Int, using g: inout G) -> Entity {
+        let root = Entity()
+        let line = look == .line
+        let B = L * 0.17                                    // 반폭
+        let hullCols: [SIMD3<Float>] = [[0.95, 0.95, 0.93], [0.93, 0.94, 0.95], [0.16, 0.22, 0.36], [0.96, 0.95, 0.92]]
+        let hullM = line ? Ink.paper(0) : UnlitMaterial(color: Tex.color(hullCols[variant % hullCols.count]))
+        let stripeM = line ? Ink.line : UnlitMaterial(color: Tex.color(variant % 4 == 2 ? [0.92, 0.92, 0.9] : [0.12, 0.18, 0.34]))
+        let deckM = line ? Ink.paper(1) : UnlitMaterial(color: Tex.color([0.62, 0.48, 0.32]))
+        let sailM = line ? Ink.paper(0) : UnlitMaterial(color: Tex.color([0.97, 0.96, 0.92]))
+        let rigM = line ? Ink.line : UnlitMaterial(color: Tex.color([0.3, 0.3, 0.32]))
+        let winM = line ? Ink.line : UnlitMaterial(color: night ? Tex.color([1, 0.82, 0.5]) : Tex.color([0.12, 0.15, 0.2]))
+        // 선체: 고물(-L/2) → 뱃머리(+L/2) 단면들
+        let n = 12
+        func half(_ t: Float) -> Float { t < 0.6 ? B * (0.82 + 0.18 * sin(t / 0.6 * .pi / 2)) : B * cos((t - 0.6) / 0.4 * .pi / 2) }
+        func sheer(_ t: Float) -> Float { L * (0.075 + 0.04 * t * t) }
+        func zAt(_ t: Float) -> Float { -L / 2 + L * t }
+        var hull = Geo(), deck = Geo(), stripe = Geo(), lines = Geo()
+        for i in 0..<n {
+            let t0 = Float(i) / Float(n), t1 = Float(i + 1) / Float(n)
+            for side: Float in [-1, 1] {
+                let a0 = SIMD3<Float>(side * half(t0), sheer(t0), zAt(t0)), a1 = SIMD3<Float>(side * half(t1), sheer(t1), zAt(t1))
+                let c0 = SIMD3<Float>(side * half(t0) * 0.75, -L * 0.01, zAt(t0)), c1 = SIMD3<Float>(side * half(t1) * 0.75, -L * 0.01, zAt(t1))
+                let k0 = SIMD3<Float>(0, -L * 0.05, zAt(t0)), k1 = SIMD3<Float>(0, -L * 0.05, zAt(t1))
+                hull.quad(a0, a1, c1, c0, .zero, .zero, .zero, .zero)
+                hull.quad(c0, c1, k1, k0, .zero, .zero, .zero, .zero)
+                // 물에 닿는 짙은 띠 (옆면 아래쪽, 살짝 바깥)
+                let s0 = c0 + (a0 - c0) * 0.18 + SIMD3<Float>(side * 0.01, 0, 0), s1 = c1 + (a1 - c1) * 0.18 + SIMD3<Float>(side * 0.01, 0, 0)
+                stripe.quad(c0 + SIMD3<Float>(side * 0.01, 0, 0), c1 + SIMD3<Float>(side * 0.01, 0, 0), s1, s0, .zero, .zero, .zero, .zero)
+                if line { lines.stroke(a0, a1, width: L * 0.006); lines.stroke(c0, c1, width: L * 0.004) }
+            }
+            let l0 = SIMD3<Float>(-half(t0), sheer(t0) - L * 0.004, zAt(t0)), r0 = SIMD3<Float>(half(t0), sheer(t0) - L * 0.004, zAt(t0))
+            let l1 = SIMD3<Float>(-half(t1), sheer(t1) - L * 0.004, zAt(t1)), r1 = SIMD3<Float>(half(t1), sheer(t1) - L * 0.004, zAt(t1))
+            deck.quad(l0, r0, r1, l1, .zero, .zero, .zero, .zero)
+        }
+        // 고물 판 (뒤를 막음)
+        let tl = SIMD3<Float>(-half(0), sheer(0), zAt(0)), tr = SIMD3<Float>(half(0), sheer(0), zAt(0))
+        hull.quad(tl, tr, SIMD3<Float>(half(0) * 0.75, -L * 0.01, zAt(0)), SIMD3<Float>(-half(0) * 0.75, -L * 0.01, zAt(0)), .zero, .zero, .zero, .zero)
+        if line { lines.stroke(tl, tr, width: L * 0.006) }
+        if let e = hull.entity("yachtHull", hullM) { root.addChild(e) }
+        if let e = stripe.entity("yachtStripe", stripeM) { root.addChild(e) }
+        if let e = deck.entity("yachtDeck", deckM) { root.addChild(e) }
+        // 선실: 갑판 가운데 뒤쪽, 앞이 비스듬한 낮은 집 + 창 띠
+        let cab = Entity()
+        let cw = B * 1.1, ch = L * 0.055, cl = L * 0.3
+        let cabin = ModelEntity(mesh: .generateBox(width: cw, height: ch, depth: cl, cornerRadius: ch * 0.3), materials: [hullM])
+        cab.addChild(cabin)
+        let win = ModelEntity(mesh: .generateBox(width: cw * 1.01, height: ch * 0.28, depth: cl * 0.7), materials: [winM])
+        win.position = [0, ch * 0.08, 0]
+        cab.addChild(win)
+        cab.position = [0, sheer(0.35) + ch / 2, -L * 0.08]
+        root.addChild(cab)
+        // 돛대·붐
+        let mastH = L * 1.25
+        let mz = L * 0.08
+        let deckY = sheer(0.58)
+        let mast = ModelEntity(mesh: .generateCylinder(height: mastH, radius: L * 0.007), materials: [rigM])
+        mast.position = [0, deckY + mastH / 2, mz]
+        root.addChild(mast)
+        let boomY = deckY + L * 0.13, boomL = L * 0.42
+        let tack = Float.random(in: -0.35...0.35, using: &g)                // 바람 받는 쪽으로 돌린 붐
+        let boomEnd = SIMD3<Float>(sin(tack) * boomL, boomY, mz - cos(tack) * boomL)
+        var rig = Geo()
+        rig.stroke(SIMD3<Float>(0, boomY, mz), boomEnd, width: L * 0.012)
+        // 버팀줄: 뱃머리 → 돛대 꼭대기 → 고물
+        let headT = SIMD3<Float>(0, deckY + mastH * 0.98, mz), bow = SIMD3<Float>(0, sheer(1), L / 2)
+        rig.stroke(bow, headT, width: L * 0.003)
+        rig.stroke(SIMD3<Float>(0, sheer(0), -L / 2), headT, width: L * 0.003)
+        if let e = rig.entity("yachtRig", rigM) { root.addChild(e) }
+        // 돛: 바람에 부푼 면 (가운데가 바깥으로 불룩) — 메인(돛대·붐 사이 세모), 지브(앞 버팀줄 쪽 세모)
+        func sail(_ a: SIMD3<Float>, _ top: SIMD3<Float>, _ clew: SIMD3<Float>, belly: SIMD3<Float>) -> Geo {
+            var s2 = Geo()
+            let rows = 6
+            for r in 0..<rows {
+                let v0 = Float(r) / Float(rows), v1 = Float(r + 1) / Float(rows)
+                // 아래 변(a→clew)에서 꼭대기로 좁아짐
+                let l0 = a + (top - a) * v0, l1 = a + (top - a) * v1
+                let e0 = clew + (top - clew) * v0, e1 = clew + (top - clew) * v1
+                let m0 = (l0 + e0) / 2 + belly * (1 - v0) * 0.9, m1 = (l1 + e1) / 2 + belly * (1 - v1) * 0.9
+                s2.quad(l0, m0, m1, l1, .zero, .zero, .zero, .zero)
+                s2.quad(m0, e0, e1, m1, .zero, .zero, .zero, .zero)
+            }
+            return s2
+        }
+        let side = SIMD3<Float>(cos(tack), 0, sin(tack)) * (tack >= 0 ? -1 : 1)
+        let main = sail(SIMD3<Float>(0, boomY + 0.05, mz), SIMD3<Float>(0, deckY + mastH * 0.95, mz - L * 0.02), boomEnd + SIMD3<Float>(0, 0.05, 0),
+                        belly: side * L * 0.06)
+        let jib = sail(bow + SIMD3<Float>(0, L * 0.02, -L * 0.03), headT - SIMD3<Float>(0, mastH * 0.18, -L * 0.01),
+                       SIMD3<Float>(side.x * B * 0.9, deckY + L * 0.06, mz - L * 0.12), belly: side * L * 0.05)
+        if let e = main.entity("yachtMain", sailM) { root.addChild(e) }
+        if let e = jib.entity("yachtJib", sailM) { root.addChild(e) }
+        if line {
+            let mt = SIMD3<Float>(0, deckY + mastH * 0.95, mz - L * 0.02)
+            for (p, q) in [(SIMD3<Float>(0, boomY + 0.05, mz), mt), (mt, boomEnd), (bow, headT - SIMD3<Float>(0, mastH * 0.18, -L * 0.01))] {
+                lines.stroke(p, q, width: L * 0.005)
+            }
+            if let e = lines.entity("yachtLines", Ink.line) { root.addChild(e) }
+        }
+        if night && !line {
+            let top = ModelEntity(mesh: .generateSphere(radius: L * 0.018), materials: [UnlitMaterial(color: Tex.color([1, 0.97, 0.9]))])
+            top.position = headT + SIMD3<Float>(0, L * 0.02, 0)
+            root.addChild(top)
+            for (x, c) in [(Float(-1), SIMD3<Float>(1, 0.15, 0.1)), (1, SIMD3<Float>(0.2, 1, 0.35))] {
+                let l = ModelEntity(mesh: .generateSphere(radius: L * 0.014), materials: [UnlitMaterial(color: Tex.color(c))])
+                l.position = [x * half(0.8), sheer(0.8) + L * 0.01, zAt(0.8)]
+                root.addChild(l)
+            }
+            blinkers.append((top, 0))
+        }
+        return root
     }
 
     // MARK: 도시
@@ -513,7 +613,7 @@ final class Scenery {
                 pe.mainEmitter.blendMode = .alpha
                 pe.mainEmitter.color = .constant(.single(pcolor([1, 1, 1], 0.15)))
                 pe.mainEmitter.opacityCurve = .gradualFadeInOut
-                if let puff = Tex.get("smoke_puff", color: true) { pe.mainEmitter.image = puff }
+                if let puff = Tex.particle("smoke_puff") { pe.mainEmitter.image = puff }
                 pe.isEmitting = false
                 let se = Entity()
                 se.components.set(pe)

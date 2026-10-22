@@ -478,9 +478,21 @@ final class ValleyCreek {
                 f.e.addChild(f.tail)
             }
             if look == .line {
-                var l = Geo()
-                l.stroke([0.5 * f.size, 0, 0], [-0.4 * f.size, 0, 0], width: 0.004)
+                // 선 그림: 위에서 본 몸 윤곽(머리→꼬리 양쪽 선) + 꼬리 윤곽 + 눈 — 물 위에서 내려다봐도 또렷하게
+                var l = Geo(), tl = Geo()
+                let s = f.size, y = 0.135 * s, w = max(0.0025, s * 0.03)
+                func half(_ k: Float) -> Float { 0.13 * pow(sin(.pi * min(1, max(0, k)) * 0.95 + 0.08), 0.85) * s * 0.55 }
+                for side: Float in [-1, 1] {
+                    for i in 0..<10 {
+                        let k0 = Float(i) / 10, k1 = Float(i + 1) / 10
+                        l.stroke([(0.5 - k0) * s, y, side * half(k0)], [(0.5 - k1) * s, y, side * half(k1)], width: w)
+                    }
+                    tl.stroke([0, y, 0], [-0.22 * s, y, side * 0.09 * s], width: w)
+                    tl.stroke([-0.22 * s, y, side * 0.09 * s], [-0.17 * s, y, 0], width: w)
+                    l.stroke([0.36 * s, y, side * 0.035 * s], [0.33 * s, y, side * 0.035 * s], width: w * 1.6)
+                }
                 if let e = l.entity("fishLine", Ink.line) { f.e.addChild(e) }
+                if let e = tl.entity("fishTailLine", Ink.line) { f.tail.addChild(e) }
             }
             local.addChild(f.e)
             fish.append(f)
@@ -531,12 +543,13 @@ final class ValleyCreek {
     }
 
     private func ripple(at p: SIMD2<Float>) {
-        guard look != .line else { return }
         if rippleMat == nil {
-            var m = UnlitMaterial(color: UIColor(white: 0.95, alpha: 1))
+            // 선 그림: 물결 고리를 검은 선으로 (오려 내기), 컬러·흑백: 하얀 물결
+            var m = UnlitMaterial(color: look == .line ? UIColor(white: 0.07, alpha: 1) : UIColor(white: 0.95, alpha: 1))
             if let mk = Tex.get("ripple_a", raw: true) {
                 var tp = MaterialParameters.Texture(mk); tp.sampler = Tex.clamp
-                m.blending = .transparent(opacity: .init(scale: 0.55, texture: tp))
+                m.blending = .transparent(opacity: .init(scale: look == .line ? 1 : 0.55, texture: tp))
+                if look == .line { m.opacityThreshold = 0.35 }
             } else {
                 m.blending = .transparent(opacity: .init(floatLiteral: 0.2))
             }

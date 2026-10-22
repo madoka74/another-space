@@ -75,18 +75,17 @@ final class NeonCity {
             }
         }
         // ② 옥상 바로 옆 건물: 한 채에 하나 — 눈높이쯤 돌출 간판 또는 옥상 위 간판
-        for (i, b) in near.enumerated() {
+        for b in near {
             let f = face(b, toward: center)
-            if i % 2 == 0 {
-                blade(b, f, yLo: floorY - 1, yHi: floorY + 3.5, scale: 1, near: true, &g)
-            } else {
-                roof(b, f, scale: 1, near: true, &g)
-            }
+            blade(b, f, yLo: floorY - 1, yHi: floorY + 3.5, scale: 1.1, near: true, &g)       // 눈높이에 튀어나온 세로 간판
+            roof(b, f, scale: 1, near: true, &g)                                                // 옥상 위 큰 가로 간판
+            upright(b, f, scale: 0.8, &g)
+            shop(b, f, scale: 1, &g)                                                            // 내려다보이는 1층 가게
         }
-        // ③ 먼 빌딩: 가까운 것부터 12채, 한 채에 한두 개 (옥상·돌출·가게·벽 세로 중 그 건물에 맞는 것)
+        // ③ 둘레 빌딩: 가까운 것부터 22채, 한 채에 두세 개 (옥상·돌출·가게·벽 세로 중 그 건물에 맞는 것) — 도시의 밤을 네온이 채우게
         let sorted = far.sorted { simd_distance($0.base, center) < simd_distance($1.base, center) }
         var used = 0
-        for b in sorted where used < 12 {
+        for b in sorted where used < 22 {
             let f = face(b, toward: center)
             let dist = simd_distance(SIMD2<Float>(b.base.x, b.base.z), SIMD2<Float>(center.x, center.z))
             let sc: Float = dist < 45 ? 1 : (dist < 90 ? 1.5 : 2.2)
@@ -96,7 +95,8 @@ final class NeonCity {
             else if r < 0.6 { blade(b, f, yLo: b.base.y + 6, yHi: b.base.y + min(b.h - 4, 26), scale: sc, near: false, &g) }
             else if r < 0.8 { shop(b, f, scale: sc, &g) }
             else { upright(b, f, scale: sc, &g) }
-            if Float.random(in: 0...1, using: &g) < 0.3 { shop(b, f, scale: sc, &g) }        // 1층 가게 간판을 하나 더
+            shop(b, f, scale: sc, &g)                                                           // 1층 가게 간판
+            if Float.random(in: 0...1, using: &g) < 0.6 { blade(b, f, yLo: b.base.y + 6, yHi: b.base.y + 18, scale: sc, near: false, &g) }
             if signs.count > before { used += 1 }
         }
     }
@@ -105,7 +105,7 @@ final class NeonCity {
 
     /// 옥상 위 간판: 꼭대기 가장자리에서 1m 안쪽에 세움, 아래 끝이 지붕 위 40cm
     private func roof<G: RandomNumberGenerator>(_ b: Box, _ f: Face, scale: Float, near: Bool, _ g: inout G) {
-        let sw = min(f.fw * Float.random(in: 0.45...0.7, using: &g), 7 * scale)
+        let sw = min(f.fw * Float.random(in: 0.5...0.8, using: &g), 11 * scale)
         let sh = sw / 4
         let top = b.base.y + b.h
         let along = Float.random(in: -0.15...0.15, using: &g) * max(0, f.fw - sw)
@@ -190,14 +190,14 @@ final class NeonCity {
                                                  wallBehind: Bool, twoSided: Bool = false, facade: SIMD3<Float>? = nil, _ g: inout G) {
         let right = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), n))
         let hr = right * (w / 2), hu = SIMD3<Float>(0, h / 2, 0)
-        let pad = max(0.4, w * 0.25)
+        let pad = max(0.3, w * 0.12)
         let ex = SIMD3<Float>(abs(hr.x), abs(hu.y), abs(hr.z)) + SIMD3<Float>(repeating: pad) + simd_abs(n) * 0.3
         guard free(p - ex, p + ex, pts: [p, p - hr - hu, p + hr - hu, p + hr + hu, p - hr + hu]) else { return }
         taken.append((p - ex, p + ex))
         let idx: Int
         if vert { idx = vPool.removeFirst(); vPool.append(idx) } else { idx = hPool.removeFirst(); hPool.append(idx) }      // 색·모양이 고르게 돌아가며
         let name = String(format: "neon_%02d", idx)
-        let alpha: Float = 0.55 + 0.45 * k
+        let alpha: Float = 0.7 + 0.3 * k
         let ma = mat(name + "a", alpha), mb = mat(name + "b", alpha)
         var ents: [ModelEntity] = []
         for side in (twoSided ? [Float(1), -1] : [Float(1)]) {
@@ -212,13 +212,13 @@ final class NeonCity {
         guard !ents.isEmpty else { return }
         // 벽에 번지는 빛 (간판 색으로 옅게): 붙은 벽 또는 돌출 간판이 매달린 벽
         var spill: ModelEntity? = nil
-        let wallN: SIMD3<Float>? = wallBehind ? n : facade
+        let wallN: SIMD3<Float>? = wallBehind ? n : (facade ?? n)              // 옥상 간판은 간판 뒤로 빛이 번짐
         if look != .line, let wn = wallN, let tx = Tex.get("glow", color: look == .color), let mk = Tex.get("glow_a", raw: true) {
             var sq = Geo()
             let sr = simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), wn))
             // 벽 면 위: 벽에 붙은 간판은 바로 뒤, 돌출 간판은 매달린 자리
-            let sp = wallBehind ? p - wn * 0.2 : p - wn * (w / 2 + 0.23)
-            let span = wallBehind ? w * 0.85 : w * 1.6
+            let sp = wallBehind ? p - wn * 0.2 : (facade != nil ? p - wn * (w / 2 + 0.23) : p - wn * 0.08)
+            let span = wallBehind || facade == nil ? w * 0.85 : w * 1.6
             let shr = sr * span, shu = SIMD3<Float>(0, h * 0.5 + w * 0.3, 0)
             sq.quad(sp - shr - shu, sp + shr - shu, sp + shr + shu, sp - shr + shu, SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
             let c = Self.colors[idx % Self.colors.count]
@@ -227,7 +227,7 @@ final class NeonCity {
             var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.clamp
             sm.color = .init(tint: ui, texture: tp)
             var mp = MaterialParameters.Texture(mk); mp.sampler = Tex.clamp
-            sm.blending = .transparent(opacity: .init(scale: 0.1 + 0.22 * k, texture: mp))
+            sm.blending = .transparent(opacity: .init(scale: 0.14 + 0.32 * k, texture: mp))
             sm.writesDepth = false                 // 반투명 판이 뒤의 건물을 네모나게 지우지 않게
             spill = sq.entity("neonSpill", sm)
             if let s = spill { world.addChild(s) }

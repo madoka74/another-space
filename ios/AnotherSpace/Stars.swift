@@ -58,8 +58,8 @@ enum SkyData {
 
 /// 숲 테마의 밤하늘: 오늘 밤(테마 시간에 맞춘 시각) 서울에서 보이는 실제 하늘.
 /// - 별은 아주 많이: 실제 밝은 별들 + 고르지 않은 별자리의 별 + 희미한 별 무리(눈으로 겨우 보이는 별처럼)
-/// - 별자리는 한 번에 3~4개, 하늘 여기저기 떨어진 것으로 (숲 나무 꼭대기보다 넉넉히 위, 머리 바로 위는 피해 지평선 위 42~74도)
-/// - 별자리 선은 늘 흐리게 보여 어디 있는지 찾을 수 있음. 바라보면 별·선이 밝아지고, 탭하면 더 밝게 + 정보판
+/// - 별자리는 한 번에 3~4개, 하늘 여기저기 떨어진 것으로 (머리 위는 피해 지평선 위 24~50도, 숲은 밤에 나무를 멀리 물려 19도 아래)
+/// - 바라보면 그 별자리 별들이 크고 밝게 반짝임(선 없음). 탭하면 선이 이어지고 정보판이 그 별자리 높이 옆에 뜸
 /// - 별은 '오려 내기'(가장자리 투명 부분은 아예 그리지 않음)로 그려 별끼리·선과 겹쳐도 네모 판이 비치지 않음.
 ///   밝기 바꾸기·반짝임도 투명도 대신 재질을 바꿔 끼움 (반투명이 되면 다시 네모가 비침)
 /// 밤에 가장 또렷하고, 새벽·해질녘엔 밝은 별만 흐리게, 낮엔 안 보임. 구름이 끼면 흐려졌다 또렷해졌다, 비·눈이면 가려짐.
@@ -186,10 +186,10 @@ final class SkyStars {
             let ctr = simd_normalize(sum)
             var rad: Float = 0
             for l in c.lines { for s in l { rad = max(rad, acos(min(1, simd_dot(dir(s.ra, s.dec, lst), ctr)))) } }
-            // 숲의 나무 꼭대기(눈높이에서 35도 아래) 위로 넉넉히, 머리 바로 위는 피함: 가운데가 지평선 위 42~74도, 모든 별이 36도 위
+            // 고개를 많이 젖히지 않고 볼 수 있게 (머리 위는 피함): 가운데가 지평선 위 24~50도, 모든 별이 숲 나무 꼭대기(19도)보다 위인 20도 넘게
             var low: Float = 1
             for l in c.lines { for s in l { low = min(low, dir(s.ra, s.dec, lst).y) } }
-            if ctr.y > 0.67 && ctr.y < 0.96 && low > 0.59 && n >= 4 && rad < 0.42 && rad > 0.06 { cands.append((c, ctr)) }
+            if ctr.y > 0.41 && ctr.y < 0.77 && low > 0.34 && n >= 4 && rad < 0.42 && rad > 0.06 { cands.append((c, ctr)) }
         }
         // 덜 알려진 아주 작은 것보다 모양이 또렷한 것(별이 많은 것)을 먼저, 그 안에서 무작위
         cands.shuffle()
@@ -319,8 +319,9 @@ final class SkyStars {
             guard simd_distance(pa, pb) > gap * 2.2 else { continue }
             lines.stroke(pa + d * gap, pb - d * gap, width: R * 0.0024)
         }
-        // 선은 늘 흐리게 보임(어디에 별자리가 있는지 찾을 수 있게), 바라보거나 탭하면 밝게. 불투명 재질만 바꿔 끼움(네모 판 없음)
-        if let e = lines.entity("conLines", lineMats[0]) {
+        // 선은 탭해서 고른 뒤에만 이어짐 (그 전엔 별의 크기·밝기 반짝임으로만 알려 줌)
+        if let e = lines.entity("conLines", lineMats[2]) {
+            e.isEnabled = false
             root.addChild(e)
             g.lines = e
         }
@@ -376,10 +377,7 @@ final class SkyStars {
             if g.focus > 0.5 { lv = 4 + max(0, min(3, Int(((0.5 + 0.5 * sin(t * 5)) * 3).rounded()))) }
             if lv != g.level, let e = g.stars { e.model?.materials = [conMats[lv]]; g.level = lv }
             if g.picked { g.reveal = min(1, g.reveal + dt / 0.8) } else if g.reveal > 0 { g.reveal = max(0, g.reveal - dt * 1.5) }
-            if let l = g.lines {
-                let li = g.picked ? 2 : (g.focus > 0.5 ? 1 : 0)
-                if li != g.lineLevel { l.model?.materials = [lineMats[li]]; g.lineLevel = li }
-            }
+            if let l = g.lines, l.isEnabled != g.picked { l.isEnabled = g.picked }
             if let lb = g.label {
                 lb.components.set(OpacityComponent(opacity: g.reveal * cl))
                 if !g.picked && g.reveal <= 0 { lb.removeFromParent(); g.label = nil }
@@ -407,6 +405,10 @@ final class SkyStars {
         let alt: Float = Float.random(in: 0.42...0.62, using: &rg)
         let v = simd_normalize(SIMD3<Float>(cos(alt) * cos(az), sin(alt), cos(alt) * sin(az)))
         let dist = R * 0.95
+        // 달 모양 (방마다 하나): 0 초승달 · 1 상현 · 2 차는 달 · 3 보름 · 4 기우는 달 · 5 하현 · 6 그믐달
+        let phase = Int.random(in: 0...6, using: &rg)
+        let elong: [Float] = [0.75, .pi / 2, 2.3, .pi, 2.3, .pi / 2, 0.75]
+        let lit = (1 - cos(elong[phase])) / 2                          // 밝은 부분 비율 (달무리 밝기)
         func quad(_ size: Float) -> Geo {
             var g = Geo()
             starQuad(&g, v, size: size, r: dist)
@@ -416,17 +418,17 @@ final class SkyStars {
         var hm = UnlitMaterial(color: look == .line ? UIColor(white: 0.5, alpha: 1) : UIColor(red: 0.75, green: 0.82, blue: 1, alpha: 1))
         if let mask {
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
-            hm.blending = .transparent(opacity: .init(scale: look == .line ? 0.15 : 0.32, texture: mp))
+            hm.blending = .transparent(opacity: .init(scale: (look == .line ? 0.15 : 0.32) * (0.25 + 0.75 * lit), texture: mp))
             hm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         }
         if let e = quad(dist * 0.13).entity("moonHalo", hm) { root.addChild(e) }
         var mm = UnlitMaterial(color: look == .line ? UIColor(white: 0.97, alpha: 1) : .white)
         let mode: LookMode = look == .color ? .color : .mono
-        if look != .line, let tx = Tex.with(mode, { Tex.get("moon") }) {
+        if look != .line, let tx = Tex.with(mode, { Tex.get("moon_ph\(phase)") ?? Tex.get("moon") }) {
             var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.clamp
             mm.color = .init(tint: .white, texture: tp)
         }
-        if let a = Tex.get(look == .line ? "moon_lna" : "moon_a", raw: true) ?? Tex.get("moon_a", raw: true) {
+        if let a = Tex.get("moon_ph\(phase)_a", raw: true) ?? Tex.get("moon_a", raw: true) {
             var tp = MaterialParameters.Texture(a); tp.sampler = Tex.clamp
             mm.blending = .transparent(opacity: .init(scale: 1, texture: tp))
             mm.opacityThreshold = 0.5
@@ -440,6 +442,15 @@ final class SkyStars {
             for k in 0..<32 {
                 let a0 = Float(k) / 32 * 2 * .pi, a1 = Float(k + 1) / 32 * 2 * .pi
                 l.stroke(v * dist * 0.995 + (right * cos(a0) + up * sin(a0)) * rr, v * dist * 0.995 + (right * cos(a1) + up * sin(a1)) * rr, width: dist * 0.0012)
+            }
+            // 밝은 곳과 어두운 곳의 경계 (보름이 아니면): x = ±cos(e)·√(1-y²)
+            if phase != 3 {
+                let sgn: Float = phase < 3 ? 1 : -1
+                for k in 0..<16 {
+                    let y0 = -1 + Float(k) / 8, y1 = -1 + Float(k + 1) / 8
+                    let x0 = sgn * cos(elong[phase]) * sqrt(max(0, 1 - y0 * y0)), x1 = sgn * cos(elong[phase]) * sqrt(max(0, 1 - y1 * y1))
+                    l.stroke(v * dist * 0.995 + (right * x0 + up * y0) * rr, v * dist * 0.995 + (right * x1 + up * y1) * rr, width: dist * 0.0009)
+                }
             }
             if let e = l.entity("moonLine", Ink.line) { root.addChild(e) }
         }

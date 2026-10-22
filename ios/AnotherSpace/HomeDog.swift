@@ -140,7 +140,7 @@ final class HomeDog {
         if let m = mats[n] { return m }
         var m = UnlitMaterial(color: .white)
         let mode: LookMode = look == .color ? .color : .mono
-        if let tx = Tex.with(mode, { Tex.get(n) }) {
+        if let tx = look == .line ? Tex.inked(n) : Tex.with(mode, { Tex.get(n) }) {      // 선 그림: 윤곽선만 검게, 칠은 흰 종이
             var p = MaterialParameters.Texture(tx); p.sampler = Tex.clamp
             m.color = .init(tint: .white, texture: p)
         }

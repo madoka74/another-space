@@ -122,15 +122,15 @@ enum Worlds {
                               open: true, barrier: "barrier_city", barrierH: 1.15, ground: "roof", groundTile: 2.4,
                               groundFar: [0.16, 0.16, 0.18], skylight: false)
         case "cafe":
-            return WorldStyle(floor: "planks_dark", floorTile: 1.6, wall: "brick", wallTile: 1.6, prop: "planks", propTile: 0.8,
-                              propTint: [0.9, 0.82, 0.74], open: false, barrier: "", barrierH: 0, ground: "asphalt", groundTile: 2.4,
+            return WorldStyle(floor: "planks_dark", floorTile: 1.6, wall: "brick", wallTile: 1.6, prop: "walnut", propTile: 0.8,
+                              propTint: [0.95, 0.9, 0.86], open: false, barrier: "", barrierH: 0, ground: "asphalt", groundTile: 2.4,
                               groundFar: [0.20, 0.20, 0.22], skylight: true)
         case "gallery":
             return WorldStyle(floor: "marble", floorTile: 2.0, wall: "plaster", wallTile: 2.0, prop: "marble", propTile: 1.0, propTint: w,
                               open: false, barrier: "", barrierH: 0, ground: "grass", groundTile: 2.2,
                               groundFar: [0.26, 0.32, 0.20], skylight: true)
         default:   // home: 숲속 통나무집
-            return WorldStyle(floor: "planks", floorTile: 1.6, wall: "timber", wallTile: 1.8, prop: "bark", propTile: 0.8, propTint: w,
+            return WorldStyle(floor: "planks", floorTile: 1.6, wall: "timber", wallTile: 1.8, prop: "fabric", propTile: 0.7, propTint: w,
                               open: false, barrier: "", barrierH: 0, ground: "moss", groundTile: 2.0,
                               groundFar: [0.14, 0.22, 0.11], skylight: true)
         }

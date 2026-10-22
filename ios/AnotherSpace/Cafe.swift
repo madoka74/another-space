@@ -580,7 +580,7 @@ final class CafeTables {
         pe.mainEmitter.color = .constant(.single(look == .line ? UIColor(white: 0.45, alpha: 0.12) : UIColor(white: 1, alpha: 0.11)))
         pe.mainEmitter.blendMode = .alpha
         pe.mainEmitter.opacityCurve = .gradualFadeInOut
-        if let puff = Tex.get("smoke_puff", color: true) { pe.mainEmitter.image = puff }
+        if let puff = Tex.particle("smoke_puff") { pe.mainEmitter.image = puff }
         let se = Entity()
         se.components.set(pe)
         se.position = at
