@@ -246,6 +246,9 @@ final class RoomWorld {
         for e in portals { e.components.set(ModelSortGroupComponent(group: sortGroup, order: order)) }
     }
 
+    /// 선 그림 외곽선 굵기: 멀리 있을수록 굵게 (눈에 보이는 굵기가 실내·소품과 비슷하게)
+    private func inkW(_ p: SIMD3<Float>) -> Float { Ink.width(at: simd_distance(p, center)) }
+
     private func layer(_ e: Entity, _ order: Int) {
         e.components.set(ModelSortGroupComponent(group: sortGroup, order: Int32(order)))
     }
@@ -688,7 +691,7 @@ final class RoomWorld {
                 let lit = Worlds.safe(tint, min: 0.6)
                 let woodDark = Tex.unlit("planks_dark", tint: lit, folder: "tex", sampler: Tex.clamp)
                 let woodLight = Tex.unlit("planks", tint: lit * 0.95, folder: "tex", sampler: Tex.clamp)
-                let gold = Self.gold(rough: 0.3)
+                let gold = Self.gold(rough: 0.3, mono: look == .mono)
                 // 문틀: 양옆 기둥 + 위 가로대 (벽에 4cm 걸치게)
                 let fw: Float = 0.09
                 for x in [-hl - fw / 2 + 0.04, hl + fw / 2 - 0.04] {
@@ -774,7 +777,7 @@ final class RoomWorld {
                 let c2 = L.flat(ds.mid)                                   // 두 입구 줄 사이 가운데
                 let lit = Worlds.safe(tint, min: 0.6)
                 let woodLight = Tex.unlit("planks", tint: lit * 0.95, folder: "tex", sampler: Tex.clamp)
-                let gold = Self.gold(rough: 0.3)
+                let gold = Self.gold(rough: 0.3, mono: look == .mono)
                 let real = Entity()
                 real.position = SIMD3<Float>(c2.x, floorY, c2.y)
                 real.orientation = q
@@ -799,8 +802,17 @@ final class RoomWorld {
     }
 
     /// 빛을 받는 황금 (실제 방의 빛이 비쳐 반짝임)
-    static func gold(rough: Float, glow: Float = 0.35) -> PhysicallyBasedMaterial {
+    static func gold(rough: Float, glow: Float = 0.35, mono: Bool = false) -> PhysicallyBasedMaterial {
         var m = PhysicallyBasedMaterial()
+        if mono {                                         // 흑백: 은빛 (색 없이)
+            m.baseColor = .init(tint: UIColor(white: 0.85, alpha: 1))
+            m.metallic = .init(floatLiteral: 1)
+            m.roughness = .init(floatLiteral: rough)
+            m.emissiveColor = .init(color: UIColor(white: 0.9, alpha: 1))
+            m.emissiveIntensity = glow
+            m.baseColor = .init(tint: UIColor(white: 0.85, alpha: 1))
+            return m
+        }
         m.baseColor = .init(tint: UIColor(red: 1.0, green: 0.76, blue: 0.33, alpha: 1))
         m.metallic = .init(floatLiteral: 1)
         m.roughness = .init(floatLiteral: rough)
@@ -994,6 +1006,7 @@ final class RoomWorld {
                 }
             }
             if let e = l.entity("speakerLines", Ink.line) { body.addChild(e) }
+            Ink.hull(can); Ink.hull(flange)                     // 옆에서 본 외곽선
         }
         local.addChild(root)
         speakerCone = cone
@@ -1970,6 +1983,7 @@ final class RoomWorld {
                 flows.append((e, hm, 0.9, 0.3))
             }
         }
+        if lineMode, let h = stones.inkHull("riverRocksInk", width: inkW) { layer(h, 5); world.addChild(h) }
         if let e = stones.entity("riverRocks", Tex.unlit("rock", tint: rockTint)) {
             layer(e, 5)
             world.addChild(e)
@@ -2171,6 +2185,7 @@ final class RoomWorld {
         }
         if let e = talus.entity("cliffTalus", Tex.unlit("rock", tint: Worlds.safe(tint * 0.7, min: 0.18))) { layer(e, 2); world.addChild(e) }
         if let e = boulders.entity("cliffBoulders", Tex.unlit("rock", tint: Worlds.safe(tint * 0.8, min: 0.2))) { layer(e, 3); world.addChild(e) }
+        if lineMode, let h = boulders.inkHull("cliffBouldersInk", width: inkW) { layer(h, 3); world.addChild(h) }
         let tx = Tex.get("cliff") != nil ? "cliff" : "rock"
         if let e = wall.entity("cliffRing", Tex.unlit(tx, tint: Worlds.safe(tint * 0.85, min: 0.2))) { layer(e, 2); world.addChild(e) }
         if let e = top.entity("cliffTop", Tex.unlit("grass", tint: Worlds.safe(tint * 0.7, min: 0.2))) { layer(e, 2); world.addChild(e) }
@@ -2302,6 +2317,7 @@ final class RoomWorld {
                 }
             }
             if let e = geo.entity("rocks", Tex.unlit(rk.tex, tint: Worlds.safe(tint * shades[1], min: 0.25))) { world.addChild(e) }
+            if lineMode, let h = geo.inkHull("rocksInk", width: inkW) { world.addChild(h) }
         }
         if !riverPts.isEmpty { addRiver(floorY: floorY, using: &g) }
         var tentLines = Geo()
@@ -2605,7 +2621,7 @@ final class RoomWorld {
                                materials: [UnlitMaterial(color: UIColor(white: 0.08, alpha: 0.85))])
         disc.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
         e.addChild(disc)
-        let ring = ModelEntity(mesh: .generateCylinder(height: 0.006, radius: 0.044), materials: [gold(rough: 0.3, glow: 0.5)])
+        let ring = ModelEntity(mesh: .generateCylinder(height: 0.006, radius: 0.044), materials: [gold(rough: 0.3, glow: 0.5, mono: look == .mono)])
         ring.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
         ring.position = [0, 0, -0.002]
         e.addChild(ring)

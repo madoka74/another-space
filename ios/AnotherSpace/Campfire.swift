@@ -100,6 +100,7 @@ final class Campfire {
         if wet { stoneTint = SIMD3<Float>(0.5, 0.48, 0.46) } else if snowy { stoneTint = SIMD3<Float>(0.95, 0.95, 0.97) }
         let stoneM: RealityKit.Material = line ? Ink.paper(1) : Tex.with(look) { Tex.unlit("rock", tint: stoneTint, folder: "tex", sampler: Tex.tiling) }
         if let e = stones.entity("fireStones", stoneM) { remains.addChild(e) }
+        if line, let h = stones.inkHull("fireStonesInk", width: { _ in Ink.w }) { remains.addChild(h) }      // 선 그림: 돌마다 외곽선
         // 눈: 불기운에 녹아 드러난 흙 / 비: 젖어 짙은 흙
         if snowy || wet {
             var d = Geo()
@@ -117,6 +118,7 @@ final class Campfire {
             let out = SIMD3<Float>(cos(a), 0, sin(a))
             log.position = out * 0.1 + SIMD3<Float>(0, 0.19 * size + 0.03, 0)
             log.orientation = simd_quatf(angle: -0.42, axis: simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), out)))
+            if line { Ink.hull(log) }                        // 선 그림: 장작 외곽선
             remains.addChild(log)
             logs.append(log)
         }
@@ -124,6 +126,7 @@ final class Campfire {
             let log = ModelEntity(mesh: .generateCylinder(height: 0.5, radius: 0.045), materials: [logM])
             log.orientation = simd_quatf(angle: a, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
             log.position = [0, 0.045 + Float(k) * 0.05, 0]
+            if line { Ink.hull(log) }
             remains.addChild(log)
             logs.append(log)
         }

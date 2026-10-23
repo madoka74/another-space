@@ -672,7 +672,7 @@ final class HomeDog {
         if look == .line {
             m = Ink.paper(1)
         } else {
-            var um = UnlitMaterial(color: UIColor(red: 0.48, green: 0.33, blue: 0.2, alpha: 1))
+            var um = UnlitMaterial(color: look == .color ? UIColor(red: 0.48, green: 0.33, blue: 0.2, alpha: 1) : UIColor(white: 0.36, alpha: 1))
             if let tx = Tex.with(look == .color ? .color : .mono, { Tex.get("stick") }) {
                 var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.tiling
                 um.color = .init(tint: .white, texture: tp)
@@ -685,6 +685,7 @@ final class HomeDog {
         twig.orientation = simd_quatf(angle: -0.7, axis: [0, 0, 1])
         e.addChild(twig)
         if look == .line {
+            Ink.hull(e, width: 0.005); Ink.hull(twig, width: 0.004)        // 막대 외곽선
             var l = Geo()
             l.stroke([0, -0.135, 0], [0, 0.135, 0], width: 0.005)
             if let le = l.entity("stickLine", Ink.line) { e.addChild(le) }

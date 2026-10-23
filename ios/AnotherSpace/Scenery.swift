@@ -150,6 +150,9 @@ final class Scenery {
 
     // MARK: 공통
     /// 표시 방식에 맞는 단색 재질 (선 그림이면 검정)
+    /// 선 그림: 상자·공·원기둥 소품에 외곽선
+    private func inkOut(_ e: ModelEntity) { if look == .line { Ink.hull(e) } }
+
     private func solid(_ c: SIMD3<Float>) -> UnlitMaterial {
         look == .line ? Ink.line : UnlitMaterial(color: Tex.color(c))
     }
@@ -795,6 +798,7 @@ final class Scenery {
                 func cyl(_ r: Float, _ h: Float, _ at: SIMD3<Float>, _ m: RealityKit.Material) {
                     let e = ModelEntity(mesh: .generateCylinder(height: h, radius: r), materials: [m])
                     e.position = at
+                    inkOut(e)
                     near.addChild(e)
                 }
                 let front = look == .line ? Ink.paper(1) : Tex.unlit("planks_dark", tint: [0.8, 0.66, 0.54], folder: "tex", sampler: Tex.tiling)
@@ -858,6 +862,7 @@ final class Scenery {
                     let dome = ModelEntity(mesh: .generateSphere(radius: 0.155), materials: [glass])
                     dome.position = cPos + SIMD3<Float>(0, 0.012, 0)
                     dome.scale = [1, 1.05, 1]
+                    inkOut(dome)
                     near.addChild(dome)
                 }
                 // 작은 화분
@@ -866,6 +871,7 @@ final class Scenery {
                 let leaf = ModelEntity(mesh: .generateSphere(radius: 0.085), materials: [paper([0.24, 0.46, 0.22])])
                 leaf.position = pPos + SIMD3<Float>(0, 0.16, 0)
                 leaf.scale = [1, 0.85, 1]
+                inkOut(leaf)
                 near.addChild(leaf)
             }
         }
@@ -903,6 +909,7 @@ final class Scenery {
                     default: h = 0.14; e = ModelEntity(mesh: .generateCylinder(height: h, radius: 0.05), materials: [jarM])
                     }
                     e.position = base + SIMD3<Float>(0, h / 2, 0)
+                    inkOut(e)
                     near.addChild(e)
                     if kind == 0 && !steamDone && y < 1.7 {
                         steamDone = true
@@ -1113,6 +1120,7 @@ final class Scenery {
             let log = ModelEntity(mesh: .generateCylinder(height: 0.42, radius: 0.04), materials: [logM])
             log.orientation = simd_quatf(angle: .pi / 2, axis: [0, 0, 1]) * simd_quatf(angle: a, axis: [1, 0, 0])
             log.position = [x, 0.05, 0.1]
+            inkOut(log)
             root.addChild(log)
         }
         var flameM = UnlitMaterial(color: look == .line ? UIColor(white: 0.15, alpha: 1) : Tex.color([1, 0.75, 0.35]))

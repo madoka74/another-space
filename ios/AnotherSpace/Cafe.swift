@@ -223,6 +223,7 @@ final class CafeTables {
             let holder = Entity()
             holder.position = SIMD3<Float>(w2.x, top + 0.001, w2.y)
             var lines = Geo()
+            curHolder = holder
             switch it.1 {
             case "cup":
                 let drink = Int(g.next() % 5)
@@ -260,6 +261,11 @@ final class CafeTables {
 
     private func pbr(_ c: SIMD3<Float>, rough: Float = 0.35, metal: Float = 0, coat: Bool = false) -> RealityKit.Material {
         if look == .line { return Ink.paper(0) }
+        // 흑백: 빛을 받는 재질(PBR)은 실제 방의 빛 색(노란 조명 등)과 촛불 빛을 받아 색이 묻어나 보였음 → 빛을 받지 않는 회색
+        if look == .mono {
+            let l = min(1, max(0, c.x * 0.3 + c.y * 0.59 + c.z * 0.11))
+            return UnlitMaterial(color: UIColor(white: CGFloat(0.12 + 0.8 * l), alpha: 1))
+        }
         var m = PhysicallyBasedMaterial()
         m.baseColor = .init(tint: Tex.with(look) { Tex.color(c) })
         m.roughness = .init(scale: rough)
@@ -270,6 +276,12 @@ final class CafeTables {
 
     private func glass(_ alpha: Float = 0.22) -> RealityKit.Material {
         if look == .line { return Ink.paper(0) }
+        if look == .mono {
+            var g = UnlitMaterial(color: UIColor(white: 0.85, alpha: 1))
+            g.blending = .transparent(opacity: .init(scale: alpha))
+            g.writesDepth = false
+            return g
+        }
         var m = PhysicallyBasedMaterial()
         m.baseColor = .init(tint: UIColor(white: 0.95, alpha: 1))
         m.roughness = .init(scale: 0.04)
@@ -291,17 +303,47 @@ final class CafeTables {
         e.position = at
         e.scale = sc
         e.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0]) * simd_quatf(angle: tilt, axis: [0, 0, 1])
-        if look != .line { e.components.set(GroundingShadowComponent(castsShadow: true)) }
+        if look != .line { e.components.set(GroundingShadowComponent(castsShadow: true)) } else { Ink.hull(e) }
         p.addChild(e)
+    }
+
+    private var curHolder: Entity?
+
+    /// 선 그림: 돌림체(컵·접시·병)의 바깥 윤곽 — 옆모습 선을 늘 나를 향하게 세운 판(빌보드)에 그림.
+    /// 돌림체는 어느 쪽에서 봐도 옆모습이 같아, 이 선이 늘 물체의 외곽선과 겹침 (반지름 + 굵기 절반 바깥이라 물체에 가리지 않음)
+    private func silhouette(_ prof: [SIMD2<Float>], at p: SIMD2<Float>, y0: Float) {
+        guard look == .line, let h = curHolder, prof.count > 1 else { return }
+        // 바깥쪽 선만: 아래 가운데에서 시작해 위로 올라가다 안쪽으로 꺾여 내려가기 전까지
+        var outer: [SIMD2<Float>] = [prof[0]]
+        for i in 1..<prof.count {
+            if prof[i].y < prof[i - 1].y - 1e-4 && prof[i].x < prof[i - 1].x { break }
+            outer.append(prof[i])
+        }
+        var g = Geo()
+        let w = Ink.w
+        for side: Float in [-1, 1] {
+            for i in 0..<(outer.count - 1) {
+                let a = outer[i], b = outer[i + 1]
+                g.stroke(SIMD3<Float>(side * (a.x + w * 0.5), y0 + a.y, 0), SIMD3<Float>(side * (b.x + w * 0.5), y0 + b.y, 0), width: w)
+            }
+        }
+        if let last = outer.last {                                           // 위 테두리 (가장자리 사이)
+            g.stroke(SIMD3<Float>(-(last.x + w * 0.5), y0 + last.y, 0), SIMD3<Float>(last.x + w * 0.5, y0 + last.y, 0), width: w)
+        }
+        guard let e = g.entity("silhouette", Ink.line) else { return }
+        e.position = SIMD3<Float>(p.x, 0, p.y)
+        e.components.set(BillboardComponent())
+        h.addChild(e)
     }
 
     private func outline(_ prof: [SIMD2<Float>], at p: SIMD2<Float>, y0: Float = 0, _ lines: inout Geo, rings: [Int]) {
         guard look == .line else { return }
+        silhouette(prof, at: p, y0: y0)
         for i in rings where i < prof.count && prof[i].x > 0.004 {
             let r = prof[i].x, y = y0 + prof[i].y
             for k in 0..<18 {
                 let a0 = Float(k) / 18 * 2 * .pi, a1 = Float(k + 1) / 18 * 2 * .pi
-                lines.stroke(SIMD3<Float>(p.x + cos(a0) * r, y, p.y + sin(a0) * r), SIMD3<Float>(p.x + cos(a1) * r, y, p.y + sin(a1) * r), width: 0.0025)
+                lines.stroke(SIMD3<Float>(p.x + cos(a0) * r, y, p.y + sin(a0) * r), SIMD3<Float>(p.x + cos(a1) * r, y, p.y + sin(a1) * r), width: Ink.w)
             }
         }
     }
@@ -341,7 +383,7 @@ final class CafeTables {
         var h = Solid()
         h.tube(hp, radius: { _ in 0.0042 * s })
         add(h, gm, to: root, "handle")
-        if look == .line { for i in 0..<hp.count - 1 { lines.stroke(hp[i], hp[i + 1], width: 0.0025) } }
+        if look == .line { for i in 0..<hp.count - 1 { lines.stroke(hp[i], hp[i + 1], width: Ink.w) } }
         // 커피 면
         let top = y0 + 0.052 * s * sy
         let rr: Float = 0.041 * s
@@ -427,7 +469,7 @@ final class CafeTables {
             var cr = Solid()
             cr.tube(pts, radius: { u in 0.006 + 0.019 * pow(sin(u * .pi), 0.8) }, flat: 0.72)
             add(cr, pbr([0.8, 0.53, 0.22], rough: 0.55), to: root, "croissant")
-            if look == .line { for i in 0..<pts.count - 1 { lines.stroke(pts[i], pts[i + 1], width: 0.0025) } }
+            if look == .line { for i in 0..<pts.count - 1 { lines.stroke(pts[i], pts[i + 1], width: Ink.w) } }
         case 1:
             // 케이크 조각: 시트·크림 층, 위에 딸기
             let L: Float = 0.085, W: Float = 0.036
@@ -441,7 +483,7 @@ final class CafeTables {
             }
             let top = (b + c) / 2 * 0.6 + a * 0.4
             ball(0.011, SIMD3<Float>(top.x, y + 0.066, top.y), [1, 1.25, 1], pbr([0.84, 0.1, 0.15], rough: 0.3, coat: true), to: root)
-            if look == .line { lines.stroke(SIMD3<Float>(a.x, y + 0.056, a.y), SIMD3<Float>(b.x, y + 0.056, b.y), width: 0.0025); lines.stroke(SIMD3<Float>(a.x, y + 0.056, a.y), SIMD3<Float>(c.x, y + 0.056, c.y), width: 0.0025); lines.stroke(SIMD3<Float>(b.x, y + 0.056, b.y), SIMD3<Float>(c.x, y + 0.056, c.y), width: 0.0025) }
+            if look == .line { lines.stroke(SIMD3<Float>(a.x, y + 0.056, a.y), SIMD3<Float>(b.x, y + 0.056, b.y), width: Ink.w); lines.stroke(SIMD3<Float>(a.x, y + 0.056, a.y), SIMD3<Float>(c.x, y + 0.056, c.y), width: Ink.w); lines.stroke(SIMD3<Float>(b.x, y + 0.056, b.y), SIMD3<Float>(c.x, y + 0.056, c.y), width: Ink.w) }
         default:
             for k in 0..<2 {
                 let o = SIMD2<Float>(cos(yaw + Float(k) * 2.4), sin(yaw + Float(k) * 2.4)) * 0.028
@@ -472,7 +514,7 @@ final class CafeTables {
             var st = Solid()
             st.tube([SIMD3<Float>(p.x, 0.1, p.y), midp, tip], radius: { _ in 0.0017 })
             add(st, pbr([0.28, 0.48, 0.22], rough: 0.6), to: root, "stem")
-            if look == .line { lines.stroke(SIMD3<Float>(p.x, 0.1, p.y), midp, width: 0.002); lines.stroke(midp, tip, width: 0.002) }
+            if look == .line { lines.stroke(SIMD3<Float>(p.x, 0.1, p.y), midp, width: Ink.w); lines.stroke(midp, tip, width: Ink.w) }
             let fc = Self.flowers[Int(g.next() % UInt64(Self.flowers.count))]
             let petal = pbr(fc, rough: 0.55)
             for j in 0..<5 {
@@ -518,7 +560,7 @@ final class CafeTables {
         let pages = ModelEntity(mesh: .generateBox(width: 0.146, height: 0.019, depth: 0.204), materials: [pbr([0.96, 0.93, 0.85], rough: 0.9)])
         pages.position = [0.003, 0, 0]
         cover.addChild(pages)
-        if look == .line { lines.boxOutline(base: [p.x, 0, p.y], w: 0.15, d: 0.21, h: 0.024, yaw: yaw, width: 0.0025) }
+        if look == .line { lines.boxOutline(base: [p.x, 0, p.y], w: 0.15, d: 0.21, h: 0.024, yaw: yaw, width: Ink.w) }
     }
 
     private func candle(_ p: SIMD2<Float>, _ root: Entity, _ lines: inout Geo) {
@@ -531,7 +573,7 @@ final class CafeTables {
         wax.lathe([[0, 0.004], [0.031, 0.004], [0.031, 0.045], [0, 0.047]], at: SIMD3<Float>(p.x, 0, p.y))
         add(wax, pbr([0.96, 0.92, 0.84], rough: 0.6), to: root, "wax")
         var fm = UnlitMaterial(color: look == .line ? UIColor(white: 0.15, alpha: 1) : Tex.with(look) { Tex.color([1, 0.8, 0.4]) })
-        if let tx = Tex.get("flame", color: look == .color) {
+        if let tx = Tex.with(look, { Tex.get("flame", color: look == .color) }) {
             var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.clamp
             fm.color = .init(tint: look == .line ? UIColor(white: 0.15, alpha: 1) : .white, texture: tp)
         }
@@ -549,7 +591,7 @@ final class CafeTables {
             root.addChild(h)
             flames.append((h, Float.random(in: 0...6)))
         }
-        if look != .line {
+        if look == .color {                                       // 흑백·선 그림엔 촛불 빛(주황)을 비추지 않음
             let light = Entity()
             let pl = PointLightComponent(color: UIColor(red: 1, green: 0.75, blue: 0.45, alpha: 1), intensity: 900, attenuationRadius: 0.8)
             light.components.set(pl)

@@ -177,7 +177,7 @@ final class JellySea {
             if let e = l.entity("jellyLines", Ink.line) { j.body.addChild(e) }
         } else {
             var m = UnlitMaterial(color: ui(col))
-            if let tx = Tex.get("jelly_bell", color: true) {
+            if let tx = Tex.get("jelly_bell", color: look == .color) {
                 var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.tiling
                 m.color = .init(tint: ui(col * (0.75 + 0.35 * glowK)), texture: tp)
             }
@@ -227,7 +227,7 @@ final class JellySea {
         if look == .line { return Ink.line }
         let c = UIColor(red: CGFloat(min(1, col.x)), green: CGFloat(min(1, col.y)), blue: CGFloat(min(1, col.z)), alpha: 1)
         var m = UnlitMaterial(color: c)
-        if let tx = Tex.get(tex, color: true) {
+        if let tx = Tex.get(tex, color: look == .color) {
             var tp = MaterialParameters.Texture(tx); tp.sampler = Tex.clamp
             m.color = .init(tint: c, texture: tp)
         }
@@ -289,7 +289,8 @@ final class JellySea {
             pe.mainEmitter.color = .constant(.single(UIColor(white: 0.25, alpha: 0.6)))
             pe.mainEmitter.blendMode = .alpha
         } else {
-            pe.mainEmitter.color = .constant(.single(UIColor(red: 0.7, green: 0.92, blue: 1, alpha: CGFloat(0.25 + 0.55 * glowK))))
+            pe.mainEmitter.color = .constant(.single(look == .mono ? UIColor(white: 0.9, alpha: CGFloat(0.25 + 0.55 * glowK))
+                                                     : UIColor(red: 0.7, green: 0.92, blue: 1, alpha: CGFloat(0.25 + 0.55 * glowK))))
             pe.mainEmitter.blendMode = .additive
         }
         pe.mainEmitter.opacityCurve = .gradualFadeInOut

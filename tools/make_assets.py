@@ -2592,8 +2592,8 @@ REAL_SFX = (
        ('dog_howl', 2450, 'event', 'longest', 3.0, -7),
        ('dog_playgrowl', 1060, 'event', 'longest', 1.2, -8),
        ('dog_pant', 1547, 'loop', 0, 4.0, -20),
-       ('splash1', 690, 'event', 0, 0.7, -7), ('splash2', 690, 'event', 2, 0.7, -7),      # 'Shoes in the Water' (물 고인 곳 걷기)
-       ('splash3', 690, 'event', 4, 0.7, -7), ('splash4', 690, 'event', 6, 0.7, -7),
+       ('splash1', 690, 'event', 0, 0.7, -5), ('splash2', 690, 'event', 2, 0.7, -5),      # 'Shoes in the Water' (물 고인 곳 걷기)
+       ('splash3', 690, 'event', 4, 0.7, -5), ('splash4', 690, 'event', 6, 0.7, -5),
        ('stream_loop', 823, 'loop', 0, 12.0, -18), ('fall_loop', 507, 'loop', 0, 12.0, -16),
        ('fire_loop', 30, 'loop', 0, 14.0, -12),
        ('plane_pass', 3005, 'whole', 0, 14.0, -6), ('plane_pass2', 2478, 'whole', 0, 16.0, -6)])

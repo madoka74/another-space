@@ -695,6 +695,40 @@ def box_tunes():
     # Avalon (1920) 코드 진행 — C
     AV = B('G7', 'G7', 'C6', 'C6', 'G7', 'G7', 'C6', 'C6', 'A7', 'A7', 'Dm7', 'Dm7', 'D7', 'D7', 'G7', 'G7')
     T.append(Tune('avalon', 138, 4, 'swing', AV, choruses=2, key_center=0))
+    # 그 밖의 1902~1928년 스탠다드 코드 진행 위 즉흥 (곡마다 빠르기·조·느낌을 다르게)
+    more = [
+        ('afteryouvegone', 1918, 132, -5, 'swing', B('Ebmaj7', 'Ebm6', 'Bb6', 'Bb6', 'C7', 'C7', 'F7', 'F7', 'Eb6', 'Ebm6', 'Bb6', 'G7', 'C7', 'F7', 'Bb6', 'F7')),
+        ('aintshesweet', 1927, 120, 0, 'two', B(('C6', 'Ab7'), 'G7', ('C6', 'Ab7'), 'G7', ('C6', 'C7'), ('F6', 'Fm6'), ('C6', 'G7'), 'C6',
+                                                ('C6', 'Ab7'), 'G7', ('C6', 'Ab7'), 'G7', ('C6', 'C7'), ('F6', 'Fm6'), ('C6', 'G7'), 'C6')),
+        ('fivefoottwo', 1925, 144, 0, 'swing', B('C6', 'E7', 'A7', 'A7', 'D7', 'G7', 'C6', 'G7', 'C6', 'E7', 'A7', 'A7', 'D7', 'G7', 'C6', 'C6')),
+        ('basinstreet', 1928, 96, -2, 'swing', B('Bb6', 'D7', 'G7', 'C7', 'F7', 'Bb6', ('Eb6', 'Ebm6'), ('Bb6', 'F7'),
+                                                 'Bb6', 'D7', 'G7', 'C7', 'F7', 'Bb6', ('Eb6', 'Ebm6'), 'Bb6')),
+        ('billbailey', 1902, 150, -5, 'two', B('F6', 'F6', 'F6', 'C7', 'C7', 'C7', 'C7', 'F6', 'F6', 'F7', 'Bb6', 'Bbm6', 'F6', 'C7', 'F6', 'F6')),
+        ('darktown', 1917, 128, -5, 'swing', B('F6', 'F6', 'D7', 'D7', 'G7', 'C7', 'F6', 'C7', 'F6', 'F6', 'D7', 'D7', 'G7', 'C7', 'F6', 'F6')),
+        ('someofthesedays', 1910, 116, 0, 'swing', B('E7', 'E7', 'Am', 'Am', 'D7', 'D7', 'G7', 'G7', 'C6', 'C6', 'A7', 'A7', 'Dm7', 'G7', 'C6', 'G7')),
+        ('muskrat', 1926, 136, -2, 'two', B('Bb6', 'F7', 'Bb6', 'F7', 'Bb6', 'Bb7', 'Eb6', 'Ebm6', 'Bb6', 'F7', 'Bb6', 'F7', 'Bb6', 'F7', 'Bb6', 'Bb6')),
+        ('dinah', 1925, 152, -7, 'swing', B('G6', 'G6', 'G6', 'G6', ('Am7', 'D7'), ('Am7', 'D7'), 'G6', 'G6', 'G6', 'G6', 'G6', 'G6', ('Am7', 'D7'), ('Am7', 'D7'), 'G6', 'G6')),
+        ('ladybegood', 1924, 140, -7, 'swing', B('G6', 'C7', 'G6', 'E7', 'A7', 'D7', 'G6', 'D7', 'G6', 'C7', 'G6', 'E7', 'A7', 'D7', 'G6', 'G6')),
+        ('wildaboutharry', 1921, 146, -5, 'swing', B('F6', 'F6', 'C7', 'C7', 'C7', 'C7', 'F6', 'F6', 'F6', 'F6', 'Bb6', 'Bb6', 'G7', 'C7', 'F6', 'F6')),
+        ('myblueheaven', 1927, 108, -9, 'swing', B('Eb6', 'Eb6', 'Cm7', 'Cm7', 'Fm7', 'Bb7', 'Eb6', 'Eb6', 'Eb6', 'Eb7', 'Ab6', 'Abm6', 'Eb6', 'C7', ('Fm7', 'Bb7'), 'Eb6')),
+        ('margie', 1920, 126, 0, 'swing', B('C6', 'C6', 'F7', 'F7', 'C6', 'C6', ('D7', 'G7'), 'C6', 'C6', 'C6', 'F7', 'F7', 'C6', 'A7', ('D7', 'G7'), 'C6')),
+        ('charleston', 1923, 154, -2, 'two', B('Bb6', 'Bb6', 'G7', 'G7', 'C7', 'F7', 'Bb6', 'F7', 'Bb6', 'Bb6', 'G7', 'G7', 'C7', 'F7', 'Bb6', 'Bb6')),
+        ('tigerrag', 1917, 168, -2, 'two', B('Bb6', 'Bb6', 'F7', 'F7', 'F7', 'F7', 'Bb6', 'Bb6', 'Bb6', 'Bb6', 'Eb6', 'Ebm6', 'Bb6', 'F7', 'Bb6', 'Bb6')),
+        ('ithadtobeyou', 1924, 100, -7, 'swing', B('G6', 'G6', 'E7', 'E7', 'A7', 'A7', 'D7', 'D7', 'G6', 'G6', 'E7', 'E7', 'A7', 'D7', 'G6', 'D7')),
+        ('limehouse', 1922, 132, 0, 'swing', B('F7', 'F7', 'G7', 'G7', 'F7', 'F7', 'G7', 'C7', 'F7', 'F7', 'G7', 'G7', 'Dm7', 'G7', 'C6', 'C6')),
+        ('chinaboy', 1922, 160, -5, 'swing', B('F6', 'F6', 'F6', 'F6', 'D7', 'D7', 'G7', 'G7', 'C7', 'C7', 'F6', 'D7', 'G7', 'C7', 'F6', 'C7')),
+        ('sweetsue', 1928, 112, -9, 'swing', B('Eb6', 'Eb6', 'Eb6', 'C7', 'F7', 'Bb7', 'Eb6', 'Bb7', 'Eb6', 'Eb6', 'Eb6', 'C7', 'F7', 'Bb7', 'Eb6', 'Eb6')),
+        ('japanesesandman', 1920, 122, 0, 'two', B('C6', 'C6', 'G7', 'G7', 'G7', 'G7', 'C6', 'C6', 'C6', 'C6', 'F6', 'Fm6', 'C6', 'G7', 'C6', 'C6')),
+    ]
+    for name, _yr, bpm, kc, style, bars in more:
+        T.append(Tune(name, bpm, 4, style, bars, choruses=2, key_center=kc))
+    # 블루스 몇 가지 (조·빠르기 다르게)
+    T.append(Tune('bbblues', 132, 4, 'swing', B('Bb7', 'Eb7', 'Bb7', 'Bb7', 'Eb7', 'Edim7', 'Bb7', 'G7', 'Cm7', 'F7', ('Bb7', 'G7'), ('Cm7', 'F7')),
+                  choruses=3, key_center=-2, blues=True))
+    T.append(Tune('ebslowblues', 76, 4, 'swing', B('Eb7', 'Ab7', 'Eb7', 'Eb7', 'Ab7', 'Ab7', 'Eb7', 'C7', 'Fm7', 'Bb7', 'Eb7', 'Bb7'),
+                  choruses=2, key_center=-9, blues=True))
+    T.append(Tune('gminorblues', 104, 4, 'swing', B('Gm7', 'Cm7', 'Gm7', 'Gm7', 'Cm7', 'Cm7', 'Gm7', 'Gm7', 'Eb7', 'D7', 'Gm7', 'D7'),
+                  choruses=3, key_center=-5, blues=True))
     # F 블루스 (미디엄 스윙)
     FB = B('F7', 'Bb7', 'F7', ('Cm7', 'F7'), 'Bb7', 'Bdim7', 'F7', ('Am7', 'D7'), 'Gm7', 'C7', ('F7', 'D7'), ('Gm7', 'C7'))
     T.append(Tune('fblues', 112, 4, 'swing', FB, choruses=3, key_center=-5, blues=True))
@@ -722,7 +756,7 @@ def make_all(out):
         save_wav(base + '.wav', x)
         ext = 'wav'
         if conv:
-            r = subprocess.run([conv, '-f', 'm4af', '-d', 'aac', '-b', '96000', base + '.wav', base + '.m4a'], capture_output=True)
+            r = subprocess.run([conv, '-f', 'm4af', '-d', 'aac', '-b', '64000', base + '.wav', base + '.m4a'], capture_output=True)
             if r.returncode == 0 and os.path.exists(base + '.m4a'):
                 os.remove(base + '.wav')
                 ext = 'm4a'

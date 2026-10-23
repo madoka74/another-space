@@ -935,6 +935,7 @@ final class HomeCat {
                 l.stroke(SIMD3<Float>(0, sin(a0) * 0.046, cos(a0) * 0.046), SIMD3<Float>(0, sin(a1) * 0.046, cos(a1) * 0.046), width: 0.004)
             }
             if let le = l.entity("ballLines", Ink.line) { e.addChild(le) }
+            Ink.hull(e, width: 0.005)                       // 공 외곽선
         }
         ballRoot.addChild(e)
         ball = e

@@ -8,6 +8,7 @@ struct Geo {
     var pos: [SIMD3<Float>] = []
     var uv: [SIMD2<Float>] = []
     var idx: [UInt32] = []
+    var rocksMade: [(Int, SIMD3<Float>)] = []      // 선 그림일 때 만든 바위 (시작 번호, 가운데) — 외곽선 껍데기(inkHull)용
 
     var isEmpty: Bool { idx.isEmpty }
 
@@ -227,9 +228,11 @@ struct Geo {
     }
 
     /// 울퉁불퉁한 바위 (각진 공을 무작위로 눌러 만듦)
-    mutating func rock<G: RandomNumberGenerator>(at c: SIMD3<Float>, size s: Float, using g: inout G) {
+    @discardableResult
+    mutating func rock<G: RandomNumberGenerator>(at c: SIMD3<Float>, size s: Float, using g: inout G) -> Int {
         let seg = 9, rings = 6
         let base = UInt32(pos.count)
+        if Geo.inkMin > 0 { rocksMade.append((Int(base), c)) }
         var rad: [Float] = []
         for _ in 0...(rings * (seg + 1)) { rad.append(Float.random(in: 0.72...1.12, using: &g)) }
         let flat = Float.random(in: 0.45...0.75, using: &g)
@@ -250,6 +253,29 @@ struct Geo {
             for k in 0..<UInt32(seg) {
                 let a = base + r * UInt32(seg + 1) + k, b = a + UInt32(seg + 1)
                 idx += [a, b, a + 1, a + 1, b, b + 1, a, a + 1, b, a + 1, b + 1, b]
+            }
+        }
+        return Int(base)
+    }
+
+    /// 선 그림 외곽선: src 에 rock() 으로 만든 바위(시작 번호 start, 가운데 c)를 굵기 w만큼 부풀린 '바깥을 향한 한쪽 면' 껍데기.
+    /// 이 그물을 Ink.hullMat(뒷면만 그림)으로 그리면 바위 둘레에 어느 쪽에서 봐도 검은 윤곽선이 생김
+    mutating func rockHull(of src: Geo, start: Int, center c: SIMD3<Float>, width w: Float) {
+        let seg = 9, rings = 6
+        let n = (rings + 1) * (seg + 1)
+        guard start + n <= src.pos.count else { return }
+        let base = UInt32(pos.count)
+        for i in 0..<n {
+            let p = src.pos[start + i]
+            let d = p - c
+            let l = simd_length(d)
+            pos.append(l > 1e-5 ? c + d * ((l + w) / l) : p)
+            uv.append(.zero)
+        }
+        for r in 0..<UInt32(rings) {
+            for k in 0..<UInt32(seg) {
+                let a = base + r * UInt32(seg + 1) + k, b = a + UInt32(seg + 1)
+                idx += [a, a + 1, b, a + 1, b + 1, b]            // 바깥을 향한 면만
             }
         }
     }
@@ -454,6 +480,15 @@ struct Geo {
         d.textureCoordinates = MeshBuffers.TextureCoordinates(uv)
         d.primitives = .triangles(idx)
         return try? MeshResource.generate(from: [d])
+    }
+
+    /// 선 그림: 이 그물에 만든 바위들의 검은 외곽선 (바위마다 width(가운데) 만큼 부풀린 껍데기의 뒷면)
+    @MainActor
+    func inkHull(_ name: String, width: (SIMD3<Float>) -> Float) -> ModelEntity? {
+        guard !rocksMade.isEmpty else { return nil }
+        var h = Geo()
+        for (st, c) in rocksMade { h.rockHull(of: self, start: st, center: c, width: width(c)) }
+        return h.entity(name, Ink.hullMat)
     }
 
     @MainActor

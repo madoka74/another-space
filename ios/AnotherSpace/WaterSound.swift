@@ -11,11 +11,11 @@ final class WaterSound {
     func set(_ active: Bool, stream: SIMD3<Float>?, fall: SIMD3<Float>?) {
         if active {
             if let p = stream { play("stream_loop", at: p, gain: -4) }
-            if let p = fall { play("fall_loop", at: p, gain: 4) }
+            if let p = fall { play("fall_loop", at: p, gain: -1) }      // 폭포는 멀리서 은은하게 (발밑 첨벙 소리가 묻히지 않게)
         }
         guard active != on else { return }
         on = active
-        for (_, l) in loops { l.1.fade(to: active ? (l.0.name == "fall_loop" ? 4 : -4) : -60, duration: active ? 2.5 : 1.5) }
+        for (_, l) in loops { l.1.fade(to: active ? (l.0.name == "fall_loop" ? -1 : -4) : -60, duration: active ? 2.5 : 1.5) }
     }
 
     private func play(_ name: String, at p: SIMD3<Float>, gain: Double) {

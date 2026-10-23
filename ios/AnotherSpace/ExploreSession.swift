@@ -54,27 +54,27 @@ private struct ExploreHud: View {
     let s: ExploreSession
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
                     if let r = s.room {
-                        Text(r.title).font(.title2.weight(.semibold))
-                        Text(r.name).font(.headline).foregroundStyle(.secondary)
+                        Text(r.title).font(.title3.weight(.semibold))
+                        Text(r.name).font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-                Spacer(minLength: 8)
+                Spacer(minLength: 0)
                 Button {
                     s.closeHud()
                 } label: {
-                    Image(systemName: "xmark").font(.title3).frame(width: 36, height: 36)
+                    Image(systemName: "xmark").font(.body.weight(.semibold)).frame(width: 30, height: 30)
                 }
                 .buttonBorderShape(.circle)
             }
             if let p = s.loadProgress {
-                LoadBar(value: p)
+                LoadBar(value: p).frame(width: 300)
             }
             if let m = s.message {
-                Text(m).font(.headline).fixedSize(horizontal: false, vertical: true)
+                Text(m).font(.headline).fixedSize(horizontal: false, vertical: true).frame(maxWidth: 360, alignment: .leading)
             }
             if s.hudMenu {
                 HStack(spacing: 14) {
@@ -91,11 +91,12 @@ private struct ExploreHud: View {
                         Label("현실로 돌아가기", systemImage: "arrow.uturn.backward")
                     }
                 }
-                .font(.title3)
+                .font(.body)
             }
         }
-        .padding(22)
-        .frame(width: 480)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .fixedSize()                                    // 내용에 맞는 크기 (좌우로 길게 늘어나지 않게)
         .glassBackgroundEffect()
         .transaction { $0.animation = nil }
         .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })     // 안내판을 누른 탭은 싱글탭으로 치지 않음
@@ -148,22 +149,7 @@ private struct ThemePanel: View {
             if let r = s.room {
                 ThemePicker(room: r, compact: true) { p, w, t, l in s.setTheme(place: p, weather: w, time: t, look: l) }
             }
-            if let p = s.loadProgress {
-                LoadBar(value: p)
-            }
-            HStack(spacing: 14) {
-                Button {
-                    s.toggleTheme()
-                } label: {
-                    Label("테마 닫기", systemImage: "chevron.down")
-                }
-                Button {
-                    s.exit()
-                } label: {
-                    Label("현실로 돌아가기", systemImage: "arrow.uturn.backward")
-                }
-            }
-            .font(.title3)
+            // (테마 판에는 진행 막대를 넣지 않음 — 판 크기가 바뀌어 보기 안 좋음. 닫기는 오른쪽 위 X)
         }
         .padding(24)
         .frame(width: 652)                              // 칩 60×9 + 사이 8×8 = 604, 좌우 여백 24씩
@@ -214,6 +200,7 @@ final class ExploreSession {
     @ObservationIgnored private var grip: [Int: (Float, Float, Float, Float)] = [:]   // 문 → (손이 문짝에 가장 가까웠던 거리, 처음 닿은 때, 마지막으로 닿아 있던 때, 닿은 쪽)
     @ObservationIgnored private var coverPeak: [Int: Float] = [:]   // 닫혀 있는 동안 가장 많이 막혔던 비율
     @ObservationIgnored private var leafLookAt: [Int: Float] = [:]   // 닫힌 실제 문짝을 마지막으로 바라본 때
+    @ObservationIgnored private var leafSince: [Int: Float] = [:]   // 닫힌 실제 문이 보이기 시작한 때
     @ObservationIgnored private var leafSeen: Set<Int> = []         // 닫힌 실제 문이 보이던 문 (그 문이 열리면 바로 열린 공간으로)
     @ObservationIgnored private var solidDoors: Set<Int> = []       // 지금 막혀 보이는 문 (벽 또는 닫힌 실제 문)
     @ObservationIgnored private var leafDoor: Int?                  // 가장 가까이 보이는 닫힌 실제 문
@@ -1272,7 +1259,7 @@ final class ExploreSession {
         // 바다 해파리: 머리 자리(가까이 오면 비켜 감) · 계곡 물고기: 손(물에 대면 흩어짐)
         wld.jelly?.head = f.toSaved(head)
         if wld.jelly?.furnitureH == nil, let v = vox { wld.jelly?.furnitureH = { p in v.heightAt(L.plane(p.x, p.y)) } }
-        wld.creek?.tick(dt, hands: handPts, feet: f.toSaved(head))
+        wld.creek?.tick(dt, hands: handPts, feet: f.toSaved(head - fwd * 0.09 - headUp * 0.07))      // 몸(목 뒤) 자리 — 고개만 돌려도 걸은 걸로 치지 않게
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
             music.set(true, at: wld.speakerSpot ?? wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))      // 천장 들보에 매단 스피커에서
@@ -1280,7 +1267,7 @@ final class ExploreSession {
             let key = "\(rm.time)-\(rm.lookMode.rawValue)"
             if cafeSets[rm.id]?.0 != key {
                 cafeSets[rm.id]?.1.remove()
-                let tb = CafeTables(look: rm.lookMode, time: rm.time, room: rm.id)
+                let tb = Tex.with(rm.lookMode) { CafeTables(look: rm.lookMode, time: rm.time, room: rm.id) }
                 spaceRoot.addChild(tb.root)
                 cafeSets[rm.id] = (key, tb)
             }
@@ -1321,7 +1308,7 @@ final class ExploreSession {
                 let v = SIMD2<Float>(fwd2.x * cos(a) - fwd2.y * sin(a), fwd2.x * sin(a) + fwd2.y * cos(a))
                 let p = me + v * 1.6
                 if catFree(p, L, homeRooms) {
-                    let c = HomeCat(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color)
+                    let c = Tex.with(rm?.lookMode ?? .color) { HomeCat(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color) }      // 선 굵기 등 그 방 표시 방식으로
                     spaceRoot.addChild(c.root)
                     spaceRoot.addChild(c.ballRoot)
                     cat = c
@@ -1363,7 +1350,7 @@ final class ExploreSession {
                 let v = SIMD2<Float>(fwd2.x * cos(a) - fwd2.y * sin(a), fwd2.x * sin(a) + fwd2.y * cos(a))
                 let p = me + v * 1.8
                 if catFree(p, L, rooms, r: 0.34) {
-                    let g = HomeDog(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color)
+                    let g = Tex.with(rm?.lookMode ?? .color) { HomeDog(at: p, floorY: L.floorY, look: rm?.lookMode ?? .color) }
                     spaceRoot.addChild(g.root)
                     spaceRoot.addChild(g.propRoot)
                     dog = g
@@ -1493,8 +1480,8 @@ final class ExploreSession {
         let snowy = ["snow", "heavysnow"].contains(rm.weather)
         guard let pick = cands.first(where: { free($0.0, $0.2 * (snowy ? 1.45 : 1.1) + 0.22) }) else { return }      // 들어갈 자리가 없으면 피우지 않음
         let wd = simd_quatf(angle: -w.angle, axis: [0, 1, 0]).act(SIMD3<Float>(1, 0, 0.35))
-        let cf = Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd, ceilH: rm.ceil, sky: w.world,
-                          scale: pick.2 / 0.55)
+        let cf = Tex.with(rm.lookMode) { Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd, ceilH: rm.ceil, sky: w.world,
+                          scale: pick.2 / 0.55) }
         spaceRoot.addChild(cf.root)
         fire = cf
     }
@@ -1564,7 +1551,6 @@ final class ExploreSession {
         var look = SIMD2<Float>(simd_dot(SIMD2<Float>(fs.x, fs.z), L.ex), simd_dot(SIMD2<Float>(fs.x, fs.z), L.ez))
         look = simd_length(look) > 0.1 ? simd_normalize(look) : .zero
         let breath = 0.5 + 0.5 * sin(t * 2.4)
-        var glowMat: PhysicallyBasedMaterial?
         var urgent = false
         var solid = Set<Int>()
         var leaf: (Int, Float)? = nil
@@ -1589,20 +1575,25 @@ final class ExploreSession {
                 closeSince[i] = nil
                 realClosed.remove(i)
             }
-            // 막힘이 0.6초 넘게 이어지면 닫힘 (그물이 잠깐 흔들려 닫혔다 열렸다 하지 않게)
-            if let c0 = closeSince[i], t - c0 > 0.6 {
+            // 막힘이 1초 넘게 이어지면 닫힘 (그물이 잠깐 흔들려 닫혔다 열렸다 하지 않게)
+            if let c0 = closeSince[i], t - c0 > 1.0 {
                 closeSince[i] = nil
                 if (cover[i] ?? 0) > 0.55 && t > (openHold[i] ?? 0) { realClosed.insert(i) }
             }
             let real = realClosed.contains(i)
             let leafOn = real && near
             // 문은 한 번만: 닫힌 실제 문(손잡이 문)을 보고 있다가 실제 문을 열면 그대로 열린 공간 (열쇠 문을 또 보이지 않음)
+            // (닫힌 문이 1.2초 넘게 보였을 때만 '봤다'로 침 — 그물이 잠깐 흔들려 닫힌 문으로 잘못 알았다 풀리면
+            //  예전엔 그때마다 문이 열린 것으로 처리돼, 열쇠 문이 사라지고 지나온 방 풍경이 그대로 보였음)
             if leafOn {
-                leafSeen.insert(i)
+                if leafSince[i] == nil { leafSince[i] = t }
+                if t - (leafSince[i] ?? t) > 1.2 { leafSeen.insert(i) }
             } else if leafSeen.contains(i) {
+                leafSince[i] = nil
                 leafSeen.remove(i)
                 if !real && near && !same && !doorOpen.contains(i) { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
             }
+            if !leafOn && !leafSeen.contains(i) { leafSince[i] = nil }
             if !same {
                 if inside {
                     if !doorOpen.contains(i) && openProg[i] == nil { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
@@ -1614,6 +1605,8 @@ final class ExploreSession {
                             doorOpen.remove(i)
                             doorShow[i] = 0
                             passed.insert(i)
+                            openHold[i] = max(openHold[i] ?? 0, t + 6)          // 방금 지나온 문은 6초 동안 '닫힘'으로 바뀌지 않음 (돌아볼 때 깜빡이지 않게)
+                            realClosed.remove(i)
                         } else if !near {
                             doorOpen.remove(i)
                         }
@@ -1683,8 +1676,8 @@ final class ExploreSession {
                 if v.root.isEnabled != (o > 0.02) { v.root.isEnabled = o > 0.02 }
                 guard v.root.isEnabled else { continue }
                 v.root.setOpacity(o)
-                if glowMat == nil { glowMat = RoomWorld.gold(rough: 0.22, glow: 0.2 + 2.2 * breath) }
-                if let gm = glowMat { for e in v.parts { e.model?.materials = [gm] } }
+                let gm = RoomWorld.gold(rough: 0.22, glow: 0.2 + 2.2 * breath, mono: worlds[rid]?.look == .mono)      // 흑백 방이면 은빛 열쇠
+                for e in v.parts { e.model?.materials = [gm] }
                 Self.pose(v, prog: rid == showRoom ? prog : nil, t: t)
             }
         }

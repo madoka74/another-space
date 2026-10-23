@@ -242,6 +242,31 @@ struct DocentCard: View {
 enum Ink {
     /// 선 그림의 검은 선
     static let line: UnlitMaterial = UnlitMaterial(color: UIColor(white: 0.07, alpha: 1))
+    /// 선 그림 선 굵기 (실내·소품·배경 모두 비슷하게 — 가까이 있는 것 기준 0.7cm, 먼 것은 거리에 비례해 굵게)
+    static let w: Float = 0.007
+    static func width(at d: Float) -> Float { w * max(1, d / 2.5) }
+
+    /// 외곽선 껍데기 재질: 앞면은 버리고 뒷면만 검게 → 물체보다 조금 큰 껍데기의 뒷면이 물체 둘레로만 보여 윤곽선이 됨
+    static var hullMat: UnlitMaterial {
+        var m = UnlitMaterial(color: UIColor(white: 0.07, alpha: 1))
+        m.faceCulling = .front
+        return m
+    }
+
+    /// 선 그림 외곽선: 한쪽 면으로 닫힌 물체(상자·공·원기둥 — generateBox/Sphere/Cylinder)에 굵기 w의 검은 윤곽선을 붙임
+    @MainActor
+    static func hull(_ e: ModelEntity, width w: Float = Ink.w) {
+        guard let mesh = e.model?.mesh else { return }
+        let b = mesh.bounds
+        let ex = simd_max(b.extents, SIMD3<Float>(repeating: 0.002))
+        let sc = simd_max(simd_abs(e.scale), SIMD3<Float>(repeating: 1e-3))
+        let s = SIMD3<Float>(1, 1, 1) + (2 * w) / (ex * sc)
+        let o = ModelEntity(mesh: mesh, materials: [hullMat])
+        o.name = "inkHull"
+        o.scale = s
+        o.position = b.center * (SIMD3<Float>(1, 1, 1) - s)
+        e.addChild(o)
+    }
     /// 선 그림의 흰 면 (해 쪽·옆·그늘)
     static func paper(_ shade: Int) -> UnlitMaterial {
         UnlitMaterial(color: UIColor(white: [1.0, 0.93, 0.86][min(2, max(0, shade))], alpha: 1))
