@@ -57,6 +57,8 @@ final class ValleyCreek {
     private(set) var entry: (SIMD2<Float>, SIMD2<Float>)? = nil      // 들어오는 벽 점·방 안쪽 방향 (평면)
     private(set) var exitPt: (SIMD2<Float>, SIMD2<Float>)? = nil     // 나가는 벽 점·방 안쪽 방향
     private let fed: Bool                                             // 바깥 강이 벽까지 곧장 흘러옴 (들어오는 갈래 물길이 필요 없음)
+    private var exitRun: Float = 22                                    // 나가는 벽 너머로 트인 거리 (바깥 물길 길이)
+    private var flowDir = SIMD2<Float>(1, 0)                           // 물이 흐르는 쪽 (저장 좌표, 들어온 곳 → 나가는 곳 — 방 전체가 한결같이)
     private var edgeD: [Float] = []                                   // 물 칸마다 물가까지 거리 (m)
     private var maxEdge: Float = 0.1
     private let riverNear: SIMD3<Float>?
@@ -217,35 +219,45 @@ final class ValleyCreek {
             return dist
         }
         let dIn = geodesic(start)
-        // 나가는 곳: 처음 정한 곳이 아직 물과 닿아 있으면 그대로 (벽 둑을 비운 자리와 어긋나지 않게), 아니면
-        // 들어온 곳에서 멀고(물길 거리) 벽 바깥이 트인, 바깥벽 45cm 안의 물 칸 → 그 칸에서 가장 가까운 벽 점까지 물길을 팜
+        // 나가는 곳: 처음 정한 곳이 아직 물과 닿아 있으면 그대로 (벽 둑을 비운 자리·바깥 물길과 어긋나지 않게), 아니면
+        // 바깥벽을 30cm마다 훑어 ① 벽 너머로 다른 방 없이 8m 넘게 트여 있고(바깥 물길이 실제로 멀리 흘러갈 수 있는 곳)
+        // ② 벽 45cm 안쪽에 물이 닿아 있는 곳 중, 들어온 곳에서 가장 먼 곳(보통 맞은편 — 가장 넓게 트인 쪽)을 고름.
+        // (예전엔 물길 거리만 보고 골라 바깥이 막힌 벽을 고르면 바깥 물길이 1.5m짜리 토막이 되어, 물이 어디로도 안 나가 보였음)
         var exitCell = -1
         if let x = exitPt, let k = waterCells.filter({ dIn[$0].isFinite }).min(by: { simd_distance(cellP($0), x.0) < simd_distance(cellP($1), x.0) }),
            simd_distance(cellP(k), x.0) < 0.8 {
             exitCell = k
         } else {
             exitPt = nil
-            var far: (Int, Float)? = nil
-            for k in waterCells where dIn[k].isFinite {
-                let w = L.flat(cellP(k))
-                guard L.at(x: w.x, z: w.y).wall < 0.45, !L.doors.contains(where: { $0.zone(cellP(k), margin: 0.5) }) else { continue }
-                let sc = dIn[k] + outsideRoom(cellP(k)) * 0.25
-                if far == nil || sc > far!.1 { far = (k, sc) }
-            }
-            if let f = far, dIn[f.0] > 1.0 {
-                let p = cellP(f.0)
-                var best: (SIMD2<Float>, SIMD2<Float>, Float)? = nil
-                for s in L.walls where s.room == roomId && !s.inner {
-                    let ab = s.b - s.a
-                    let len = simd_length(ab)
-                    guard len > 0.6 else { continue }
-                    let k = max(0.3, min(len - 0.3, simd_dot(p - s.a, ab / len)))
-                    let qp = s.a + ab / len * k
-                    let d = simd_distance(qp, p)
-                    if best == nil || d < best!.2 { best = (qp, s.n, d) }
+            let ep = entry?.0 ?? cellP(start)
+            var best: (SIMD2<Float>, SIMD2<Float>, Int, Float, Float)? = nil        // 벽 점, 안쪽 방향, 물 칸, 점수, 트인 거리
+            for s in L.walls where s.room == roomId && !s.inner {
+                let ab = s.b - s.a
+                let len = simd_length(ab)
+                guard len > 0.7 else { continue }
+                var k: Float = 0.35
+                while k <= len - 0.35 + 1e-3 {
+                    let q = s.a + ab / len * k
+                    k += 0.3
+                    if L.doors.contains(where: { $0.zone(q, margin: 0.6) }) { continue }
+                    if let e = entry, simd_distance(q, e.0) < 1.5 { continue }
+                    let run = openRun(q, s.n)
+                    // 벽 45cm 안쪽의 물 칸
+                    var wk = -1, wd: Float = 0.5
+                    for c in waterCells where dIn[c].isFinite {
+                        let d = simd_distance(cellP(c), q)
+                        if d < wd { wd = d; wk = c }
+                    }
+                    guard wk >= 0 else { continue }
+                    let far: Float = simd_distance(q, ep)
+                    let open: Float = 0.35 * min(run, 20)
+                    let mid: Float = 0.3 * min(k, len - k)
+                    var sc: Float = far + open + 0.15 * dIn[wk] + mid
+                    if run < 3 { sc -= 100 }                     // 바깥이 막힌 벽은 다른 곳이 하나도 없을 때만
+                    if best == nil || sc > best!.3 { best = (q, s.n, wk, sc, run) }
                 }
-                if let b = best, b.2 < 0.7 { exitPt = (b.0, b.1); exitCell = f.0 }
             }
+            if let b = best { exitPt = (b.0, b.1); exitCell = b.2; exitRun = b.4 }
         }
         if let x = exitPt, exitCell >= 0 { carve(from: exitCell, to: x.0 + x.1 * 0.03) }
         // 흐름 방향: 들어온 곳 → 나가는 곳으로 한결같이 (들어온 곳에서 거리 − 나가는 곳까지 거리). 나가는 곳이 없으면 들어온 곳에서 멀어지는 쪽
@@ -273,6 +285,13 @@ final class ValleyCreek {
             flow = f2
         }
         flowD = flow
+        // 물결 무늬가 흐르는 쪽: 들어온 곳 → 나가는 곳 한 방향 (구간마다 제각각 흐르지 않게)
+        let ia = L.flat(entry?.0 ?? cellP(start))
+        var farK = start
+        var farD: Float = 0
+        for c in waterCells where dIn[c].isFinite && dIn[c] > farD { farD = dIn[c]; farK = c }
+        let ib = L.flat(exitPt?.0 ?? cellP(farK))
+        if simd_distance(ia, ib) > 0.3 { flowDir = simd_normalize(ib - ia) }
         computeEdge()
         return true
     }
@@ -341,6 +360,17 @@ final class ValleyCreek {
         var out: [SIMD2<Float>] = []
         for (i, c) in cells.enumerated() where i % 3 == 2 || i == cells.count - 1 { out.append(L.flat(cellP(c))) }
         return out
+    }
+
+    /// 벽 점 q(평면)에서 바깥쪽(-n)으로 다른 방(걸을 수 있는 곳) 없이 몇 m까지 트여 있는지 (물길 폭만큼 양옆도, 최대 25m)
+    private func openRun(_ q: SIMD2<Float>, _ n: SIMD2<Float>) -> Float {
+        let side = SIMD2<Float>(-n.y, n.x)
+        var d: Float = 0.6
+        while d <= 25 {
+            for o: Float in [0, 0.9, -0.9] where L.walkable(q - n * d + side * o) { return d - 0.6 }
+            d += 0.5
+        }
+        return 25
     }
 
     /// 그 칸(평면 좌표, 벽 가까이)에서 가장 가까운 바깥벽 너머로 몇 m까지 다른 방 없이 트여 있는지 (최대 12m)
@@ -440,7 +470,10 @@ final class ValleyCreek {
             let raw = ids.map { vp[$0] }
             // 바닥 자갈: 평면 좌표 그대로 (흐르지 않음), 물: v = 물길 거리 → 흐름 방향으로 이어짐
             let bu = raw.map { $0 / 0.45 }
-            let wu = zip(raw, ds).map { SIMD2<Float>(($0.0.x * 0.6 - $0.0.y * 0.8) / 0.9, $0.1 / 0.9) }
+            // 물 무늬: 방 전체가 한 방향(flowDir)으로 흐름 — v = 흐르는 쪽 거리, u = 그 옆 방향
+            let fd = flowDir, fs = SIMD2<Float>(-flowDir.y, flowDir.x)
+            let wu = ps.map { SIMD2<Float>(simd_dot($0, fs) / 0.9, simd_dot($0, fd) / 0.9) }
+            _ = ds
             func p3(_ q: SIMD2<Float>, _ y: Float) -> SIMD3<Float> { SIMD3<Float>(q.x, y, q.y) }
             bed.quad(p3(ps[0], bedY), p3(ps[1], bedY), p3(ps[2], bedY), p3(ps[3], bedY), bu[0], bu[1], bu[2], bu[3])
             wat.quad(p3(ps[0], waterY), p3(ps[1], waterY), p3(ps[2], waterY), p3(ps[3], waterY), wu[0], wu[1], wu[2], wu[3])
@@ -507,7 +540,8 @@ final class ValleyCreek {
             // 바깥으로 곧게, 막히면(다른 방) 조금씩 비스듬히 — 그래도 막히면 짧게라도 꼭 흘러 나가 바위 틈으로 사라지게
             // (예전엔 22m 물길만 찾다 못 찾으면 나가는 물길이 아예 없어, 방 안 물이 벽에서 끊겨 보였음)
             var done = false
-            for len: Float in [22, 12, 6, 2.5] where !done {
+            let far: Float = max(2.5, min(26, exitRun - 0.8))
+            for len: Float in [far, min(far, 12), min(far, 6), 2.5] where !done {
                 for da: Float in [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9] where !done {
                     let dir = SIMD2<Float>(cos(b0 + da), sin(b0 + da))
                     done = branch(from: a, to: a + dir * len, w0: 0.9, w1: len > 8 ? 1.7 : 1.1, flow: 0.13, endRocks: true, &g)
@@ -545,10 +579,10 @@ final class ValleyCreek {
             if i > 0 {
                 va += simd_distance(pts[i], pts[i - 1])
                 let v1 = va / 3.5
-                let y = floorY - 0.013
+                let y = floorY - 0.012
                 wg.quad(SIMD3<Float>(pl.x, y, pl.y), SIMD3<Float>(pr.x, y, pr.y), SIMD3<Float>(r.x, y, r.y), SIMD3<Float>(l.x, y, l.y),
                         SIMD2<Float>(0, pv), SIMD2<Float>(1, pv), SIMD2<Float>(1, v1), SIMD2<Float>(0, v1))
-                let yb = floorY - 0.02
+                let yb = floorY - 0.022
                 let bl = pl + simd_normalize(pl - pr) * 0.4, br = pr + simd_normalize(pr - pl) * 0.4
                 let cl = l + simd_normalize(l - r) * 0.4, cr = r + simd_normalize(r - l) * 0.4
                 bg.quad(SIMD3<Float>(bl.x, yb, bl.y), SIMD3<Float>(br.x, yb, br.y), SIMD3<Float>(cr.x, yb, cr.y), SIMD3<Float>(cl.x, yb, cl.y),
@@ -563,9 +597,10 @@ final class ValleyCreek {
                 }
             }
         }
-        if let e = bg.entity("branchBank", Tex.unlit("pebble", tint: Worlds.safe(tint * 0.55, min: 0.2))) { world.addChild(e) }
+        // 그리는 순서는 바깥 강(RoomWorld.addRiver)과 같게: 물가 자갈 5 → 물 6 (예전엔 순서가 없어 물이 자갈·땅 밑으로 묻혀 보이지 않기도 했음)
+        if let e = bg.entity("branchBank", Tex.unlit("pebble", tint: Worlds.safe(tint * 0.55, min: 0.2))) { Sorting.apply(e, 5); world.addChild(e) }
         let wm = Tex.unlit("river", tint: Worlds.safe(tint, min: 0.2))
-        if let e = wg.entity("branchWater", wm) { world.addChild(e); flows.append((e, wm, flow, 0)) }
+        if let e = wg.entity("branchWater", wm) { Sorting.apply(e, 6); world.addChild(e); flows.append((e, wm, flow, 0)) }
         if endRocks, pts.count > 2 {
             // 끝: 큰 바위 사이로 물이 사라짐
             let pe = pts[pts.count - 1], te = simd_normalize(pts[pts.count - 1] - pts[pts.count - 2])
@@ -575,7 +610,7 @@ final class ValleyCreek {
                 rk.rock(at: SIMD3<Float>(p.x, floorY - 0.15, p.y), size: Float.random(in: 0.9...1.5, using: &g), using: &g)
             }
         }
-        if let e = rk.entity("branchRocks", Tex.unlit("rock", tint: Worlds.safe(tint * 0.85, min: 0.25))) { world.addChild(e) }
+        if let e = rk.entity("branchRocks", Tex.unlit("rock", tint: Worlds.safe(tint * 0.85, min: 0.25))) { Sorting.apply(e, 5); world.addChild(e) }
         if look == .line {
             var ln = Geo()
             var pl: SIMD2<Float>? = nil, pr: SIMD2<Float>? = nil
@@ -738,8 +773,9 @@ final class ValleyCreek {
             stepGap = 0
             stepClock = 0
             guard speed > 0.2 else { return }
-            let gain = Double(-12 + min(6, (speed - 0.2) * 7))
-            Sfx.play("splash\(Int.random(in: 1...4))", in: local, at: SIMD3<Float>(p.x, floorY + 0.05, p.y), gain: gain)
+            // 실제 녹음(물 고인 곳을 걷는 신발 소리) — 발밑에서 또렷하지만 크지 않게
+            let gain = Double(-5 + min(4, (speed - 0.2) * 5))
+            Sfx.play("splash\(Int.random(in: 1...4))", in: local, at: SIMD3<Float>(p.x, floorY + 0.05, p.y), gain: gain, rolloff: 0.7)
             ripple(at: p)
         }
     }

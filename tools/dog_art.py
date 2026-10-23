@@ -1,64 +1,52 @@
-"""시골 테마의 강아지 '설이' 그림 — 매끈한 단색 카툰 강아지 (형선이 보내 준 그림 느낌):
-연한 노란 크림색 털, 몸에 비해 큰 동그란 머리, 머리 위 양옆에서 접혀 눈높이까지만 내려오는 작은 귀(움직임이 잘 보이게),
-반짝이는 큰 갈색 눈·까만 코·분홍 볼, 혀를 내민 웃는 입, 짧고 통통한 다리와 둥근 발, 위로 말린 가는 꼬리.
-가장자리는 매끈하고(털 뭉치 없음) 가는 밤색 윤곽선 (선 그림에서는 이 선만 검게 남음).
-몸은 옆모습(오른쪽을 봄), 정면·뒷모습도 있음. 512×512, 바닥 줄 y=470"""
+"""집 테마의 강아지 '설이' 그림 — 갈색 토이 푸들 (형선이 보내 준 푸들 그림 느낌):
+초콜릿빛 갈색 곱슬 털, 머리 위 동그란 털 뭉치(탑노트), 얼굴 옆으로 길게 늘어진 복슬 귀, 짧고 둥근 주둥이·까만 코·작은 까만 눈,
+곧고 굵은 다리와 둥근 털 발, 엉덩이에서 위로 선 짧은 꼬리 끝의 동그란 털 방울.
+머리·목·몸·다리·꼬리를 한 덩어리 윤곽선으로 그려(따로 떨어져 보이지 않게) 귀만 따로 겹쳐 그림.
+가장자리는 곱슬 털처럼 오돌토돌, 윤곽선은 짙은 밤색 (선 그림에서는 이 선만 검게 남고 털은 흰 종이가 되도록 털 밝기를 맞춤).
+몸은 옆모습(오른쪽을 봄), 정면·뒷모습도 있음. 512×512, 발 맨 아래 ≈ 488줄 (앱 HomeDog 의 y0·footPx 와 맞춤)"""
 import math
 import os
 from PIL import Image, ImageDraw
 
-from cat_art import capsule, blob, Canvas, INK, W_LINE, S, GROUND
+from cat_art import capsule, Canvas, W_LINE, GROUND
 
-FUR = (250, 222, 160)          # 연한 노란 크림색 털
-FUR_D = (238, 198, 128)        # 그늘진 털 (귀·먼 발)
-CREAM = (254, 238, 200)        # 주둥이·가슴·발끝 (털보다 조금 밝게)
-OUTL = (96, 64, 40)            # 가는 밤색 윤곽선 (선 그림에선 검게)
+FUR = (172, 112, 74)           # 갈색 곱슬 털 (선 그림 변환에서 흰 종이가 되는 밝기)
+FUR_D = (152, 98, 64)          # 그늘 (먼 다리·먼 귀)
+FUR_L = (196, 136, 94)         # 빛 받는 털 (머리 위·등)
+EAR = (158, 100, 66)           # 귀
+OUTL = (64, 40, 26)            # 짙은 밤색 윤곽선
+DARK = (40, 26, 22)            # 코·눈
 TONGUE = (236, 120, 132)
-MOUTH = (120, 52, 56)
+MOUTH = (110, 48, 52)
 DIRT = (120, 92, 64)
-FOOT_Y = GROUND - 8
+BARK = (150, 104, 62)
+BARK_D = (118, 80, 46)
+FOOT_Y = GROUND - 2            # 발 가운데 (발 아래 끝 ≈ 488줄)
 
 
 # ───────── 모양 ─────────
-def fluff(c, rx, ry, ang=0.0, n=16, amp=0.045, ph=0.0):
-    """곱슬 털 덩어리: 가장자리가 오돌토돌한 타원"""
+def fluff(c, rx, ry, ang=0.0, n=14, amp=0.05, ph=0.0):
+    """곱슬 털 덩어리: 가장자리가 둥근 털 방울로 오돌토돌한 타원"""
     def poly(g):
         a = math.radians(ang)
         pts = []
-        for k in range(144):
-            t = k / 144 * 2 * math.pi
-            bump = 1.0                     # 매끈한 윤곽 (곱슬 털 뭉치 없앰)
+        for k in range(180):
+            t = k / 180 * 2 * math.pi
+            bump = 1.0 + amp * (abs(math.sin(n * t / 2 + ph)) - 0.6)
             x, y = (rx * bump + g) * math.cos(t), (ry * bump + g) * math.sin(t)
             pts.append((c[0] + x * math.cos(a) - y * math.sin(a), c[1] + x * math.sin(a) + y * math.cos(a)))
         return pts
     return poly
 
 
-BARK = (150, 104, 62)
-BARK_D = (118, 80, 46)
-
-
-def mouth_stick(cv, p0, p1, r=9):
-    """입에 문 나뭇가지: 가는 밤색 윤곽의 막대 + 결 + 곁가지 하나"""
-    layer(cv, [capsule(p0, p1, r, r * 0.85)], BARK)
-    mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
-    layer(cv, [capsule((mx + (p1[0] - p0[0]) * 0.25, my + (p1[1] - p0[1]) * 0.25), (mx + (p1[0] - p0[0]) * 0.33, my - 22), 4, 3)], BARK)
-    cv.line([(p0[0] + 10, p0[1] - 2), (p1[0] - 10, p1[1] - 2)], w=W_LINE * 0.3, col=BARK_D)
-
-
 def oval(c, rx, ry, ang=0.0):
     return fluff(c, rx, ry, ang, amp=0.0)
 
 
-def nub(top, foot, r_top=26, r_foot=22):
-    """몸에서 이어져 내려오는 짧고 통통한 발 (몸과 같은 겹에 그려 윤곽이 하나로 이어짐)"""
-    return capsule(top, foot, r_top, r_foot)
-
-
 def layer(cv, shapes, fill):
-    """검게 부풀려 그린 뒤 색으로 채움 → 겹친 모양들은 바깥 윤곽선 하나로 이어짐"""
+    """짙게 부풀려 그린 뒤 색으로 채움 → 겹친 모양들은 바깥 윤곽선 하나로 이어짐"""
     for sh in shapes:
-        p = cv._p(sh(W_LINE * 0.7))
+        p = cv._p(sh(W_LINE * 0.75))
         cv.d.polygon(p, fill=OUTL)
         cv.da.polygon(p, fill=255)
     for sh in shapes:
@@ -66,279 +54,314 @@ def layer(cv, shapes, fill):
 
 
 def patch(cv, shapes, fill):
-    """윤곽선 없이 안쪽에만 칠함"""
     for sh in shapes:
         cv.d.polygon(cv._p(sh(0)), fill=fill)
 
 
-def curl_marks(cv, c, rx, ry, n=5, seed=0, col=FUR_D):
-    """(매끈한 털이라 결 표시는 그리지 않음)"""
-    return
+def curls(cv, c, rx, ry, n, seed, col=FUR_D):
+    """곱슬 털 결: 작은 반달 몇 개 (과하지 않게)"""
     for k in range(n):
         t = (k * 2.399 + seed) % (2 * math.pi)
-        r = 0.35 + 0.45 * ((k * 0.618 + seed * 0.3) % 1)
+        r = 0.3 + 0.55 * ((k * 0.618 + seed * 0.37) % 1)
         x, y = c[0] + math.cos(t) * rx * r, c[1] + math.sin(t) * ry * r
-        cv.line([(x - 6, y), (x - 2, y - 5), (x + 4, y - 3)], w=W_LINE * 0.45, col=col)
+        cv.line([(x - 6, y + 1), (x - 2, y - 4), (x + 4, y - 4), (x + 7, y + 1)], w=W_LINE * 0.32, col=col)
 
 
-def eye_dot(cv, c, kind='open', r=7.5):
+def mouth_stick(cv, p0, p1, r=9):
+    """입에 문 나뭇가지"""
+    layer(cv, [capsule(p0, p1, r, r * 0.85)], BARK)
+    mx, my = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+    layer(cv, [capsule((mx + (p1[0] - p0[0]) * 0.25, my + (p1[1] - p0[1]) * 0.25), (mx + (p1[0] - p0[0]) * 0.33, my - 22), 4, 3)], BARK)
+    cv.line([(p0[0] + 10, p0[1] - 2), (p1[0] - 10, p1[1] - 2)], w=W_LINE * 0.3, col=BARK_D)
+
+
+def eye(cv, c, kind='open', r=7.0):
     if kind == 'open':
-        r = r * 1.35                                          # 크고 반짝이는 갈색 눈
-        cv.dot(c, r, (52, 32, 22))
-        cv.dot((c[0] + r * 0.32, c[1] - r * 0.36), r * 0.34, (255, 255, 255))
-        cv.dot((c[0] - r * 0.3, c[1] + r * 0.35), r * 0.14, (255, 255, 255))
+        cv.dot(c, r, DARK)
+        cv.dot((c[0] + r * 0.3, c[1] - r * 0.35), r * 0.36, (255, 255, 255))
     elif kind == 'closed':
-        cv.line([(c[0] - 8, c[1] - 1), (c[0], c[1] + 4), (c[0] + 8, c[1] - 1)], w=W_LINE * 0.6)
+        cv.line([(c[0] - 8, c[1] - 1), (c[0], c[1] + 4), (c[0] + 8, c[1] - 1)], w=W_LINE * 0.6, col=OUTL)
     elif kind == 'happy':
-        cv.line([(c[0] - 8, c[1] + 3), (c[0], c[1] - 4), (c[0] + 8, c[1] + 3)], w=W_LINE * 0.6)
+        cv.line([(c[0] - 8, c[1] + 3), (c[0], c[1] - 4), (c[0] + 8, c[1] + 3)], w=W_LINE * 0.6, col=OUTL)
 
 
-def tail_curve(base, wag=0.0, back=1.0):
-    """위로 말린 가는 꼬리: 밑동(굵음) → 끝(가늘게), wag 도만큼 흔들림. back=1 이면 왼쪽(뒤)으로 휨"""
-    a = math.radians(wag)
-    pts0 = [(0, 0), (-16 * back, -22), (-20 * back, -48), (-10 * back, -70)]
-    pts = [(base[0] + x * math.cos(a) - y * math.sin(a), base[1] + x * math.sin(a) + y * math.cos(a)) for x, y in pts0]
-    return blob(pts, [14, 12, 10, 8])
-
-
-# ───────── 옆모습 ─────────
-def side_head(cv, hc, ang=0.0, mouth='closed', eye='open', ear_swing=0.0, tongue=0.0, carry=False):
-    """옆얼굴 (오른쪽을 봄): 동그란 곱슬 머리 + 앞으로 살짝 나온 크림색 주둥이 + 까만 코 + 점 눈 + 축 늘어진 큰 귀.
-    ang: 고개 들기(-) / 숙이기(+) (도), ear_swing: 귀가 뒤로 흔들림(도)"""
+def rot(hc, ang):
     a = math.radians(ang)
     def P(dx, dy):
         return (hc[0] + dx * math.cos(a) - dy * math.sin(a), hc[1] + dx * math.sin(a) + dy * math.cos(a))
-    # 먼 귀 (머리 위 뒤쪽에 살짝 보임)
-    layer(cv, [oval(P(-36, -58), 24, 34, ang - 40 + ear_swing)], FUR_D)
-    shapes = [fluff(hc, 92, 84, ang, n=18, amp=0.04), fluff(P(64, 30), 44, 36, ang, n=10, amp=0.05)]
+    return P
+
+
+# ───────── 옆얼굴 (오른쪽을 봄) ─────────
+def side_head_shapes(hc, ang, mouth):
+    """머리 실루엣 (몸과 같은 겹에 넣어 윤곽선이 하나로 이어짐): 둥근 머리 + 탑노트 + 짧고 둥근 주둥이"""
+    P = rot(hc, ang)
+    sh = [fluff(hc, 58, 54, ang, n=12, amp=0.06), fluff(P(-6, -36), 50, 36, ang, n=10, amp=0.08, ph=0.6),
+          fluff(P(56, 18), 40, 25, ang - 4, n=8, amp=0.05)]
     if mouth in ('open', 'pant', 'howl'):
-        shapes.append(oval(P(60, 58 if mouth != 'pant' else 52), 26, 16, ang))
-    layer(cv, shapes, FUR)
-    curl_marks(cv, P(-20, -30), 50, 36, n=5, seed=1)
-    # 크림색 주둥이
-    patch(cv, [fluff(P(66, 32), 40, 31, ang, n=10, amp=0.05)], CREAM)
+        sh.append(oval(P(50, 44), 26, 13, ang))                          # 벌린 아래턱
+    return sh
+
+
+def side_head_detail(cv, hc, ang, mouth='closed', eyek='open', ear_swing=0.0, tongue=0.0, carry=False):
+    P = rot(hc, ang)
+    patch(cv, [fluff(P(-4, -40), 36, 20, ang, n=8, amp=0.08)], FUR_L)     # 머리 위 빛
     if mouth in ('open', 'pant', 'howl'):
-        patch(cv, [oval(P(60, 58 if mouth != 'pant' else 52), 22, 12, ang)], CREAM)
         if mouth == 'howl':
-            o = oval(P(84, 52), 9, 11, ang)
-            cv.d.polygon(cv._p(o(0)), fill=MOUTH)
+            cv.d.polygon(cv._p(oval(P(84, 32), 8, 10, ang)(0)), fill=MOUTH)
         else:
-            cv.d.polygon(cv._p([P(52, 46), P(96, 44), P(86, 58 if mouth != 'pant' else 54), P(56, 56)]), fill=MOUTH)
+            cv.d.polygon(cv._p([P(44, 34), P(90, 30), P(80, 46 if mouth != 'pant' else 42), P(48, 46)]), fill=MOUTH)
             if mouth == 'pant' or tongue > 0:
-                tg = oval(P(76, 60 + tongue), 11, 15, ang + 10)
-                cv.d.polygon(cv._p(tg(W_LINE * 0.55)), fill=INK)
+                tg = oval(P(68, 48 + tongue), 10, 14, ang + 10)
+                cv.d.polygon(cv._p(tg(W_LINE * 0.55)), fill=OUTL)
                 cv.d.polygon(cv._p(tg(0)), fill=TONGUE)
     else:
-        cv.line([P(70, 48), P(82, 52), P(94, 46)], w=W_LINE * 0.5)
-    # 코 · 눈 · 볼
-    nz = oval(P(102, 22), 13, 10, ang)
-    cv.d.polygon(cv._p(nz(0)), fill=INK)
-    cv.dot(P(98, 18), 2.6, (255, 255, 255))
-    eye_dot(cv, P(36, -4), eye)
-    cv.dot(P(40, 24), 9, (248, 178, 160))
-    # 가까운 귀: 머리 위 옆에서 접혀 앞으로 살짝 내려온 작은 귀 (눈 위·뒤, 눈높이까지만)
-    layer(cv, [oval(P(-18, -40), 28, 40, ang + 28 + ear_swing)], FUR_D)
+        cv.line([P(60, 36), P(74, 38), P(88, 33)], w=W_LINE * 0.45, col=OUTL)
+    # 코 · 눈
+    cv.d.polygon(cv._p(oval(P(94, 12), 12, 10, ang)(0)), fill=DARK)
+    cv.dot(P(90, 8), 2.6, (255, 255, 255))
+    eye(cv, P(26, -6), eyek)
+    # 가까운 귀: 머리 옆 위쪽에서 턱 아래까지 길게 늘어진 복슬 귀 (머리에 겹쳐 붙음)
+    ea = ang + 6 + ear_swing
+    layer(cv, [fluff(P(-16, 34), 28, 50, ea, n=10, amp=0.09, ph=0.3)], EAR)
+    curls(cv, P(-16, 40), 18, 34, 3, 2.1, col=FUR_D)
     if carry:
-        # 막대를 가로로 물고 있음: 주둥이 아래쪽(입)에 걸쳐 앞뒤로 삐져나옴
-        mouth_stick(cv, P(-24, 56), P(118, 48))
+        mouth_stick(cv, P(-20, 40), P(116, 34))
 
 
-def legs_pose(ph, stride=16, lift=9):
-    """걷는 발 네 개의 발끝 자리 (뒷다리 먼·가까운, 앞다리 먼·가까운). 몸에서 바로 이어진 짧은 발이라 보폭이 작음"""
+def far_ear(hc, ang, ear_swing=0.0):
+    P = rot(hc, ang)
+    return fluff(P(-40, 26), 22, 42, ang + 14 + ear_swing, n=8, amp=0.09)
+
+
+# ───────── 옆모습 몸 ─────────
+def legs_pose(ph, stride=18, lift=12):
+    """걷는 발 네 개의 발 자리 (뒷다리 먼·가까운, 앞다리 먼·가까운)"""
     def foot(px, p):
         s = math.sin(p * 2 * math.pi)
         c = math.cos(p * 2 * math.pi)
         return (px + s * stride, FOOT_Y - max(0, c) * lift)
-    return [foot(170, ph + 0.5), foot(306, ph + 0.75), foot(150, ph), foot(290, ph + 0.25)]
+    return [foot(198, ph + 0.5), foot(176, ph + 0.75), foot(284, ph), foot(304, ph + 0.25)]
 
 
-def draw_stand(cv, feet, body=(234, 356, 104, 70, -2), head=(368, 238), hang=0.0, mouth='closed', eye='open',
-               tail=(104, 300, 0.0), ear_swing=0.0, tongue=0.0, bob=0.0, carry=False):
+def leg(top, foot, r0=24, r1=21):
+    """곧고 굵은 다리 + 둥근 털 발 (한 덩어리)"""
+    return [capsule(top, (foot[0], foot[1] - 8), r0, r1), fluff((foot[0] + 3, foot[1]), 25, 15, 0, n=8, amp=0.07)]
+
+
+def draw_stand(cv, feet, body=(240, 318, 98, 58, -3), head=(366, 200), hang=0.0, mouth='closed', eyek='open',
+               tail=(0.0,), ear_swing=0.0, tongue=0.0, bob=0.0, carry=False):
     bx, by, brx, bry, bang = body
     by += bob
-    # 꼬리: 엉덩이에서 위로 말려 올라간 가는 꼬리 (tw = 흔드는 각도)
-    tx, ty, tw = tail
-    layer(cv, tail_curve((tx + 18, ty + 14 + bob), tw), FUR)
-    # 몸 + 네 발 + 목: 한 덩어리 (윤곽선 하나)
     (rf, rn, ff, fn) = feet
-    shapes = [fluff((bx, by), brx, bry, bang, n=20, amp=0.035),
-              nub((rf[0] + 4, by + 30), rf, 26, 21), nub((ff[0] - 4, by + 30), ff, 26, 21),
-              nub((rn[0] + 4, by + 34), rn, 28, 22), nub((fn[0] - 4, by + 34), fn, 28, 22),
-              fluff((bx + brx * 0.7, by - bry * 0.5), 56, 52, 0, n=10, amp=0.05)]
+    hc = (head[0], head[1] + bob * 0.6)
+    tw = tail[0]
+    # 먼 다리·먼 귀 (뒤에, 조금 그늘)
+    layer(cv, leg((rf[0], by + 20), rf) + leg((ff[0], by + 20), ff) + [far_ear(hc, hang, ear_swing)], FUR_D)
+    # 한 덩어리: 몸 + 엉덩이 털 + 가슴 털 + 목 + 머리 + 가까운 다리 + 꼬리(방울)
+    a = math.radians(tw)
+    tb = (bx - brx * 0.86, by - bry * 0.55)                                 # 꼬리 밑동
+    tt = (tb[0] - 22 + 48 * math.sin(a), tb[1] - 44 * math.cos(a))          # 꼬리 끝 (흔들림)
+    shapes = [fluff((bx, by), brx, bry, bang, n=22, amp=0.04),
+              fluff((bx - brx * 0.62, by + 6), 48, 56, 0, n=10, amp=0.06),           # 엉덩이 털
+              fluff((bx + brx * 0.74, by - 10), 46, 54, 0, n=10, amp=0.06),          # 가슴 털
+              capsule((bx + brx * 0.72, by - 18), (hc[0] - 8, hc[1] + 28), 40, 36),  # 목
+              capsule(tb, tt, 11, 9), fluff(tt, 25, 23, 0, n=10, amp=0.1)]
+    shapes += side_head_shapes(hc, hang, 'closed' if carry else mouth)
+    shapes += leg((rn[0], by + 24), rn, 27, 22) + leg((fn[0], by + 22), fn, 25, 21)
     layer(cv, shapes, FUR)
-    # 먼 발은 조금 그늘, 가까운 발과의 사이를 짧은 선으로만 나눔
-    for f in (rf, ff):
-        patch(cv, [capsule((f[0], f[1] - 26), f, 19, 17)], FUR_D)
-    for f in (rf, ff, rn, fn):
-        patch(cv, [oval((f[0], f[1] + 2), 19, 12)], CREAM)                                # 하얀 발끝
-    for f in (rn, fn):
-        cv.line([(f[0] - 18, f[1] - 30), (f[0] - 20, f[1] - 4)], w=W_LINE * 0.45)
-        cv.line([(f[0] - 4, f[1] + 4), (f[0] - 4, f[1] + 12)], w=W_LINE * 0.35)
-        cv.line([(f[0] + 6, f[1] + 4), (f[0] + 6, f[1] + 12)], w=W_LINE * 0.35)
-    # 크림색 가슴
-    patch(cv, [fluff((bx + brx * 0.66, by + 6), 40, 46, 0, n=10, amp=0.06)], CREAM)
-    curl_marks(cv, (bx - 20, by - 10), brx * 0.6, bry * 0.5, n=7, seed=2)
-    side_head(cv, (head[0], head[1] + bob * 0.6), hang, 'closed' if carry else mouth, eye, ear_swing, 0 if carry else tongue, carry=carry)
+    patch(cv, [fluff((bx - 6, by - bry * 0.55), brx * 0.62, 16, bang, n=12, amp=0.08)], FUR_L)       # 등 빛
+    curls(cv, (bx - 10, by + 4), brx * 0.7, bry * 0.55, 6, 1.3)
+    curls(cv, (bx - brx * 0.62, by + 8), 30, 36, 3, 4.2)
+    for f in (rn, fn):                                                       # 다리 사이 가는 결
+        cv.line([(f[0] - 4, f[1] - 4), (f[0] - 4, f[1] + 8)], w=W_LINE * 0.3, col=OUTL)
+        cv.line([(f[0] + 8, f[1] - 4), (f[0] + 8, f[1] + 8)], w=W_LINE * 0.3, col=OUTL)
+    side_head_detail(cv, hc, hang, 'closed' if carry else mouth, eyek, ear_swing, 0 if carry else tongue, carry=carry)
 
 
-def draw_sit(cv, head=(330, 214), hang=-4, mouth='closed', eye='open', tail_wave=0.0, paw=False, tongue=0.0, ear_swing=0.0):
-    layer(cv, tail_curve((150, 452), -60 + tail_wave), FUR)                                     # 꼬리 (바닥에서 살랑)
-    shapes = [fluff((236, 372), 92, 96, -12, n=20, amp=0.035),                                   # 엉덩이·몸
-              fluff((196, 428), 72, 42, 0, n=14, amp=0.04),                                       # 뒷다리 허벅지
-              nub((292, 380), (300, FOOT_Y), 28, 22)]                                             # 가까운 앞발
+def draw_sit(cv, head=(338, 182), hang=-4, mouth='closed', eyek='open', tail_wave=0.0, paw=False, tongue=0.0, ear_swing=0.0):
+    hc = head
+    far = leg((268, 360), (272, FOOT_Y), 22, 19) + [far_ear(hc, hang, ear_swing)]
+    layer(cv, far, FUR_D)
+    tb, tt = (168, 410), (128 - tail_wave * 0.6, 396 - tail_wave)
+    shapes = [fluff((232, 404), 74, 58, 0, n=16, amp=0.05),                  # 엉덩이 (앉음)
+              fluff((262, 330), 58, 80, -14, n=18, amp=0.045),               # 세운 몸
+              fluff((292, 300), 42, 50, 0, n=10, amp=0.06),                  # 가슴 털
+              capsule((288, 276), (hc[0] - 10, hc[1] + 28), 38, 34),          # 목
+              fluff((222, 438), 54, 30, 0, n=10, amp=0.07),                  # 뒷다리 허벅지
+              fluff((266, FOOT_Y), 27, 15, 0, n=8, amp=0.07),                # 뒷발
+              capsule(tb, tt, 10, 9), fluff(tt, 24, 22, 0, n=10, amp=0.1)]
     if paw:
-        shapes.append(nub((300, 340), (366, 330), 24, 20))                                         # 손 주기: 앞발을 듦
+        shapes += [capsule((300, 330), (362, 318), 22, 19), fluff((366, 318), 20, 16, 0, n=8, amp=0.07)]
     else:
-        shapes.append(nub((262, 384), (266, FOOT_Y), 26, 21))
+        shapes += leg((300, 352), (304, FOOT_Y), 24, 21)
+    shapes += side_head_shapes(hc, hang, mouth)
     layer(cv, shapes, FUR)
-    patch(cv, [fluff((286, 336), 40, 54, -8, n=10, amp=0.06)], CREAM)                            # 가슴
-    feet = [(300, FOOT_Y)] + ([] if paw else [(266, FOOT_Y)]) + [(214, FOOT_Y + 2)]
-    for f in feet:
-        patch(cv, [oval((f[0], f[1] + 2), 19, 12)], CREAM)
-    if paw:
-        patch(cv, [oval((366, 330), 17, 15)], CREAM)
-    cv.line([(282, 400), (280, FOOT_Y - 4)], w=W_LINE * 0.45)
-    curl_marks(cv, (220, 380), 60, 60, n=6, seed=4)
-    side_head(cv, head, hang, mouth, eye, ear_swing, tongue)
+    curls(cv, (236, 396), 46, 34, 4, 0.7)
+    curls(cv, (262, 330), 34, 50, 3, 2.9)
+    cv.line([(236, 444), (258, 450)], w=W_LINE * 0.35, col=OUTL)
+    side_head_detail(cv, hc, hang, mouth, eyek, ear_swing, tongue)
 
 
-def draw_lie(cv, eye='open', breath=0.0, head_down=False):
-    layer(cv, [fluff((96, 430), 22, 20, 0, n=8, amp=0.09)], FUR)
-    shapes = [fluff((234, 422), 136, 46 + breath, 0, n=24, amp=0.03),
-              nub((330, 440), (420, FOOT_Y - 2), 22, 19), nub((300, 446), (392, FOOT_Y), 24, 20)]
+def draw_lie(cv, eyek='open', breath=0.0, head_down=False):
+    hc = (392, 352) if not head_down else (398, 372)
+    hang = 0 if not head_down else 10
+    layer(cv, [far_ear(hc, hang, -30)], FUR_D)
+    shapes = [fluff((236, 420), 122, 44 + breath, 0, n=24, amp=0.035),
+              fluff((166, 418), 52, 44, 0, n=10, amp=0.06),                 # 뒷다리 허벅지
+              capsule((320, 440), (404, FOOT_Y - 2), 20, 18), fluff((410, FOOT_Y - 2), 22, 14, 0, n=8, amp=0.07),
+              capsule((300, 446), (378, FOOT_Y + 2), 21, 19), fluff((384, FOOT_Y + 2), 23, 14, 0, n=8, amp=0.07),
+              capsule((330, 410), (hc[0] - 10, hc[1] + 28), 36, 32),
+              capsule((118, 420), (98, 404), 9, 8), fluff((94, 400), 22, 20, 0, n=10, amp=0.1)]
+    shapes += side_head_shapes(hc, hang, 'closed')
     layer(cv, shapes, FUR)
-    for f in ((420, FOOT_Y - 2), (392, FOOT_Y)):
-        patch(cv, [oval(f, 17, 11)], CREAM)
-    curl_marks(cv, (220, 410), 90, 26, n=7, seed=5)
-    hc = (384, 352) if not head_down else (392, 368)
-    side_head(cv, hc, 8 if head_down else 0, 'closed', eye, ear_swing=-40)
+    patch(cv, [fluff((226, 388), 80, 12, 0, n=12, amp=0.08)], FUR_L)
+    curls(cv, (226, 420), 90, 26, 6, 5.1)
+    side_head_detail(cv, hc, hang, 'closed', eyek, ear_swing=-30)
 
 
 def draw_sleep(cv, breath=0.0):
-    shapes = [fluff((248, 420), 128, 48 + breath, 0, n=24, amp=0.03)]
+    hc = (372, 392)
+    shapes = [fluff((246, 424), 116, 46 + breath, 0, n=24, amp=0.035),
+              fluff((170, 424), 50, 42, 0, n=10, amp=0.06),
+              capsule((320, 420), (hc[0] - 12, hc[1] + 18), 34, 30),
+              fluff((138, 448), 22, 20, 0, n=10, amp=0.1)]                   # 꼬리 방울을 몸에 붙임
+    shapes += side_head_shapes(hc, 16, 'closed')
     layer(cv, shapes, FUR)
-    curl_marks(cv, (240, 410), 90, 28, n=7, seed=6)
-    side_head(cv, (370, 366), 14, 'closed', 'closed', ear_swing=-50)
-    layer(cv, [fluff((132, 436), 26, 22, 0, n=8, amp=0.09)], FUR)                              # 꼬리를 몸에 붙임
+    patch(cv, [fluff((236, 390), 76, 12, 0, n=12, amp=0.08)], FUR_L)
+    curls(cv, (236, 424), 86, 26, 6, 6.3)
+    side_head_detail(cv, hc, 16, 'closed', 'closed', ear_swing=-40)
 
 
 def draw_playbow(cv, k):
-    feet = [(156, FOOT_Y), (330, FOOT_Y), (140, FOOT_Y), (356, FOOT_Y)]
-    draw_stand(cv, feet, body=(236, 348, 116, 70, 20), head=(380, 330), hang=-6, mouth='pant', tongue=3 * k,
-               tail=(98, 262 - 10 * k, 20 * (k * 2 - 1)), ear_swing=10 * k)
+    feet = [(212, FOOT_Y), (190, FOOT_Y), (318, FOOT_Y), (344, FOOT_Y)]
+    draw_stand(cv, feet, body=(244, 320, 104, 58, 18), head=(386, 314), hang=-8, mouth='pant', tongue=3 * k,
+               tail=(18 * (k * 2 - 1),), ear_swing=10 * k)
 
 
 def draw_jump(cv, k):
     """신나서 뒷발로 서서 앞발을 듦"""
-    layer(cv, [fluff((150, 404), 24, 22, 0, n=8, amp=0.09)], FUR)
-    shapes = [fluff((232, 344), 78, 108, 16, n=20, amp=0.035),
-              nub((214, 420), (206, FOOT_Y), 28, 22), nub((248, 422), (250, FOOT_Y), 28, 22),
-              nub((280, 300), (338, 262 - 10 * k), 24, 20), nub((262, 310), (320, 280 - 6 * k), 22, 18)]
+    hc = (306, 168)
+    layer(cv, [far_ear(hc, -16, 20)] + [capsule((262, 302), (322, 280 - 6 * k), 20, 18), fluff((326, 278 - 6 * k), 19, 15, 0, n=8, amp=0.07)], FUR_D)
+    shapes = [fluff((240, 330), 64, 98, 16, n=20, amp=0.04),
+              fluff((214, 404), 50, 42, 0, n=10, amp=0.06),
+              capsule((270, 252), (hc[0] - 6, hc[1] + 28), 36, 32),
+              capsule((206, 420), (204, FOOT_Y - 6), 26, 22), fluff((208, FOOT_Y), 25, 15, 0, n=8, amp=0.07),
+              capsule((246, 420), (250, FOOT_Y - 6), 26, 22), fluff((254, FOOT_Y), 25, 15, 0, n=8, amp=0.07),
+              capsule((282, 292), (342, 260 - 10 * k), 22, 19), fluff((346, 258 - 10 * k), 20, 16, 0, n=8, amp=0.07),
+              capsule((176, 360), (150, 330), 10, 9), fluff((146, 324), 23, 21, 0, n=10, amp=0.1)]
+    shapes += side_head_shapes(hc, -16, 'pant')
     layer(cv, shapes, FUR)
-    for f in ((206, FOOT_Y), (250, FOOT_Y), (338, 262 - 10 * k), (320, 280 - 6 * k)):
-        patch(cv, [oval(f, 17, 12)], CREAM)
-    patch(cv, [fluff((262, 318), 34, 60, 16, n=10, amp=0.06)], CREAM)
-    side_head(cv, (302, 186), -16, 'pant', 'happy', ear_swing=20, tongue=3)
+    curls(cv, (240, 330), 40, 70, 5, 3.3)
+    side_head_detail(cv, hc, -16, 'pant', 'happy', ear_swing=20, tongue=3)
 
 
 def draw_roll(cv, k):
+    """등을 대고 누워 네 발을 들고 꼼지락 (몸에 붙은 다리, 머리는 거꾸로 옆에)"""
     wig = (k * 2 - 1) * 8
-    feet = [(180 + wig, 336), (230 - wig, 330), (286 + wig, 334), (206 - wig, 342)]
-    shapes = [fluff((236, 420), 124, 50, 0, n=22, amp=0.03)] + [nub((f[0], 392), f, 24, 20) for f in feet]
+    hc = (386, 392)
+    feet = [(176 + wig, 320), (222 - wig, 312), (280 + wig, 316), (322 - wig, 326)]
+    layer(cv, [capsule((f[0] + 6, 396), f, 17, 15) for f in feet[:2]] + [fluff(f, 17, 19, 0, n=8, amp=0.07) for f in feet[:2]], FUR_D)
+    shapes = [fluff((246, 420), 112, 50, 0, n=22, amp=0.035),
+              capsule((322, 420), (hc[0] - 20, hc[1] + 6), 36, 32),
+              capsule((128, 430), (100, 420), 9, 8), fluff((94, 418), 22, 20, 0, n=10, amp=0.1)]
+    for f in feet[2:]:
+        shapes += [capsule((f[0] - 6, 400), f, 18, 16), fluff(f, 18, 20, 0, n=8, amp=0.07)]
+    shapes += side_head_shapes(hc, -34, 'pant')
     layer(cv, shapes, FUR)
-    for f in feet:
-        patch(cv, [oval(f, 16, 12)], CREAM)
-    patch(cv, [fluff((236, 404), 90, 26, 0, n=14, amp=0.05)], CREAM)                           # 배
-    side_head(cv, (384, 428), 160, 'pant', 'happy', tongue=2)
+    patch(cv, [fluff((250, 402), 80, 22, 0, n=12, amp=0.06)], FUR_L)          # 배
+    side_head_detail(cv, hc, -34, 'pant', 'happy', ear_swing=-30, tongue=3)
 
 
 def draw_dig(cv, k):
-    feet = [(158, FOOT_Y), (330 - 20 * k, FOOT_Y - 6), (142, FOOT_Y), (352 + 20 * k, FOOT_Y - 14 + 8 * k)]
-    draw_stand(cv, feet, body=(234, 344, 116, 70, 14), head=(382, 340), hang=24, tail=(100, 274, 25 * (k * 2 - 1)))
-    for i in range(6):                                                                           # 튀는 흙
-        x = 316 - i * 14 - 20 * k
+    feet = [(214, FOOT_Y), (192, FOOT_Y), (330 - 18 * k, FOOT_Y - 8), (352 + 18 * k, FOOT_Y - 16 + 8 * k)]
+    draw_stand(cv, feet, body=(240, 316, 104, 58, 14), head=(388, 318), hang=24, tail=(25 * (k * 2 - 1),))
+    for i in range(6):                                                       # 튀는 흙
+        x = 318 - i * 14 - 20 * k
         y = 430 - (i % 3) * 18 - 12 * k
         cv.dot((x, y), 5 - (i % 2), DIRT)
 
 
 # ───────── 정면 ─────────
-def front_head(cv, hc, tilt=0.0, eye='open', mouth='closed', tongue=0.0, ear_swing=0.0, carry=False):
-    a = math.radians(tilt)
-    def P(dx, dy):
-        return (hc[0] + dx * math.cos(a) - dy * math.sin(a), hc[1] + dx * math.sin(a) + dy * math.cos(a))
-    layer(cv, [fluff(hc, 110, 96, tilt, n=22, amp=0.035)], FUR)
-    # 머리 위 양옆에서 바깥으로 접혀 내려온 작은 귀 (머리 가장자리에 겹쳐, 눈높이까지)
+def front_head_shapes(hc, tilt):
+    P = rot(hc, tilt)
+    return [fluff(hc, 68, 62, tilt, n=14, amp=0.06), fluff(P(0, -44), 58, 38, tilt, n=12, amp=0.08, ph=0.4)]
+
+
+def front_head_detail(cv, hc, tilt=0.0, eyek='open', mouth='closed', tongue=0.0, ear_swing=0.0, carry=False):
+    P = rot(hc, tilt)
+    patch(cv, [fluff(P(0, -50), 40, 20, tilt, n=10, amp=0.08)], FUR_L)
+    # 주둥이 (조금 밝게) + 코 + 눈
+    patch(cv, [fluff(P(0, 30), 34, 26, tilt, n=10, amp=0.06)], FUR_L)
     for sx in (-1, 1):
-        layer(cv, [oval(P(sx * 88, -22), 28, 46, tilt - sx * (24 + ear_swing))], FUR_D)
-    curl_marks(cv, P(0, -52), 60, 22, n=4, seed=7)
-    # 크림색 주둥이 털 (볼까지 복슬)
-    patch(cv, [fluff(P(0, 40), 52, 40, tilt, n=12, amp=0.06)], CREAM)
-    for sx in (-1, 1):
-        eye_dot(cv, P(sx * 38, -4), eye, r=8.5)
-        cv.dot(P(sx * 62, 24), 11, (248, 178, 160))
-    nz = oval(P(0, 24), 15, 11, tilt)
-    cv.d.polygon(cv._p(nz(0)), fill=INK)
-    cv.dot(P(-4, 20), 3, (255, 255, 255))
+        eye(cv, P(sx * 28, -6), eyek, r=7.5)
+    cv.d.polygon(cv._p(oval(P(0, 20), 13, 10, tilt)(0)), fill=DARK)
+    cv.dot(P(-4, 16), 2.8, (255, 255, 255))
     if mouth == 'pant' or tongue > 0:
-        cv.d.polygon(cv._p([P(-14, 40), P(14, 40), P(0, 52)]), fill=MOUTH)
-        tg = oval(P(0, 54 + tongue), 10, 14, tilt)
-        cv.d.polygon(cv._p(tg(W_LINE * 0.5)), fill=INK)
+        cv.d.polygon(cv._p([P(-12, 34), P(12, 34), P(0, 46)]), fill=MOUTH)
+        tg = oval(P(0, 48 + tongue), 9, 13, tilt)
+        cv.d.polygon(cv._p(tg(W_LINE * 0.5)), fill=OUTL)
         cv.d.polygon(cv._p(tg(0)), fill=TONGUE)
     else:
-        cv.line([P(0, 34), P(0, 42)], w=W_LINE * 0.45)
-        cv.line([P(-12, 46), P(-5, 50), P(0, 44), P(5, 50), P(12, 46)], w=W_LINE * 0.45)
+        cv.line([P(0, 28), P(0, 36)], w=W_LINE * 0.4, col=OUTL)
+        cv.line([P(-10, 40), P(-4, 43), P(0, 38), P(4, 43), P(10, 40)], w=W_LINE * 0.4, col=OUTL)
+    # 양옆으로 길게 늘어진 복슬 귀 (얼굴 옆에 붙어 턱 아래까지)
+    for sx in (-1, 1):
+        layer(cv, [fluff(P(sx * 62, 22), 26, 56, tilt - sx * (6 + ear_swing), n=10, amp=0.09, ph=0.2 * sx)], EAR)
+        curls(cv, P(sx * 62, 28), 14, 36, 3, 1.7 + sx)
     if carry:
-        mouth_stick(cv, P(-128, 52), P(128, 46))
+        mouth_stick(cv, P(-128, 40), P(128, 34))
 
 
-def front_body(cv, lift_l=0.0, lift_r=0.0, tail_wave=0.0, sit=True):
-    """정면 몸: 둥근 몸 아래에 짧은 두 발이 한 덩어리로, 가운데 짧은 선으로만 나뉨"""
-    layer(cv, [fluff((256 + 70 + tail_wave, 440), 20, 18, 0, n=8, amp=0.09)], FUR)              # 뒤로 살짝 보이는 꼬리
-    shapes = [fluff((256, 396), 84, 64, 0, n=18, amp=0.04),
-              nub((226, 420), (224, FOOT_Y - lift_l), 30, 24), nub((286, 420), (288, FOOT_Y - lift_r), 30, 24)]
+def front_body_shapes(lift_l=0.0, lift_r=0.0, sit=True):
+    sh = [fluff((256, 368), 76, 70, 0, n=18, amp=0.05),                       # 가슴·몸
+          fluff((256, 300), 54, 40, 0, n=12, amp=0.06)]                       # 목 (머리와 이어짐)
+    for x, lift in ((226, lift_l), (286, lift_r)):
+        sh += [capsule((x, 400), (x, FOOT_Y - 8 - lift), 25, 22), fluff((x, FOOT_Y - lift), 26, 15, 0, n=8, amp=0.07)]
     if sit:
-        shapes += [fluff((182, 444), 30, 24, 0, n=8, amp=0.06), fluff((330, 444), 30, 24, 0, n=8, amp=0.06)]   # 뒷발이 옆으로 살짝
-    layer(cv, shapes, FUR)
-    patch(cv, [fluff((256, 384), 50, 46, 0, n=12, amp=0.06)], CREAM)
-    cv.line([(256, 424), (256, FOOT_Y - 6)], w=W_LINE * 0.5)                                    # 두 발 사이
-    for f in ((224, FOOT_Y - lift_l), (288, FOOT_Y - lift_r)):
-        patch(cv, [oval((f[0], f[1] + 2), 22, 13)], CREAM)
-        cv.line([(f[0] - 6, f[1] + 2), (f[0] - 6, f[1] + 12)], w=W_LINE * 0.35)
-        cv.line([(f[0] + 6, f[1] + 2), (f[0] + 6, f[1] + 12)], w=W_LINE * 0.35)
-    if sit:
-        for f in ((182, 452), (330, 452)):
-            patch(cv, [oval(f, 18, 10)], CREAM)
+        sh += [fluff((176, 440), 34, 30, 0, n=8, amp=0.07), fluff((336, 440), 34, 30, 0, n=8, amp=0.07)]   # 옆으로 보이는 뒷다리
+    return sh
 
 
-def draw_front_sit(cv, eye='open', mouth='closed', tilt=0.0, tongue=0.0):
-    front_body(cv, sit=True)
-    front_head(cv, (256, 236), tilt, eye, mouth, tongue)
+def draw_front(cv, sit=True, lift_l=0.0, lift_r=0.0, tail_wave=0.0, hc=(256, 214), tilt=0.0, eyek='open', mouth='closed',
+               tongue=0.0, ear_swing=0.0, carry=False):
+    # 몸 뒤로 살짝 보이는 꼬리 방울
+    layer(cv, [fluff((318 + tail_wave, 306), 20, 18, 0, n=10, amp=0.1)], FUR_D)
+    layer(cv, front_body_shapes(lift_l, lift_r, sit) + front_head_shapes(hc, tilt), FUR)
+    cv.line([(256, 404), (256, FOOT_Y - 10)], w=W_LINE * 0.45, col=OUTL)       # 두 앞다리 사이
+    cv.line([(hc[0] - 34, hc[1] + 56), (hc[0], hc[1] + 64), (hc[0] + 34, hc[1] + 56)], w=W_LINE * 0.35, col=FUR_D)   # 턱 아래
+    curls(cv, (256, 372), 50, 40, 5, 2.2)
+    for x, lift in ((226, lift_l), (286, lift_r)):
+        f = (x, FOOT_Y - lift)
+        cv.line([(f[0] - 7, f[1] - 2), (f[0] - 7, f[1] + 9)], w=W_LINE * 0.3, col=OUTL)
+        cv.line([(f[0] + 7, f[1] - 2), (f[0] + 7, f[1] + 9)], w=W_LINE * 0.3, col=OUTL)
+    front_head_detail(cv, hc, tilt, eyek, mouth, tongue, ear_swing, carry)
 
 
 def draw_front_walk(cv, ph, carry=False):
     sw = math.sin(ph * 2 * math.pi)
-    lift_l, lift_r = max(0, sw) * 10, max(0, -sw) * 10
-    front_body(cv, lift_l, lift_r, tail_wave=8 * sw, sit=False)
-    front_head(cv, (256, 240 + 4 * abs(sw)), tilt=3 * sw, mouth='closed' if carry else 'pant', tongue=0 if carry else 1, ear_swing=6 * sw, carry=carry)
+    draw_front(cv, sit=False, lift_l=max(0, sw) * 10, lift_r=max(0, -sw) * 10, tail_wave=8 * sw,
+               hc=(256, 216 + 4 * abs(sw)), tilt=3 * sw, mouth='closed' if carry else 'pant', tongue=0 if carry else 1,
+               ear_swing=6 * sw, carry=carry)
 
 
 def draw_back(cv, ph, sit=False, carry=False):
     sw = math.sin(ph * 2 * math.pi)
     lift_l, lift_r = (0, 0) if sit else (max(0, -sw) * 10, max(0, sw) * 10)
-    shapes = [fluff((256, 396), 88, 66, 0, n=18, amp=0.04),
-              nub((226, 420), (224, FOOT_Y - lift_l), 30, 24), nub((286, 420), (288, FOOT_Y - lift_r), 30, 24)]
+    hc = (256, 222)
+    if carry:                                                                 # 문 막대 양끝이 머리 양옆으로 보임
+        mouth_stick(cv, (256 - 140, 262), (256 + 140, 256))
+    shapes = [fluff((256, 378), 80, 68, 0, n=18, amp=0.05), fluff((256, 300), 54, 40, 0, n=12, amp=0.06)] + front_head_shapes(hc, 0)
+    for x, lift in ((226, lift_l), (286, lift_r)):
+        shapes += [capsule((x, 404), (x, FOOT_Y - 8 - lift), 26, 22), fluff((x, FOOT_Y - lift), 26, 15, 0, n=8, amp=0.07)]
     layer(cv, shapes, FUR)
-    for f in ((224, FOOT_Y - lift_l), (288, FOOT_Y - lift_r)):
-        patch(cv, [oval((f[0], f[1] + 4), 20, 10)], CREAM)
-    cv.line([(256, 428), (256, FOOT_Y - 6)], w=W_LINE * 0.5)
-    hc = (256, 250)
-    if carry:                                                                                     # 문 막대 양끝이 머리 양옆으로 보임
-        mouth_stick(cv, (256 - 140, 296), (256 + 140, 290))
-    layer(cv, [fluff(hc, 108, 94, 0, n=22, amp=0.035)], FUR)
-    for sx in (-1, 1):
-        layer(cv, [oval((hc[0] + sx * 88, hc[1] - 22), 28, 46, -sx * (24 + 6 * sw))], FUR_D)
-    curl_marks(cv, (256, 236), 70, 50, n=6, seed=8)
-    layer(cv, tail_curve((262, 392), 14 + 12 * sw, back=0.6), FUR)                                    # 꼬리 (엉덩이 위로 서서 흔듦)
+    patch(cv, [fluff((256, 196), 46, 26, 0, n=10, amp=0.08)], FUR_L)
+    cv.line([(256, 410), (256, FOOT_Y - 10)], w=W_LINE * 0.45, col=OUTL)
+    curls(cv, (256, 372), 54, 40, 5, 3.7)
+    for sx in (-1, 1):                                                         # 뒤에서 보이는 늘어진 귀
+        layer(cv, [fluff((hc[0] + sx * 60, hc[1] + 22), 26, 54, -sx * (6 + 6 * sw), n=10, amp=0.09)], EAR)
+    # 엉덩이 위로 선 꼬리 + 털 방울 (흔듦)
+    layer(cv, [fluff((256 + 6 * sw, 318), 22, 21, 0, n=10, amp=0.1)], FUR)     # 엉덩이 위 꼬리 방울 (흔듦)
 
 
 def frames():
@@ -349,30 +372,30 @@ def frames():
         f[name] = cv
     still = legs_pose(0.0, stride=0, lift=0)
     for i in range(2):
-        mk(f'dog_stand{i}', lambda cv, i=i: draw_stand(cv, still, tail=(104, 300, 22 * (i * 2 - 1))))
+        mk(f'dog_stand{i}', lambda cv, i=i: draw_stand(cv, still, tail=(22 * (i * 2 - 1),)))
     for i in range(6):
         ph = i / 6
         mk(f'dog_walk{i}', lambda cv, ph=ph: draw_stand(cv, legs_pose(ph), bob=-3 * abs(math.sin(ph * 2 * math.pi)),
-                                                        tail=(104, 300, 16 * math.sin(ph * 2 * math.pi)),
+                                                        tail=(16 * math.sin(ph * 2 * math.pi),),
                                                         ear_swing=5 * math.sin(ph * 2 * math.pi)))
     for i in range(4):
         ph = i / 4
-        mk(f'dog_run{i}', lambda cv, ph=ph: draw_stand(cv, legs_pose(ph, stride=30, lift=20),
-                                                       body=(232, 344, 122, 70, -3 + 5 * math.sin(ph * 2 * math.pi)),
-                                                       bob=-10 * abs(math.sin(ph * 2 * math.pi)), head=(378, 228), mouth='pant', tongue=2,
-                                                       tail=(104, 290, 0), ear_swing=-24))
+        mk(f'dog_run{i}', lambda cv, ph=ph: draw_stand(cv, legs_pose(ph, stride=30, lift=22),
+                                                       body=(238, 312, 104, 56, -3 + 5 * math.sin(ph * 2 * math.pi)),
+                                                       bob=-10 * abs(math.sin(ph * 2 * math.pi)), head=(374, 192), mouth='pant', tongue=2,
+                                                       tail=(-10,), ear_swing=-24))
     mk('dog_sit0', lambda cv: draw_sit(cv, tail_wave=0))
     mk('dog_sit1', lambda cv: draw_sit(cv, tail_wave=16))
-    mk('dog_blink', lambda cv: draw_sit(cv, eye='closed', tail_wave=8))
-    mk('dog_pant0', lambda cv: draw_sit(cv, mouth='pant', eye='happy', tongue=0))
-    mk('dog_pant1', lambda cv: draw_sit(cv, mouth='pant', eye='happy', tongue=5))
-    mk('dog_howl', lambda cv: draw_sit(cv, head=(318, 190), hang=-40, mouth='howl', eye='closed', ear_swing=-20))
-    mk('dog_paw', lambda cv: draw_sit(cv, mouth='pant', eye='happy', paw=True))
-    mk('dog_bark', lambda cv: draw_stand(cv, still, mouth='open', tail=(104, 300, 20), ear_swing=-8))
-    mk('dog_sniff0', lambda cv: draw_stand(cv, legs_pose(0.1, stride=6, lift=3), head=(382, 320), hang=34, tail=(104, 300, -10)))
-    mk('dog_sniff1', lambda cv: draw_stand(cv, legs_pose(0.6, stride=6, lift=3), head=(384, 324), hang=38, tail=(104, 300, 10)))
+    mk('dog_blink', lambda cv: draw_sit(cv, eyek='closed', tail_wave=8))
+    mk('dog_pant0', lambda cv: draw_sit(cv, mouth='pant', eyek='happy', tongue=0))
+    mk('dog_pant1', lambda cv: draw_sit(cv, mouth='pant', eyek='happy', tongue=5))
+    mk('dog_howl', lambda cv: draw_sit(cv, head=(326, 168), hang=-40, mouth='howl', eyek='closed', ear_swing=-20))
+    mk('dog_paw', lambda cv: draw_sit(cv, mouth='pant', eyek='happy', paw=True))
+    mk('dog_bark', lambda cv: draw_stand(cv, still, mouth='open', tail=(20,), ear_swing=-8))
+    mk('dog_sniff0', lambda cv: draw_stand(cv, legs_pose(0.1, stride=6, lift=3), head=(384, 300), hang=34, tail=(-10,)))
+    mk('dog_sniff1', lambda cv: draw_stand(cv, legs_pose(0.6, stride=6, lift=3), head=(386, 304), hang=38, tail=(10,)))
     mk('dog_lie0', lambda cv: draw_lie(cv))
-    mk('dog_lie1', lambda cv: draw_lie(cv, eye='closed', breath=3, head_down=True))
+    mk('dog_lie1', lambda cv: draw_lie(cv, eyek='closed', breath=3, head_down=True))
     mk('dog_sleep0', lambda cv: draw_sleep(cv, 0))
     mk('dog_sleep1', lambda cv: draw_sleep(cv, 4))
     mk('dog_bow0', lambda cv: draw_playbow(cv, 0))
@@ -383,27 +406,27 @@ def frames():
     mk('dog_roll1', lambda cv: draw_roll(cv, 1))
     mk('dog_dig0', lambda cv: draw_dig(cv, 0))
     mk('dog_dig1', lambda cv: draw_dig(cv, 1))
-    mk('dog_fsit0', lambda cv: draw_front_sit(cv))
-    mk('dog_fsit1', lambda cv: draw_front_sit(cv, mouth='pant', tongue=2))
-    mk('dog_fblink', lambda cv: draw_front_sit(cv, eye='closed'))
-    mk('dog_ftilt', lambda cv: draw_front_sit(cv, tilt=-16))
-    mk('dog_fhappy', lambda cv: draw_front_sit(cv, eye='happy', mouth='pant', tongue=5))
+    mk('dog_fsit0', lambda cv: draw_front(cv))
+    mk('dog_fsit1', lambda cv: draw_front(cv, mouth='pant', tongue=2))
+    mk('dog_fblink', lambda cv: draw_front(cv, eyek='closed'))
+    mk('dog_ftilt', lambda cv: draw_front(cv, tilt=-16))
+    mk('dog_fhappy', lambda cv: draw_front(cv, eyek='happy', mouth='pant', tongue=5))
     for i in range(4):
         mk(f'dog_fwalk{i}', lambda cv, ph=i / 4: draw_front_walk(cv, ph))
         mk(f'dog_bwalk{i}', lambda cv, ph=i / 4: draw_back(cv, ph))
     mk('dog_bsit', lambda cv: draw_back(cv, 0, sit=True))
-    # 막대를 물고 다닐 때 (그림에 막대를 함께 그림 — 따로 띄운 막대가 입 위에 겹쳐 보이지 않게)
+    # 막대를 물고 다닐 때 (그림에 막대를 함께 그림)
     for i in range(6):
         ph = i / 6
         mk(f'dog_cwalk{i}', lambda cv, ph=ph: draw_stand(cv, legs_pose(ph), bob=-3 * abs(math.sin(ph * 2 * math.pi)),
-                                                         tail=(104, 300, 16 * math.sin(ph * 2 * math.pi)),
+                                                         tail=(16 * math.sin(ph * 2 * math.pi),),
                                                          ear_swing=5 * math.sin(ph * 2 * math.pi), carry=True))
     for i in range(4):
         ph = i / 4
-        mk(f'dog_crun{i}', lambda cv, ph=ph: draw_stand(cv, legs_pose(ph, stride=30, lift=20),
-                                                        body=(232, 344, 122, 70, -3 + 5 * math.sin(ph * 2 * math.pi)),
-                                                        bob=-10 * abs(math.sin(ph * 2 * math.pi)), head=(378, 228),
-                                                        tail=(104, 290, 0), ear_swing=-24, carry=True))
+        mk(f'dog_crun{i}', lambda cv, ph=ph: draw_stand(cv, legs_pose(ph, stride=30, lift=22),
+                                                        body=(238, 312, 104, 56, -3 + 5 * math.sin(ph * 2 * math.pi)),
+                                                        bob=-10 * abs(math.sin(ph * 2 * math.pi)), head=(374, 192),
+                                                        tail=(-10,), ear_swing=-24, carry=True))
         mk(f'dog_cfwalk{i}', lambda cv, ph=i / 4: draw_front_walk(cv, ph, carry=True))
         mk(f'dog_cbwalk{i}', lambda cv, ph=i / 4: draw_back(cv, ph, carry=True))
     return f
@@ -431,13 +454,13 @@ if __name__ == '__main__':
     o = sys.argv[1] if len(sys.argv) > 1 else '.'
     dog_sprites(o)
     names = sorted(n for n in os.listdir(o) if n.startswith('dog_') and n.endswith('.png') and not n.endswith('_a.png'))
-    cols = 6
+    cols = 8
     rows = (len(names) + cols - 1) // cols
     sheet = Image.new('RGB', (cols * 256, rows * 280), (200, 200, 200))
     d = ImageDraw.Draw(sheet)
     for i, n in enumerate(names):
         im = Image.open(os.path.join(o, n)).convert('RGBA').resize((256, 256))
-        bg = Image.new('RGBA', im.size, (196, 214, 170, 255))
+        bg = Image.new('RGBA', im.size, (250, 226, 120, 255))
         bg.alpha_composite(im)
         sheet.paste(bg.convert('RGB'), ((i % cols) * 256, (i // cols) * 280))
         d.text(((i % cols) * 256 + 6, (i // cols) * 280 + 258), n, fill=(0, 0, 0))

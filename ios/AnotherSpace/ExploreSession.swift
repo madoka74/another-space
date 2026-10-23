@@ -70,6 +70,9 @@ private struct ExploreHud: View {
                 }
                 .buttonBorderShape(.circle)
             }
+            if let p = s.loadProgress {
+                LoadBar(value: p)
+            }
             if let m = s.message {
                 Text(m).font(.headline).fixedSize(horizontal: false, vertical: true)
             }
@@ -96,6 +99,23 @@ private struct ExploreHud: View {
         .glassBackgroundEffect()
         .transaction { $0.animation = nil }
         .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })     // 안내판을 누른 탭은 싱글탭으로 치지 않음
+    }
+}
+
+/// 불러오는 중 막대: 0→100% 차오름 (글 설명 없이)
+private struct LoadBar: View {
+    let value: Double
+
+    var body: some View {
+        GeometryReader { g in
+            ZStack(alignment: .leading) {
+                Capsule().fill(.white.opacity(0.18))
+                Capsule().fill(.white.opacity(0.9))
+                    .frame(width: max(8, g.size.width * min(1, max(0, value))))
+            }
+        }
+        .frame(height: 8)
+        .padding(.vertical, 4)
     }
 }
 
@@ -128,6 +148,9 @@ private struct ThemePanel: View {
             if let r = s.room {
                 ThemePicker(room: r, compact: true) { p, w, t, l in s.setTheme(place: p, weather: w, time: t, look: l) }
             }
+            if let p = s.loadProgress {
+                LoadBar(value: p)
+            }
             HStack(spacing: 14) {
                 Button {
                     s.toggleTheme()
@@ -153,7 +176,9 @@ private struct ThemePanel: View {
 @MainActor @Observable
 final class ExploreSession {
     var room: RoomRec?
-    var message: String? = "공간을 알아보는 중이에요. 스캔했던 곳을 천천히 둘러봐 주세요."
+    var message: String? = nil
+    /// 불러오는 중 진행 막대 (0~1, 없으면 숨김) — 탐험 시작·테마 바꾸기. 글 설명 대신 막대가 0→100% 차오름
+    var loadProgress: Double? = 0
     var themeOpen = false
     var unified = false             // 모든 방이 같은 세계 (테마를 바꾸면 모든 방이 같이 바뀜)
     var hudMenu = false             // 싱글탭으로 띄운 메뉴판 (아니면 알림판)
@@ -168,6 +193,9 @@ final class ExploreSession {
     @ObservationIgnored private var seedTask: Task<Void, Never>?
     @ObservationIgnored private var voxSaveT: Float = 0
     @ObservationIgnored private var ready = false             // 모든 방 세계를 다 만들었는지
+    @ObservationIgnored private var themeProg: Float?          // 테마 바꾸는 중 진행 (0~1)
+    @ObservationIgnored private var progShown: Float = 0
+    @ObservationIgnored private var progDoneAt: Float?
     // 문
     @ObservationIgnored private var doorOpen: Set<Int> = []   // 열쇠로 연 문 (다른 세계 사이)
     @ObservationIgnored private var doorShow: [Int: Float] = [:]    // 열쇠 문 보이는 정도
@@ -671,9 +699,14 @@ final class ExploreSession {
         // 새 그림을 미리 읽은 뒤 바꿔 끼움 (지금 방 먼저, 읽는 동안은 예전 세계가 그대로 보임)
         themeTask?.cancel()
         let snapshot = d
+        themeProg = 0.02
         themeTask = Task {
             await Tex.preload(RoomWorld.textures(r), look: r.lookMode)
-            for rid in [id] + targets.filter({ $0 != id }) {
+            themeProg = 0.45
+            let order = [id] + targets.filter({ $0 != id })
+            defer { themeProg = nil }
+            for (k, rid) in order.enumerated() {
+                themeProg = 0.45 + 0.55 * Float(k) / Float(max(1, order.count))
                 guard !Task.isCancelled, !ended else { return }
                 let dd = data ?? snapshot
                 guard let rr = dd.rec.room(rid) else { continue }
@@ -1016,10 +1049,15 @@ final class ExploreSession {
             let bs = fit.toSaved(head - fwd * 0.09 - headUp * 0.07)             // 몸 자리 (방 판정용)
             let r = L.roomNear(x: bs.x, z: bs.z, radius: 0.3)
             if r != candidate { candidate = r; candidateT = 0 } else { candidateT += dt }
-            if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 { enterRoom(candidate) }
-            outsideT = r == 0 ? outsideT + dt : 0
+            // 문 자리(문턱 앞뒤 15cm)에 서 있는 동안은 방을 바꾸지 않음 — 문턱에서 지금 방이 오락가락하면
+            // 그때마다 문 상태가 처음으로 돌아가 열쇠 문이 나타났다 사라지기를 반복했음
+            let pb = L.plane(bs.x, bs.z)
+            let inDoorway = current != 0 && L.doors.contains { $0.zone(pb, margin: 0.15) }
+            if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 && !inDoorway { enterRoom(candidate) }
+            let atDoor = L.doors.contains { $0.zone(pb, margin: 0.3) }
+            outsideT = (r == 0 && !atDoor) ? outsideT + dt : 0          // 문 자리를 지나는 동안은 '방 밖'으로 치지 않음 (현실이 비치지 않게)
             handDoors(L, fit)
-            updateDoors(dt, hs, fit.dirToSaved(fwd), L)
+            updateDoors(dt, hs, bs, fit.dirToSaved(fwd), L)
             floorTimer += dt
             if floorTimer > 0.5 { floorTimer = 0; updateFloor(L) }
             buildTimer += dt
@@ -1053,8 +1091,8 @@ final class ExploreSession {
         var target: Float = 1
         var why: String?
         if fit == nil || !ready || !floorOK { target = 0 }
-        else if outsideT > 1.0 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
-        else if fastT > 0.4 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
+        else if outsideT > 1.0 { target = 0; why = "방 밖이에요" }
+        else if fastT > 0.4 { target = 0; why = "천천히 걸어 주세요" }
         let rate: Float = target < fade ? 3 : 1.1
         if let ii = intro {
             fade = min(target, ii.world)
@@ -1066,14 +1104,44 @@ final class ExploreSession {
             spaceRoot.setOpacity(v)
             appliedFade = v
         }
-        if fit != nil {
-            let total = data?.rec.rooms.count ?? 0
-            let msg: String? = !ready ? "다른 세계를 준비하는 중이에요 (\(worlds.count)/\(total))"
-                : (!floorOK ? "바닥 높이를 맞추는 중이에요. 발밑을 한 번 내려다봐 주세요." : (why ?? (t < tipUntil ? tip : nil) ?? player.status))
+        // 불러오는 중: 글 대신 진행 막대 (공간 찾기 → 방 세계 만들기 → 바닥 맞추기 / 테마 바꾸기)
+        let total = max(1, data?.rec.rooms.count ?? 1)
+        var goal: Float? = nil
+        if fit == nil { goal = min(0.15, 0.02 + t * 0.012) }
+        else if !ready { goal = 0.15 + 0.75 * Float(worlds.count) / Float(total) }
+        else if !floorOK { goal = 0.93 }
+        else if let tp = themeProg { goal = tp }
+        if let g = goal {
+            progDoneAt = nil
+            if loadProgress == nil { progShown = 0 }
+            progShown += (max(progShown, g) - progShown) * min(1, dt * 4)
+            hudUntil = max(hudUntil, t + 0.5)
+        } else if loadProgress != nil {
+            progShown += (1 - progShown) * min(1, dt * 8)
+            if progShown > 0.995 {
+                progShown = 1
+                if progDoneAt == nil { progDoneAt = t }
+            }
+        }
+        var keep = goal != nil
+        if !keep {
+            if let d0 = progDoneAt { keep = t - d0 < 0.4 } else { keep = loadProgress != nil }
+        }
+        let shownP: Double? = keep ? Double(progShown) : nil
+        var changed = false
+        if let a = shownP, let b = loadProgress { changed = abs(a - b) > 0.004 } else { changed = (shownP == nil) != (loadProgress == nil) }
+        if changed { loadProgress = shownP }
+        if fit != nil || goal == nil {
+            // 글은 꼭 필요할 때만 짧게 (오래 걸릴 때의 한마디, 안전 경고, 소리 문제)
+            var msg: String? = why ?? (t < tipUntil ? tip : nil) ?? player.status
+            if fit != nil && ready && !floorOK, let fa = fitAt, t - fa > 3 { msg = "발밑을 한 번 봐 주세요" }
+            if goal != nil && msg == player.status { msg = nil }
             if msg != message {
                 message = msg
                 if msg != nil && t > themeQuiet { hudUntil = max(hudUntil, t + 4) }      // 새 알림은 4초 보여 주고 사라짐
             }
+        } else if t > 8 && message == nil {
+            message = "스캔한 곳을 둘러봐 주세요"
         }
         hudAlert = why != nil
         tapCatcher.position = head
@@ -1443,7 +1511,8 @@ final class ExploreSession {
         // 처음 들어가는 방만 알림판으로 잠깐 알려 줌 (한 번 본 방은 다시 띄우지 않음)
         if t > themeQuiet && !seenRooms.contains(r) { hudUntil = max(hudUntil, t + 4) }
         seenRooms.insert(r)
-        doorOpen.removeAll()
+        // 열린 문 기록은 지금 곁에 있는 문(지나온 문 포함)만 남김 — 곁에 있는 문은 건너감·멀어짐 판정이 알아서 닫음
+        doorOpen = doorOpen.filter { nearDoors.contains($0) }
         guard let d = data, let L = layout, let rm = d.rec.room(r) else { return }
         if worlds[r] == nil {                               // 아직 못 만든 방이면 바로 만듦 (그림도 걺)
             let nw = addWorld(d, rm, L)
@@ -1485,9 +1554,13 @@ final class ExploreSession {
     /// - 멀리서는: 같은 세계는 뚫린 통로, 다른 세계는 지금 방의 벽
     static let doorReach: Float = 1.0
 
-    private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ fs: SIMD3<Float>, _ L: Layout) {
+    /// hs: 눈(기기) 자리 — 시선 판정용, bs: 몸(목 뒤) 자리 — 문까지 거리·문 안에 섰는지·어느 쪽인지 판정용.
+    /// (예전엔 눈 자리로 판정해, 문을 지나온 뒤 돌아서거나 고개만 숙여도 눈이 10~15cm 움직여 '문 자리 안'으로 잘못 알고
+    /// 열쇠 없이 문이 열려 버리거나, 넘어갔다 돌아왔다를 오가며 열쇠 문·벽이 번갈아 나타났음)
+    private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ bs: SIMD3<Float>, _ fs: SIMD3<Float>, _ L: Layout) {
         guard let d = data else { return }
-        let p = L.plane(hs.x, hs.z)
+        let p = L.plane(bs.x, bs.z)
+        let pe = L.plane(hs.x, hs.z)
         var look = SIMD2<Float>(simd_dot(SIMD2<Float>(fs.x, fs.z), L.ex), simd_dot(SIMD2<Float>(fs.x, fs.z), L.ez))
         look = simd_length(look) > 0.1 ? simd_normalize(look) : .zero
         let breath = 0.5 + 0.5 * sin(t * 2.4)
@@ -1536,7 +1609,7 @@ final class ExploreSession {
                 } else {
                     lastSide[i] = side
                     if doorOpen.contains(i) {
-                        let crossed = (doorSide[i] ?? side) * side < 0
+                        let crossed = (doorSide[i] ?? side) * side < 0 && abs(side) > 0.12      // 12cm 넘게 건너가야 (문턱에서 오락가락하지 않게)
                         if crossed {
                             doorOpen.remove(i)
                             doorShow[i] = 0
@@ -1577,7 +1650,7 @@ final class ExploreSession {
                 // 현실 원은 그 닫힌 문을 '바라볼 때'만 — 시선(3D)이 문짝 자리(양옆 35cm 여유, 바닥 5cm~2.3m)에 닿는지로 봄.
                 // 예전엔 문 가운데 쪽 수평 방향 44° 안 + 고개를 숙이면 끔 → 문 끝 손잡이(1m 높이)를 내려다보면 꺼졌다 켜졌다 반복.
                 // 문짝을 한 번 보면 0.7초 동안은 시선이 잠깐 벗어나도 유지(깜빡이지 않게). 바닥을 보면 시선이 문보다 바닥에 먼저 닿아 켜지지 않음
-                if gazeHitsDoor(ds, p, fs, headY: hs.y - L.floorY, L) { leafLookAt[i] = t }
+                if gazeHitsDoor(ds, pe, fs, headY: hs.y - L.floorY, L) { leafLookAt[i] = t }
                 let facing = t - (leafLookAt[i] ?? -100) < 0.7
                 if facing && (leaf == nil || dist < leaf!.1) { leaf = (i, dist) }
             }

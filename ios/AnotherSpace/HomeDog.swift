@@ -109,7 +109,7 @@ final class HomeDog {
         self.floorY = floorY
         let s = Self.size
         var g = Geo()
-        let y0: Float = -s * (24.0 / 512.0)                 // 발 맨 아래(그림의 488/512 줄 — 그려진 그림에서 잰 값)가 바닥에 닿게 (예전 470: 2cm 묻혔음)
+        let y0: Float = -s * (26.0 / 512.0)                 // 발 맨 아래(그림의 486/512 줄 — 푸들 그림에서 잰 값)가 바닥에 닿게
         g.quad(SIMD3<Float>(-s / 2, y0, 0), SIMD3<Float>(s / 2, y0, 0), SIMD3<Float>(s / 2, y0 + s, 0), SIMD3<Float>(-s / 2, y0 + s, 0),
                SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
         if let m = g.mesh("dog") { card.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
@@ -169,8 +169,8 @@ final class HomeDog {
     }
 
     private var shown = ""
-    /// 몸 맨 아래가 기본(488)보다 더 아래로 그려진 장 — 그만큼 판을 올려 바닥에 딱 닿게 (픽셀)
-    private static let footPx: [String: Float] = ["dog_roll0": 23, "dog_roll1": 23]
+    /// 몸 맨 아래가 기본(486줄)과 다른 장 (누운 자세) — 그만큼 판을 올리거나(+) 내려(-) 바닥에 딱 닿게 (픽셀)
+    private static let footPx: [String: Float] = ["dog_roll0": -14, "dog_roll1": -14, "dog_sleep0": -13, "dog_sleep1": -9]
     private func show(_ n: String) {
         guard n != shown else { return }
         shown = n
@@ -553,7 +553,7 @@ final class HomeDog {
                 let frontish = shown.contains("fsit") || shown.contains("fhappy")
                 let side: Float = frontish ? 0 : 0.2 * face
                 let mouth = SIMD2<Float>(pos.x, pos.y) + r * side
-                s.position = SIMD3<Float>(mouth.x, floorY + elev + hop + Self.size * 0.36, mouth.y)
+                s.position = SIMD3<Float>(mouth.x, floorY + elev + hop + Self.size * 0.52, mouth.y)      // 푸들 입 높이
                 s.orientation = simd_quatf(angle: atan2(r.x, r.y), axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
             }
         }

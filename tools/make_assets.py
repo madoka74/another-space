@@ -469,19 +469,23 @@ def photo_textures():
 
 def cloud_sprites():
     """하늘을 천천히 흐르는 구름 여섯 가지 (아래에서 올려다본 구름 밑면, 투명):
-    0~2 뭉게구름, 3 조각조각 흩어진 층적운, 4 길게 쓸린 새털구름, 5 넓게 덮인 비구름.
-    큰 덩어리 모양(부드러운 잡음)을 문턱값으로 잘라 윤곽이 실제 구름처럼 불규칙하고, 두꺼운 가운데는 그늘져 어둡고 얇은 가장자리는 밝게 비침"""
+    0~2 뭉게구름, 3 조각조각 흩어진 층적운, 4 바람에 쓸린 새털구름, 5 넓게 덮인 비구름.
+    모양은 '완만한 봉우리(가운데 높고 바깥으로 낮아짐) × 덩어리 잡음'을 문턱값으로 잘라 윤곽이 잡음을 따라 불규칙하게 정해짐.
+    (예전 3·5번은 봉우리를 2배로 키워 1에서 잘라 위가 평평한 타원 판이 되어, 윤곽이 매끈한 타원·원처럼 보였고
+     4번은 결이 너무 가늘어 긁힌 줄무늬처럼 보였음 → 봉우리를 자르지 않고, 결은 부드럽게)"""
     W, H = 1024, 512
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     u, v = xx / W - 0.5, yy / H - 0.5
+
     def env(rx, ry, seed, warp=0.25):
         wx = (noise(3.2, W, seed, h=H) - 0.5) * warp
         wy = (noise(3.2, W, seed + 1, h=H) - 0.5) * warp
         return np.clip(1 - np.sqrt(((u + wx) / rx) ** 2 + ((v + wy) / ry) ** 2), 0, 1)
-    def finish(i, d, lo, hi, base_dark=0.36):
+
+    def finish(i, d, lo, hi, base_dark=0.36, alpha_max=1.0):
         a = np.clip((d - lo) / (hi - lo), 0, 1)
-        a = a * a * (3 - 2 * a)
-        thick = np.clip((d - hi) / max(0.05, (d.max() - hi)), 0, 1)
+        a = a * a * (3 - 2 * a) * alpha_max
+        thick = np.clip((d - hi) / max(0.05, (float(d.max()) - hi)), 0, 1)
         lit = 0.98 - base_dark * thick ** 0.8 + 0.04 * (noise(2.0, W, 90 + i, h=H) - 0.5)
         rgb = np.stack([lit * 244, lit * 247, lit * 252], axis=-1)
         save_png(f'cloud_{i}', rgb, a, folder='sky')
@@ -490,19 +494,19 @@ def cloud_sprites():
         mid = noise(2.2, W, sd + 200, h=H)
         d = env(rx, ry, sd) * 1.6 * (0.55 * big + 0.3 * mid + 0.15)
         finish(i, d, 0.42, 0.75)
-    # 층적운: 넓게 퍼진 잡음을 촘촘히 잘라 조각조각
-    cells = noise(2.4, W, 301, h=H, aniso=(1.0, 0.7))
-    d = np.clip(env(0.5, 0.46, 300, 0.15) * 2.2, 0, 1) * (0.25 + 1.0 * cells)
-    finish(3, d, 0.6, 0.85, base_dark=0.25)
-    # 새털구름: 바람에 길게 쓸린 결
-    st = noise(2.0, W, 311, h=H, aniso=(1.0, 0.07))
-    d = np.clip(env(0.48, 0.34, 310, 0.3) * 2.0, 0, 1) * (0.2 + 1.1 * st)
-    finish(4, d, 0.55, 0.95, base_dark=0.06)
-    # 비구름: 넓게 덮인 무거운 덩어리
+    # 층적운: 넓은 봉우리 × 덩어리 잡음 → 조각조각 (봉우리를 자르지 않아 바깥 조각일수록 작고 옅어짐)
+    cells = 0.7 * noise(2.6, W, 301, h=H, aniso=(1.0, 0.8)) + 0.3 * noise(2.1, W, 303, h=H)
+    d = env(0.47, 0.4, 300, 0.35) * 1.7 * (0.2 + 1.0 * cells)
+    finish(3, d, 0.5, 0.82, base_dark=0.24)
+    # 새털구름: 바람결로 쓸린 부드러운 결 (가로로 길게, 결이 너무 가늘지 않게)
+    st = noise(2.5, W, 311, h=H, aniso=(1.0, 0.28))
+    d = env(0.46, 0.3, 310, 0.4) * 1.6 * (0.25 + 0.9 * st)
+    finish(4, d, 0.5, 1.0, base_dark=0.05, alpha_max=0.75)
+    # 비구름: 넓고 무거운 덩어리 (두꺼운 곳이 어두움)
     big = noise(2.8, W, 321, h=H)
-    mid = noise(2.0, W, 322, h=H)
-    d = np.clip(env(0.5, 0.48, 320, 0.3) * 2.0, 0, 1) * (0.7 * big + 0.3 * mid)
-    finish(5, d, 0.3, 0.62, base_dark=0.5)
+    mid = noise(2.1, W, 322, h=H)
+    d = env(0.47, 0.42, 320, 0.35) * 1.7 * (0.6 * big + 0.3 * mid + 0.1)
+    finish(5, d, 0.36, 0.7, base_dark=0.5)
 
 
 # ───────────── 지평선 띠 (원기둥에 둘러 붙임, 위는 투명) ─────────────
@@ -2588,8 +2592,8 @@ REAL_SFX = (
        ('dog_howl', 2450, 'event', 'longest', 3.0, -7),
        ('dog_playgrowl', 1060, 'event', 'longest', 1.2, -8),
        ('dog_pant', 1547, 'loop', 0, 4.0, -20),
-       ('splash1', 690, 'event', 0, 0.8, -14), ('splash2', 690, 'event', 1, 0.8, -14),
-       ('splash3', 690, 'event', 2, 0.8, -14), ('splash4', 690, 'event', 3, 0.8, -14),
+       ('splash1', 690, 'event', 0, 0.7, -7), ('splash2', 690, 'event', 2, 0.7, -7),      # 'Shoes in the Water' (물 고인 곳 걷기)
+       ('splash3', 690, 'event', 4, 0.7, -7), ('splash4', 690, 'event', 6, 0.7, -7),
        ('stream_loop', 823, 'loop', 0, 12.0, -18), ('fall_loop', 507, 'loop', 0, 12.0, -16),
        ('fire_loop', 30, 'loop', 0, 14.0, -12),
        ('plane_pass', 3005, 'whole', 0, 14.0, -6), ('plane_pass2', 2478, 'whole', 0, 16.0, -6)])

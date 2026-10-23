@@ -132,7 +132,7 @@ actor AmbientLibrary {
 
     /// 이어 재생용 파일 (받아서 앞 지연을 잘라 끊김 없이 이어지는 WAV로)
     func loopFile(_ e: AmbientEntry) async -> URL? {
-        let out = dir.appendingPathComponent(e.file.replacingOccurrences(of: "/", with: "_") + ".loop.wav")
+        let out = dir.appendingPathComponent(e.file.replacingOccurrences(of: "/", with: "_") + ".loop2.wav")      // loop2: 넘친 소리를 줄여 다시 만든 것 (예전 파일은 깨진 채 남아 있을 수 있어 이름을 바꿈)
         if FileManager.default.fileExists(atPath: out.path) { return out }
         guard let mp3 = await download(e.file) else { return nil }
         let tmp = dir.appendingPathComponent(UUID().uuidString + ".wav")
@@ -191,6 +191,18 @@ actor AmbientLibrary {
               let sp = buf.floatChannelData, let dp = out.floatChannelData else { throw CocoaError(.fileReadCorruptFile) }
         out.frameLength = AVAudioFrameCount(n)
         for ch in 0..<Int(fmt.channelCount) { dp[ch].update(from: sp[ch].advanced(by: start), count: n) }
+        // mp3를 풀면 큰 파도 소리 같은 곳은 ±1을 넘는 값이 나오는데, 그대로 16비트로 쓰면 그 부분이 잘려 '지지직' 깨져 들렸음 (바다)
+        // → 가장 큰 값이 -1dB(0.89)를 넘으면 전체를 그만큼 줄여서 씀
+        var peak: Float = 0
+        for ch in 0..<Int(fmt.channelCount) {
+            for i in 0..<n { peak = max(peak, abs(dp[ch][i])) }
+        }
+        if peak > 0.89 {
+            let k = 0.89 / peak
+            for ch in 0..<Int(fmt.channelCount) {
+                for i in 0..<n { dp[ch][i] *= k }
+            }
+        }
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: fmt.sampleRate, AVNumberOfChannelsKey: fmt.channelCount,
             AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false, AVLinearPCMIsBigEndianKey: false, AVLinearPCMIsNonInterleaved: false,
@@ -277,7 +289,10 @@ final class AmbientPlayer {
     private func startLoops(_ id: Int, _ urls: [(URL, Double)]) {
         var ctls: [AudioPlaybackController] = []
         var ents: [Entity] = []
-        for (u, g) in urls {
+        // 바탕 + 날씨 두 겹이 함께 크면 합쳐서 넘쳐 깨질 수 있어, 두 겹일 땐 각각 3dB 줄임
+        let both: Double = urls.count > 1 ? -3 : 0
+        for (u, g0) in urls {
+            let g = g0 + both
             guard let r = resource(u, loop: true) else { continue }
             let e = Entity()
             e.components.set(ChannelAudioComponent())
