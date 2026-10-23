@@ -2621,7 +2621,7 @@ final class RoomWorld {
                                materials: [UnlitMaterial(color: UIColor(white: 0.08, alpha: 0.85))])
         disc.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
         e.addChild(disc)
-        let ring = ModelEntity(mesh: .generateCylinder(height: 0.006, radius: 0.044), materials: [gold(rough: 0.3, glow: 0.5, mono: look == .mono)])
+        let ring = ModelEntity(mesh: .generateCylinder(height: 0.006, radius: 0.044), materials: [gold(rough: 0.3, glow: 0.5)])
         ring.orientation = simd_quatf(angle: .pi / 2, axis: [1, 0, 0])
         ring.position = [0, 0, -0.002]
         e.addChild(ring)
