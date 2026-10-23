@@ -87,7 +87,7 @@ final class Scenery {
             addBoats(R: R, floorY: floorY, night: night, using: &g)
         case "village":
             if !night && !wet { addBirds(6, R: R, floorY: floorY, color: [0.12, 0.12, 0.12], using: &g) }
-            addChimneys(R: R, floorY: floorY, using: &g)
+            // 마을 집과 굴뚝 연기는 RoomWorld.addVillageHouses (입체 집 지붕 위 굴뚝에서 작게)
         case "city":
             if !night && !wet { addBirds(4, R: R, floorY: floorY, color: [0.35, 0.35, 0.38], using: &g) }
             addCars(R: R, floorY: floorY, night: night || room.time == "dusk", using: &g)
@@ -680,7 +680,7 @@ final class Scenery {
             guard len > 0.1 else { continue }
             let nw = L.flat(sg.n) - L.flat(.zero)
             let n3 = SIMD3<Float>(nw.x, 0, nw.y)
-            let h: Float = sg.window ? 0.84 : 0.9
+            let h: Float = sg.window ? min(0.84, RoomWorld.windowBand(place: "cafe", top: top).0 - 0.01) : 0.9      // 통창 아래는 창턱 높이까지만
             let a = SIMD3<Float>(a2.x, floorY, a2.y) + n3 * 0.012, b = SIMD3<Float>(b2.x, floorY, b2.y) + n3 * 0.012
             wain.face(a, b, toward: n3, y0: 0, y1: h, u0: 0, u1: len / 1.2, v0: 0, v1: h / 1.2)
             rail.face(a + n3 * 0.012, b + n3 * 0.012, toward: n3, y0: h - 0.02, y1: h + 0.035, u0: 0, u1: len / 0.8, v0: 0, v1: 0.05)

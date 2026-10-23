@@ -48,7 +48,8 @@ TEXTURES = {
     'mossrock': 'mossy_rock',
     'bark': 'bark_brown_02',
     'cliff': 'cliff_side',          # 계곡 폭포 뒤 절벽·절벽 띠 (세로 암벽 사진)
-    'fabric': 'wool_boucle',        # 통나무집 가구 (포근한 털실 천)
+    'fabric': 'wool_boucle',        # (예전 통나무집 가구 — 모든 가구가 천이라 어색해서 oak로 바꿈)
+    'oak': 'grey_oak_veneer_01',    # 통나무집 가구: 결이 고운 밝은 회갈색 참나무 (통나무 벽·마루와 겹치지 않는 빛깔)
     'walnut': 'american_walnut_veneer',   # 카페 가구 (윤나는 호두나무)
     'concrete': 'concrete_wall_003',      # 도시 옥상 구조물 (콘크리트)
 }

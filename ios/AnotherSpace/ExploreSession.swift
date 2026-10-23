@@ -261,6 +261,8 @@ final class ExploreSession {
     @ObservationIgnored private var fwd = SIMD3<Float>(0, 0, -1)
     @ObservationIgnored private var headUp = SIMD3<Float>(0, 1, 0)
     @ObservationIgnored private var lastHead: SIMD3<Float>?
+    @ObservationIgnored private var lastHeadT: Float?
+    @ObservationIgnored private var fastT: Float = 0             // 빠르게 걸은 시간 (잠깐 튄 값으로 현실을 보이지 않게)
     @ObservationIgnored private var speed: Float = 0
     @ObservationIgnored private var current = 0
     @ObservationIgnored private var candidate = 0
@@ -805,6 +807,8 @@ final class ExploreSession {
             f.t = SIMD2<Float>(m.columns.3.x, m.columns.3.z) - SIMD2<Float>(p.x * f.c - p.y * f.s, p.x * f.s + p.y * f.c)
         }
         if let fy = floorFitY { f.y = fy }     // 높이는 실제 바닥으로 맞춘 값을 씀 (앵커 높이가 틀어져 공간이 가라앉지 않게)
+        // 앵커 위치는 올 때마다 조금씩 흔들림 → 작은 변화는 부드럽게 걸러서 목표로 (큰 변화는 그대로)
+        if let old = fitTarget, !f.differs(old, meters: 0.3, radians: 0.1) { f = old.lerp(f, 0.3) }
         fitTarget = f
         if fit == nil {                        // 처음: 바로 맞춤
             fitAt = t
@@ -963,8 +967,20 @@ final class ExploreSession {
         // 걷는 빠르기·지금 방 판정은 이 자리로 함 — 예전엔 눈 자리로 해서, 아래를 내려다보면 '빨리 움직임'이나 '방 밖(벽 가까이)'으로
         // 잘못 알아 안전 장치가 세계 전체를 흐리게 하고 현실이 겹쳐 보였음
         let pivot = head - fwd * 0.09 - headUp * 0.07
-        if let lh = lastHead, dt > 0 { speed += (simd_distance(lh.xz, pivot.xz) / dt - speed) * min(1, dt * 3) }
-        lastHead = pivot
+        // 빠르기: 바로 앞 자리와 '실제로 지난 시간'으로 잼. 바닥처럼 무늬 없는 곳을 내려다보면 추적이 잠깐 끊기거나(프레임 건너뜀)
+        // 머리 자리가 한 번 튀는데, 예전엔 그 사이 움직인 거리를 한 프레임 시간으로 나눠 '너무 빠름'으로 알고 세계를 잠깐 흐렸음
+        // → 추적이 안 될 때·0.25초 넘게 끊겼을 때·한 프레임에 15cm 넘게 튄 값은 버림
+        if dev.isTracked {
+            if let lh = lastHead, let lt = lastHeadT, t - lt > 0.001, t - lt < 0.25 {
+                let d = simd_distance(lh.xz, pivot.xz)
+                if d < 0.15 { speed += (min(3, d / (t - lt)) - speed) * min(1, dt * 3) }
+            }
+            lastHead = pivot
+            lastHeadT = t
+        } else {
+            lastHeadT = nil
+        }
+        fastT = speed > 1.6 ? fastT + dt : 0
 
         if fit == nil, poses.isEmpty, !aligning, t > nextAlign, let d = data { startAlign(d) }
 
@@ -976,7 +992,8 @@ final class ExploreSession {
         lastFwd = fwd
         // 좌표 맞춤 보정: 크게 틀어졌을 때만 바로. 작은 보정은 고개를 돌리는 동안에만 조금씩 (눈이 알아채지 못할 때) —
         // 가만히 보거나 걸어가는 동안 세계 전체가 미세하게 미끄러지면 초점이 안 맞거나 겹쳐 보이고 어지러웠음. 1cm·0.3도 안의 차이는 무시
-        if let tg = fitTarget, let cur = fit, tg != cur, tg.differs(cur, meters: 0.01, radians: 0.005) {
+        // 1.5cm·0.5도 안의 차이는 무시 (먼 산·하늘은 아주 작은 회전에도 크게 움직여 흔들려 보임)
+        if dev.isTracked, let tg = fitTarget, let cur = fit, tg != cur, tg.differs(cur, meters: 0.015, radians: 0.009) {
             var k = min(1, max(0, (turnSpeed - 25) / 60))                // 25도/초 넘게 돌릴 때부터, 85도/초면 최대
             if tg.differs(cur, meters: 0.08, radians: 0.03) { k = max(k, 0.25) }    // 8cm 넘게 어긋났으면 가만히 있어도 천천히
             let nf = tg.differs(cur, meters: 0.6, radians: 0.3) ? tg : cur.lerp(tg, min(1, dt * 4 * k))
@@ -1031,7 +1048,7 @@ final class ExploreSession {
         var why: String?
         if fit == nil || !ready || !floorOK { target = 0 }
         else if outsideT > 1.0 { target = 0; why = "구성한 방 밖이에요. 현실이 보이게 했어요." }
-        else if speed > 1.6 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
+        else if fastT > 0.4 { target = 0; why = "천천히 걸어 주세요. 잠시 현실이 보여요." }
         let rate: Float = target < fade ? 3 : 1.1
         if let ii = intro {
             fade = min(target, ii.world)
@@ -1242,11 +1259,12 @@ final class ExploreSession {
         guard let c = cat else { return }
         if !home { c.leave() }
         let blocked = vox
+        let cur = current
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
                               free: { [unowned self] p in self.catFree(p, L, homeRooms) },
                               top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
                               height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 },
-                              room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && homeRooms.contains(a.room) && a.wall > 0.06 },
+                              room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },      // 장난감은 지금 방 안에서만 (옆방 벽을 뚫고 나가지 않게)
                               ceil: L.ceil[min(255, max(1, current))])
         c.tick(dt, ctx)
         if c.hasToy { showTip("ball", "털실 공을 엄지·검지로 집어 흔들거나 던져 보세요. 톡 치면 굴러가요.") }
@@ -1284,11 +1302,12 @@ final class ExploreSession {
         guard let g = dog else { return }
         if !here { g.leave() }
         let blocked = vox
+        let cur = current
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
                               free: { [unowned self] p in self.catFree(p, L, rooms, r: 0.34) },
                               top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
                               height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 },
-                              room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && rooms.contains(a.room) && a.wall > 0.06 },
+                              room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },      // 장난감은 지금 방 안에서만 (옆방 벽을 뚫고 나가지 않게)
                               ceil: L.ceil[min(255, max(1, current))])
         g.tick(dt, ctx)
         if g.hasToy { showTip("stick", "막대를 엄지·검지로 집어 던져 보세요. 설이가 물어 와요. 톡 치면 가져다줘요.") }

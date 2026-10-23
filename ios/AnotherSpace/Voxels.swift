@@ -458,6 +458,54 @@ final class VoxelWorld {
             sizes.append(n)
         }
         for k in list.keys where sizes[comp[k] ?? 0] < 6 { out[k] = nil }
+        // 1-2) 가늘게 솟은 것 깎기 (모폴로지 열기): 칸마다 '그 칸을 품은 창 안 가장 낮은 높이' 중 가장 큰 값까지만.
+        //   20cm(2×2) 창: 10cm 두께로 삐죽 나온 띠·모서리는 둘레 높이로 / 1m 위는 30cm(3×3) 창: 문과 벽 사이 틈·문틀·커튼처럼
+        //   가늘고 높게 솟은 판·기둥이 천장 쪽으로 서 있지 않고 둘레 가구 높이(또는 1m)로 낮아짐. 반듯한 가구 덩어리는 그대로
+        do {
+            var cur0 = fixed
+            for (k, h) in out { cur0[k] = h }
+            func opened(_ u: Int, _ v: Int, _ n: Int) -> UInt8 {
+                var best: UInt8 = 0
+                for a in (1 - n)...0 { for b in (1 - n)...0 {
+                    var m: UInt8 = 255
+                    for x in 0..<n { for y in 0..<n { m = min(m, cur0[key(u + a + x, v + b + y)] ?? 0); if m == 0 { break } } }
+                    best = max(best, m)
+                } }
+                return best
+            }
+            for (k, h) in out {
+                let (u, v) = uv(k)
+                var nh = min(h, opened(u, v, 2))
+                if nh > 10 { nh = max(10, min(nh, opened(u, v, 3))) }
+                if nh < 2 { out[k] = nil } else if nh < h { out[k] = nh }
+            }
+        }
+        // 1-3) 얇고 길쭉한 덩어리(평균 두께 22cm 이하, 또는 바닥 넓이 0.12㎡ 이하)인데 80cm 넘게 높은 것 = 벽 조각·문 틈·기둥 → 버림
+        do {
+            var cur1 = fixed
+            for (k, h) in out { cur1[k] = h }
+            var seen = Set<Int64>()
+            for k0 in out.keys where !seen.contains(k0) {
+                var members: [Int64] = []
+                var stack = [k0]
+                seen.insert(k0)
+                var lo = SIMD2<Int>(Int.max, Int.max), hi = SIMD2<Int>(Int.min, Int.min)
+                var top: UInt8 = 0
+                while let k = stack.popLast() {
+                    members.append(k)
+                    let (u, v) = uv(k)
+                    lo = SIMD2<Int>(min(lo.x, u), min(lo.y, v)); hi = SIMD2<Int>(max(hi.x, u), max(hi.y, v))
+                    top = max(top, cur1[k] ?? 0)
+                    for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
+                        let nk = key(u + du, v + dv)
+                        if cur1[nk] != nil && !seen.contains(nk) { seen.insert(nk); stack.append(nk) }
+                    } }
+                }
+                let span = max(hi.x - lo.x, hi.y - lo.y) + 1
+                let thin = Float(members.count) / Float(span) <= 2.2 || members.count <= 12
+                if thin && top >= 8 { for k in members where list[k] != nil { out[k] = nil } }
+            }
+        }
         // 2) 평평한 면마다 높이 맞추기
         var cur = fixed
         for (k, h) in out { cur[k] = h }

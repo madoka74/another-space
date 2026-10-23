@@ -107,7 +107,7 @@ enum Worlds {
                               groundFar: [0.13, 0.20, 0.10], skylight: false)
         case "valley":
             return WorldStyle(floor: "pebble", floorTile: 1.4, wall: "", wallTile: 1, prop: "rock", propTile: 0.9, propTint: w,
-                              open: true, barrier: "barrier_valley", barrierH: 3.2, ground: "pebble", groundTile: 1.8,
+                              open: true, barrier: "barrier_valley", barrierH: 0.95, ground: "pebble", groundTile: 1.8,
                               groundFar: [0.40, 0.37, 0.32], skylight: false)
         case "sea":
             return WorldStyle(floor: "sand", floorTile: 2.0, wall: "", wallTile: 1, prop: "driftwood", propTile: 0.9, propTint: w,
@@ -130,7 +130,7 @@ enum Worlds {
                               open: false, barrier: "", barrierH: 0, ground: "grass", groundTile: 2.2,
                               groundFar: [0.26, 0.32, 0.20], skylight: true)
         default:   // home: 숲속 통나무집
-            return WorldStyle(floor: "planks", floorTile: 1.6, wall: "timber", wallTile: 1.8, prop: "fabric", propTile: 0.7, propTint: w,
+            return WorldStyle(floor: "planks", floorTile: 1.6, wall: "timber", wallTile: 1.8, prop: "oak", propTile: 0.9, propTint: w,
                               open: false, barrier: "", barrierH: 0, ground: "moss", groundTile: 2.0,
                               groundFar: [0.14, 0.22, 0.11], skylight: true)
         }

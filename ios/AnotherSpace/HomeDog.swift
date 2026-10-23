@@ -25,7 +25,7 @@ final class HomeDog {
     private let look: LookMode
     private var mats: [String: UnlitMaterial] = [:]
     private var pending: [String] = []
-    private static let size: Float = 0.72        // 그림 판 크기 (강아지는 고양이보다 조금 큼)
+    private static let size: Float = 0.56        // 그림 판 크기 (작은 강아지 — 예전 0.72는 강아지 느낌에 비해 컸음)
 
     private enum Act {
         case sit, walk, lie, sleep, sniff, dig, roll, bow, jump, bark, howl, pant, tilt, paw, love, fetch, bring, wait,
@@ -77,6 +77,7 @@ final class HomeDog {
     private var heldAt = SIMD3<Float>(0, 0, 0)
     private var stickAir: (SIMD3<Float>, SIMD3<Float>)?     // 날아가는 중 (자리, 빠르기)
     private var stickSpin: Float = 0
+    private var pickT: Float = 0                            // 막대 앞에서 고개 숙여 무는 중
     private var wantFetch = false                           // 가구 위에서 막대를 보면 내려와서 가져옴
     // 말풍선
     private var bubbleT: Float = -1
@@ -90,7 +91,15 @@ final class HomeDog {
                                         "dog_sniff0", "dog_sniff1", "dog_lie0", "dog_lie1", "dog_sleep0", "dog_sleep1", "dog_bow0", "dog_bow1",
                                         "dog_jump0", "dog_jump1", "dog_roll0", "dog_roll1", "dog_dig0", "dog_dig1", "dog_stand0", "dog_stand1",
                                         "dog_fsit0", "dog_fsit1", "dog_fblink", "dog_ftilt", "dog_fhappy", "dog_bsit"]
-                                       + walkFrames + runFrames + fwalkFrames + bwalkFrames
+                                       + walkFrames + runFrames + fwalkFrames + bwalkFrames + carryFrames
+    /// 막대를 문 그림 (걷기·뛰기·앞·뒤)
+    private static let carryFrames: [String] = {
+        var l: [String] = []
+        for i in 0..<6 { l.append("dog_cwalk\(i)") }
+        for i in 0..<4 { l += ["dog_crun\(i)", "dog_cfwalk\(i)", "dog_cbwalk\(i)"] }
+        return l
+    }()
+    private static let cwalkFrames: [String] = (0..<6).map { "dog_cwalk\($0)" }
 
     init(at p: SIMD2<Float>, floorY: Float, look: LookMode) {
         self.look = look
@@ -523,14 +532,18 @@ final class HomeDog {
         } else {
             shadow?.position = [0, -hop, 0]
         }
-        // 물고 있는 막대: 입 앞 (옆모습이면 주둥이 쪽, 정면·뒷모습이면 가운데) — 판이 젖혀진 만큼 같이
-        if carrying, let s = stick {
-            let r = cardRight()
-            let frontish = shown.contains("fwalk") || shown.contains("bwalk") || shown.contains("fsit") || shown.contains("fhappy")
-            let side: Float = frontish ? 0 : 0.27 * face
-            let mouth = SIMD2<Float>(pos.x, pos.y) + r * side
-            s.position = SIMD3<Float>(mouth.x, floorY + elev + hop + (frontish ? 0.31 : 0.35), mouth.y)
-            s.orientation = simd_quatf(angle: atan2(r.x, r.y), axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
+        // 물고 있는 막대: 강아지 그림(dog_c…)에 함께 그려져 있으므로 입체 막대는 숨김. 막대 그림이 없는 동작이면 입 앞에 둠
+        if let s = stick {
+            let drawn = carrying && shown.hasPrefix("dog_c")
+            if s.isEnabled == drawn { s.isEnabled = !drawn }
+            if carrying && !drawn {
+                let r = cardRight()
+                let frontish = shown.contains("fsit") || shown.contains("fhappy")
+                let side: Float = frontish ? 0 : 0.2 * face
+                let mouth = SIMD2<Float>(pos.x, pos.y) + r * side
+                s.position = SIMD3<Float>(mouth.x, floorY + elev + hop + Self.size * 0.36, mouth.y)
+                s.orientation = simd_quatf(angle: atan2(r.x, r.y), axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
+            }
         }
     }
 
@@ -541,7 +554,7 @@ final class HomeDog {
         let pop: Float = k < 0.18 ? (k / 0.18) * 1.15 : (k < 0.3 ? 1.15 - (k - 0.18) / 0.12 * 0.15 : 1)
         let fade: Float = k > bubbleDur - 0.3 ? max(0, (bubbleDur - k) / 0.3) : 1
         bubble.scale = SIMD3<Float>(repeating: max(0.01, pop * fade))
-        let top: Float = (act == .sleep || act == .lie || act == .onTop) ? 0.34 : 0.58
+        let top: Float = (act == .sleep || act == .lie || act == .onTop) ? Self.size * 0.5 : Self.size * 0.82     // 머리 위 (강아지 크기에 맞게)
         bubble.position = [0.11 * face, top + hop + 0.02 * sin(t * 3), 0]
         if k > bubbleDur { bubble.isEnabled = false; bubbleT = -1 }
     }
@@ -559,7 +572,15 @@ final class HomeDog {
         if nf != face { turnFrom = face; face = nf; turnT = 0 }
     }
 
+    /// 걷는 그림. 막대를 물고 있으면 막대를 입에 문 그림으로 (따로 띄운 막대가 입 위에 겹쳐 보이지 않게)
     private func walkFrame(_ v: SIMD2<Float>) -> String {
+        let n = walkFrame0(v)
+        guard carrying else { return n }
+        if n.hasPrefix("dog_sniff") { return loop(Self.cwalkFrames, fps: 8) }
+        return n.replacingOccurrences(of: "dog_", with: "dog_c")
+    }
+
+    private func walkFrame0(_ v: SIMD2<Float>) -> String {
         let toMe = SIMD2<Float>(lastHead.x - pos.x, lastHead.z - pos.y)
         let c = simd_length(toMe) > 0.01 ? simd_dot(simd_normalize(v), simd_normalize(toMe)) : 0
         if turnT >= 0 { return "dog_fwalk1" }
@@ -646,18 +667,18 @@ final class HomeDog {
             }
             m = um
         }
-        let e = ModelEntity(mesh: .generateCylinder(height: 0.36, radius: 0.016), materials: [m])
+        let e = ModelEntity(mesh: .generateCylinder(height: 0.27, radius: 0.013), materials: [m])     // 작은 강아지 입에 맞는 나뭇가지
         let twig = ModelEntity(mesh: .generateCylinder(height: 0.09, radius: 0.007), materials: [m])
-        twig.position = [0.025, 0.07, 0]
+        twig.position = [0.02, 0.05, 0]
         twig.orientation = simd_quatf(angle: -0.7, axis: [0, 0, 1])
         e.addChild(twig)
         if look == .line {
             var l = Geo()
-            l.stroke([0, -0.18, 0], [0, 0.18, 0], width: 0.005)
+            l.stroke([0, -0.135, 0], [0, 0.135, 0], width: 0.005)
             if let le = l.entity("stickLine", Ink.line) { e.addChild(le) }
         }
         e.name = "dogstick"
-        e.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.14, 0.44, 0.14])]))
+        e.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.14, 0.34, 0.14])]))
         e.components.set(InputTargetComponent())
         e.components.set(ToyTag())
         propRoot.addChild(e)
@@ -715,6 +736,10 @@ final class HomeDog {
             s.orientation = simd_quatf(angle: stickSpin, axis: ax) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
             return
         }
+        if !c.room(stickPos) {                                   // 벽 너머에 놓였으면 방 안 가장 가까운 자리로 (강아지가 벽 앞에 붙박이지 않게)
+            let q = HomeCat.inside(SIMD3<Float>(stickPos.x, floorY + 0.016, stickPos.y), c, radius: 0.05)
+            stickPos = SIMD2<Float>(q.x, q.z)
+        }
         s.position = SIMD3<Float>(stickPos.x, floorY + 0.016, stickPos.y)
         s.orientation = simd_quatf(angle: stickYaw, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
     }
@@ -756,6 +781,12 @@ final class HomeDog {
         show(walkFrame(moveDir))
         jingle(dt)
         if d < 0.46 && stickAir == nil {                          // 가구 곁의 막대도 입이 닿게 (몸은 가구에서 여유를 둠)
+            // 막대 앞에서 고개를 숙여 킁킁 → 덥석 물고 돌아섬 (바로 물려 있는 것처럼 보이지 않게)
+            pickT += dt
+            faceToward(target)
+            show(loop(["dog_sniff0", "dog_sniff1"], fps: 6))
+            if pickT < 0.4 { return }
+            pickT = 0
             carrying = true
             say("dog_playgrowl", -8)
             start(.bring, 12)

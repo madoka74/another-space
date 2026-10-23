@@ -448,7 +448,7 @@ def photo_textures():
     import fetch_env
     target = {'grass': 92, 'moss': 82, 'pebble': 132, 'sand': 182, 'dirt': 118, 'planks': 128, 'planks_dark': 78,
               'brick': 118, 'plaster': 218, 'rock': 124, 'mossrock': 100, 'bark': 86, 'cliff': 112,
-              'fabric': 150, 'walnut': 92, 'concrete': 138}
+              'fabric': 150, 'walnut': 92, 'concrete': 138, 'oak': 168}
     for name, i in fetch_env.TEXTURES.items():
         path = fetch_env.tex_path(i)
         if not os.path.exists(path):
@@ -679,46 +679,68 @@ def band_cliffs(name, seed, H=2048):
 
 
 def band_village(name, seed, night=False):
-    W, H = 2048, 512
+    """먼 언덕 마을 띠 (가로 4096 — 둘레에 두 번만 되풀이): 언덕을 따라 기운 밭 + 띄엄띄엄 모인 집들.
+    집마다 크기·벽 색(흰·크림·나무·돌)·지붕 색(붉은 기와·푸른 슬레이트·갈색·초록)·지붕 모양(박공·모임)이 다르고,
+    밤엔 창마다 켜진 것과 꺼진 것이 섞임"""
+    W, H = 4096, 512
     top = ridge(W, seed, 0.6, 0.25, beta=3.0)
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
     a = (yy / H >= top[None, :]).astype(float)
-    # 밭: 언덕을 따라 기운 줄무늬 조각
-    d1, d2, idx = voronoi(W, 120, seed + 1, Hh=H)
-    tones = rng(seed + 2).random(120)[idx]
+    d1, d2, idx = voronoi(W, 220, seed + 1, Hh=H)
+    tones = rng(seed + 2).random(220)[idx]
     fields = colorize(tones, [(0, (70, 104, 46)), (0.4, (112, 140, 58)), (0.7, (168, 160, 84)), (1, (190, 170, 100))])
     rows = np.sin((xx * 0.6 + yy * 2.4) * 0.25 + idx) * 0.5 + 0.5
     rgb = fields * (0.85 + 0.15 * rows)[..., None]
-    rgb[(d2 - d1) < 1.5] *= 0.75                                 # 밭둑
-    # 집: 언덕 위 작은 집들 (벽 + 기와 지붕), 밤엔 창에 불
+    rgb[(d2 - d1) < 1.5] *= 0.75
     r = rng(seed + 3)
-    for _ in range(46):
-        cx = int(r.random() * W)
-        gy = int(top[cx] * H + r.uniform(8, 110))
-        w = int(r.uniform(14, 30)); h = int(w * 0.55)
+    walls_c = [(214, 206, 190), (226, 214, 180), (150, 112, 78), (170, 164, 150), (200, 204, 206)]
+    roofs_c = [(150, 62, 44), (78, 86, 100), (96, 70, 52), (70, 94, 70), (120, 48, 36)]
+    lit_mask = np.zeros((H, W), bool)
+    rw = rng(seed + 9)                       # 창 불빛은 따로 (낮·밤 그림의 집 자리가 같게)
+    # 마을 몇 곳에 집이 모여 있고 그 사이는 듬성듬성
+    centers = [r.random() * W for _ in range(7)]
+    for _ in range(60):
+        cx = int((r.choice(centers) + r.normal(0, 110)) % W) if r.random() < 0.75 else int(r.random() * W)
+        gy = int(top[cx] * H + r.uniform(10, 120))
+        if gy >= H - 4:
+            continue
+        w = int(r.uniform(10, 34)); h = int(w * r.uniform(0.45, 0.75))
         x0, x1 = cx - w // 2, cx + w // 2
         xs = np.arange(x0, x1) % W
         y0 = max(0, gy - h)
-        rgb[y0:gy, xs] = [200, 190, 172] if not night else [70, 64, 60]
+        wc = np.array(walls_c[r.integers(len(walls_c))], float) * r.uniform(0.85, 1.08)
+        rgb[y0:gy, xs] = wc
+        rgb[y0:gy, xs[-max(1, w // 4):]] = wc * 0.72            # 그늘진 옆면
         a[y0:gy, xs] = 1
-        # 지붕 (처마가 살짝 튀어나온 사다리꼴)
-        rh = int(h * 0.7)
+        rc = np.array(roofs_c[r.integers(len(roofs_c))], float) * r.uniform(0.85, 1.1)
+        rh = int(h * r.uniform(0.45, 0.8))
+        hip = r.random() < 0.35
         for k in range(rh):
             yv = y0 - rh + k
             if yv < 0:
                 continue
-            ext = int((k / rh) * 4)
-            ra = np.arange(x0 - ext, x1 + ext) % W
-            rgb[yv, ra] = [62, 60, 66]
+            t = k / max(1, rh - 1)
+            ext = int(t * 3)
+            if hip:
+                ra = np.arange(int(x0 + (1 - t) * w * 0.3) - ext, int(x1 - (1 - t) * w * 0.3) + ext) % W
+            else:
+                ra = np.arange(x0 - ext, x1 + ext) % W
+            rgb[yv, ra] = rc * (0.8 + 0.2 * t)
             a[yv, ra] = 1
-        if night:
-            for wx in range(x0 + 3, x1 - 3, 6):
-                if r.random() < 0.7:
-                    rgb[gy - h + 3:gy - 3, np.arange(wx, wx + 3) % W] = [255, 200, 120]
+        # 굴뚝 (가끔)
+        if r.random() < 0.4 and y0 - rh - 4 > 0:
+            chx = np.arange(x0 + w // 4, x0 + w // 4 + 3) % W
+            rgb[y0 - rh - 4:y0 - rh + 3, chx] = [110, 70, 56]; a[y0 - rh - 4:y0 - rh + 3, chx] = 1
+        # 창: 낮엔 어두운 유리, 밤엔 일부만 켜짐
+        for wx in range(x0 + 3, x1 - 4, 6):
+            win = (slice(gy - h + 3, gy - h + 3 + max(2, h // 3)), np.arange(wx, wx + 3) % W)
+            if rw.random() < 0.45 and night:
+                lit_mask[win] = True
+            else:
+                rgb[win] = wc * 0.45
     if night:
-        lit = (rgb[..., 0] > 250) & (rgb[..., 2] < 130)
         rgb = rgb * np.array([0.32, 0.36, 0.5])
-        rgb[lit] = [255, 205, 128]
+        rgb[lit_mask] = [255, 205, 128]
     save_png(name, rgb, a)
 
 
@@ -832,6 +854,50 @@ def wood(seed, H=BH, W=BW, dark=(70, 50, 34), lit=(150, 116, 80), vertical=False
     return colorize(g, [(0, dark), (1, lit)])
 
 
+def roof_tile():
+    """시골집 지붕 기와 (밝은 회색 바탕 — 앱에서 집마다 붉은·푸른·갈색·초록으로 물들임): 가로 줄마다 엇갈린 둥근 기와,
+    줄 아래쪽은 그늘, 기와마다 조금씩 다른 밝기와 얼룩"""
+    N = 512
+    yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)
+    rows, cols = 16, 10
+    ry = yy / (N / rows)
+    row = np.floor(ry)
+    fy = ry - row
+    cx = (xx / (N / cols) + 0.5 * (row % 2))
+    col = np.floor(cx)
+    fx = cx - col
+    curve = np.sin(fx * np.pi) ** 0.6                       # 둥근 기와 굴곡 (가운데 밝음)
+    shade = 0.55 + 0.35 * curve
+    shade = shade * (0.7 + 0.3 * np.clip(fy * 1.6, 0, 1))  # 위 줄 기와 밑 그늘
+    tone = rng(711).random((rows + 1, cols + 2))[row.astype(int) % (rows + 1), col.astype(int) % (cols + 2)]
+    v = shade * (0.82 + 0.3 * tone) * (0.9 + 0.2 * noise(1.8, N, 712))
+    gap = (fx < 0.04) | (fx > 0.96)
+    v[gap] *= 0.55
+    save_jpg('roof_tile', colorize(np.clip(v / 1.2, 0, 1), [(0, (60, 58, 56)), (0.6, (168, 164, 158)), (1, (220, 216, 210))]), q=90)
+
+
+def speaker_art():
+    """카페 천장 스피커: 무광 검은 금속 통(가는 헤어라인 결) + 촘촘한 구멍 뚫린 철망(타공판)"""
+    N = 256
+    yy, xx = np.mgrid[0:N, 0:N].astype(np.float32)
+    hair = noise(1.4, N, 611, aniso=(0.08, 4.0))
+    v = 0.55 + 0.3 * hair + 0.15 * noise(2.2, N, 612)
+    save_jpg('speaker_metal', colorize(v, [(0, (26, 26, 28)), (0.6, (44, 44, 47)), (1, (66, 66, 70))]), q=90)
+    # 타공판: 엇갈린 줄의 둥근 구멍 (구멍 속은 더 어둡고, 판은 짙은 회색)
+    p = 16.0
+    row = np.floor(yy / (p * 0.866))
+    cx = (xx + (row % 2) * p / 2) % p - p / 2
+    cy = yy % (p * 0.866) - p * 0.433
+    d = np.hypot(cx, cy)
+    hole = np.clip((5.2 - d) / 1.2, 0, 1)
+    plate = 0.62 + 0.12 * noise(1.6, N, 613)
+    v = plate * (1 - hole) + 0.08 * hole
+    # 구멍 아래쪽 가장자리에 살짝 빛 (판의 두께)
+    rim = np.clip(1 - np.abs(d - 5.6) / 1.0, 0, 1) * (cy > 0)
+    v = v + 0.12 * rim
+    save_jpg('speaker_grille', colorize(np.clip(v, 0, 1), [(0, (8, 8, 9)), (0.6, (52, 52, 55)), (1, (92, 92, 96))]), q=92)
+
+
 def barrier_camp():
     """통나무 울타리 + 앞의 덤불·풀 (높이 1.3m 기준)"""
     yy, xx = np.mgrid[0:BH, 0:BW]
@@ -871,21 +937,47 @@ def barrier_forest():
 
 
 def barrier_valley():
-    """들쭉날쭉한 바위 벽 (3m)"""
+    """냇가 바위 둑 (1m) — 크고 작은 둥근 바위가 겹겹이 놓이고 윗면엔 이끼, 틈엔 풀·고사리.
+    낮게 깔려서 그 너머 계곡 풍경(폭포·절벽·강)이 잘 보임"""
     yy, xx = np.mgrid[0:BH, 0:BW].astype(np.float32)
-    top = 0.04 + 0.22 * noise1(BW, 1.9, 221)
-    a = (yy / BH >= top[None, :]).astype(float)
-    d1, d2, idx = voronoi(BW, 26, 222, Hh=BH)
-    tone = rng(223).random(26)[idx]
-    n = noise(1.5, BW, 224, h=BH)
-    v = 0.35 * tone + 0.45 * noise(2.4, BW, 225, h=BH) + 0.2 * n
-    rgb = colorize(v, [(0, (74, 66, 58)), (0.5, (128, 116, 100)), (1, (178, 166, 146))])
-    edge = np.clip((d2 - d1) / 14, 0, 1)
-    gx = np.gradient(d1, axis=1); gy = np.gradient(d1, axis=0)
-    lightk = np.clip(0.75 - 0.25 * gx - 0.3 * gy, 0.4, 1.1)
-    rgb = shade(rgb, (0.45 + 0.55 * edge ** 0.5) * lightk)
-    moss = (noise(2.2, BW, 226, h=BH) > 0.7) & (yy / BH > 0.6)
-    rgb[moss] = lerp(rgb[moss], np.array([70, 90, 50.0]), 0.5)
+    rgb = np.zeros((BH, BW, 3)); a = np.zeros((BH, BW))
+    r = rng(221)
+    grain = noise(2.3, BW, 222, h=BH)
+    fine = noise(1.2, BW, 223, h=BH)
+    crack = noise(1.8, BW, 227, h=BH, aniso=(0.4, 2.2))
+    mossn = noise(2.0, BW, 226, h=BH)
+    shape = noise(3.2, BW, 229, h=BH)          # 윤곽을 매끈하게 울퉁불퉁 (털처럼 보풀지 않게)
+    # 뒤 줄(작고 높게) → 앞 줄(크고 낮게) 순으로 겹쳐 그림
+    rows = [(0.8, 0.18, 0.34, 30), (0.93, 0.24, 0.46, 22), (1.06, 0.3, 0.56, 14)]
+    for ri, (base, hmin, hmax, cnt) in enumerate(rows):
+        for _ in range(cnt):
+            cx = r.random() * BW
+            h = r.uniform(hmin, hmax) * BH
+            w = h * r.uniform(0.55, 0.95)
+            cy = base * BH - h * 0.5
+            tilt = r.uniform(-0.25, 0.25)
+            dx = (xx - cx + BW / 2) % BW - BW / 2
+            nx = dx / w; ny = (yy - cy) / (h * 0.5) + tilt * nx
+            # 둥근 바위 윤곽 (모서리가 조금 각진 둥근 덩어리)
+            rr = (np.abs(nx) ** 2.4 + np.abs(ny) ** 2.2) ** (1 / 2.3) + 0.22 * (shape - 0.5)
+            m = rr < 1
+            if not m.any():
+                continue
+            # 빛: 위·왼쪽이 밝고 아래·오른쪽이 그늘, 가장자리로 갈수록 둥글게 어두워짐
+            nz = np.sqrt(np.clip(1 - rr ** 2, 0, 1))
+            lit = np.clip(0.35 + 0.55 * nz - 0.28 * ny - 0.12 * nx, 0.12, 1.1)
+            tone = r.uniform(0.75, 1.15)
+            warm = r.uniform(-1, 1) * np.array([10, 4, -8.0])        # 바위마다 조금씩 다른 빛깔 (회색·누런 회색·푸른 회색)
+            base_c = colorize(0.6 * grain + 0.4 * fine, [(0, (70, 68, 64)), (0.5, (118, 114, 106)), (1, (164, 158, 146))]) + warm
+            c = shade(base_c, lit * tone * (0.82 + 0.18 * np.clip(crack * 1.6 - 0.3, 0, 1)))
+            # 이끼: 윗면(빛 받는 쪽)에 얼룩덜룩
+            mk = m & (ny < -0.15) & (mossn > 0.66 - 0.12 * (-ny))
+            c[mk] = lerp(c[mk], np.array([66, 88, 44.0]) * lit[mk][:, None], 0.65)
+            rgb[m] = c[m]; a[m] = 1
+            # 바닥 그늘 (다음 줄 바위가 덮음)
+    # 틈과 앞의 풀·고사리
+    g_rgb, g_a = grass_tufts(228, 1.0, 0.04, 0.18, (30, 48, 24), (104, 132, 64), count=140)
+    rgb, a = over(rgb, a, g_rgb, g_a)
     save_png('barrier_valley', rgb, a)
 
 
@@ -1793,7 +1885,7 @@ def splash_sounds(r):
             ph = 2 * np.pi * np.cumsum(f0 * (1 + 2.2 * tt / dl)) / SR
             drop = np.sin(ph) * np.exp(-tt * r.uniform(60, 120)) * r.uniform(0.12, 0.35)
             _place(buf, drop, r.uniform(0.05, 0.5))
-        save_wav(f'splash{i}', buf, -14)
+        save_wav(f'splash{i}', buf, -5)          # 또렷하게 (예전 -14는 물소리에 묻힘)
 
 
 def neon_sounds(r):
@@ -2427,13 +2519,14 @@ def main():
             prop_simple('cliff', [(0, (60, 56, 50)), (0.5, (112, 104, 94)), (1, (160, 152, 140))], 427, aniso=(0.35, 1.6)),
             prop_simple('fabric', [(0, (120, 104, 88)), (0.5, (164, 148, 128)), (1, (196, 184, 166))], 429, beta=0.4),
             prop_simple('walnut', [(0, (52, 34, 22)), (0.5, (92, 62, 40)), (1, (136, 96, 62))], 431, aniso=(4, 0.2)),
+            prop_simple('oak', [(0, (150, 140, 124)), (0.5, (184, 174, 156)), (1, (214, 206, 190))], 433, aniso=(4, 0.2)),
             prop_simple('bark', [(0, (52, 38, 28)), (0.5, (98, 74, 52)), (1, (140, 110, 80))], 417, aniso=(3, 0.2)),
             prop_simple('driftwood', [(0, (100, 96, 88)), (0.5, (150, 144, 132)), (1, (196, 190, 176))], 419, aniso=(0.2, 3)),
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
             people(), menu_board(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True),
-            jelly_art(), fish_art(), neon_art(),
+            jelly_art(), fish_art(), neon_art(), speaker_art(), roof_tile(),
             photo_textures()),
         'sfx': lambda: sfx(),
         'cat': lambda: _cat(),

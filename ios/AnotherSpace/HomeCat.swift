@@ -44,6 +44,36 @@ final class HomeCat {
     /// 빙글빙글 돌기만 하고 강아지·고양이가 쫓아가지 않았음). 벽 속에 끼면 내 쪽으로 빼냄.
     /// 반환: 새 자리, 부딪혔는지
     static func toyStep(_ p: SIMD3<Float>, _ v: inout SIMD3<Float>, _ dt: Float, _ c: Ctx, radius r: Float) -> (SIMD3<Float>, Bool) {
+        // 빠르게 던지면 한 프레임에 10cm 넘게 날아가 벽을 건너뛸 수 있음 → 4cm씩 나눠서 확인
+        let n = max(1, min(12, Int((simd_length(v) * dt / 0.04).rounded(.up))))
+        var q = inside(p, c, radius: r)
+        var hit = false
+        for _ in 0..<n {
+            let st = toyStep1(q, &v, dt / Float(n), c, radius: r)
+            q = st.0
+            hit = hit || st.1
+        }
+        // 그래도 방 밖(벽 너머)이면 방 안 가장 가까운 자리로 되돌림 — 벽 너머에 떨어져 보이지 않게 되고 강아지가 그쪽에 붙박이던 문제
+        let fixed = inside(q, c, radius: r)
+        if fixed != q { hit = true; v.x = -v.x * 0.3; v.z = -v.z * 0.3 }
+        return (fixed, hit)
+    }
+
+    /// 방 안(장난감이 다닐 수 있는 곳)이면 그대로, 아니면 둘레를 넓혀 가며 찾은 가장 가까운 방 안 자리 (못 찾으면 내 쪽으로)
+    static func inside(_ p: SIMD3<Float>, _ c: Ctx, radius r: Float) -> SIMD3<Float> {
+        let q = SIMD2<Float>(p.x, p.z)
+        if c.room(q) { return p }
+        for d in stride(from: Float(0.05), through: 2.0, by: 0.05) {
+            for k in 0..<16 {
+                let a = Float(k) / 16 * 2 * .pi
+                let t = q + SIMD2<Float>(cos(a), sin(a)) * d
+                if c.room(t) && c.height(t) < 0.05 { return SIMD3<Float>(t.x, max(p.y, c.floorY + r), t.y) }
+            }
+        }
+        return SIMD3<Float>(c.head.x, max(p.y, c.floorY + r), c.head.z)
+    }
+
+    private static func toyStep1(_ p: SIMD3<Float>, _ v: inout SIMD3<Float>, _ dt: Float, _ c: Ctx, radius r: Float) -> (SIMD3<Float>, Bool) {
         v.y -= 9.8 * dt
         var np = p + v * dt
         var hit = false
@@ -893,6 +923,10 @@ final class HomeCat {
             b.position = np
             b.orientation = ballSpin
             return
+        }
+        if !c.room(ballPos) {                                   // 방 밖(벽 너머)에 놓였으면 방 안 가장 가까운 자리로
+            let q = Self.inside(SIMD3<Float>(ballPos.x, floorY + 0.047, ballPos.y), c, radius: 0.047)
+            ballPos = SIMD2<Float>(q.x, q.z)
         }
         let sp = simd_length(ballVel)
         if sp > 0.01 {
