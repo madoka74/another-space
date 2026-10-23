@@ -219,6 +219,9 @@ final class Campfire {
         }
         flameRoot.setOpacity(tm == "morning" || tm == "afternoon" ? 0.85 : 1)
         root.addChild(flameRoot)
+        // 그리는 순서: 포털(0번, 다른 세계로 열린 벽·천장) 뒤에 바닥 불빛(28) → 불길(29). 포털 너머 그림이 불길을 지우지 않게
+        Sorting.apply(flameRoot, 29)
+        if let gl { Sorting.apply(gl, 28) }
         // 자리에 맞춘 크기 (좁으면 작은 모닥불): 돌·장작·숯·불길·바닥 불빛을 함께 줄임
         remains.scale = SIMD3<Float>(repeating: k)
         flameRoot.scale = SIMD3<Float>(repeating: k)

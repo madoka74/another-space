@@ -455,7 +455,8 @@ def photo_textures():
     import fetch_env
     target = {'grass': 92, 'moss': 82, 'pebble': 132, 'sand': 182, 'dirt': 118, 'planks': 128, 'planks_dark': 78,
               'brick': 118, 'plaster': 218, 'rock': 124, 'mossrock': 100, 'bark': 86, 'cliff': 112,
-              'fabric': 150, 'walnut': 92, 'concrete': 138, 'oak': 168}
+              'fabric': 150, 'walnut': 92, 'concrete': 138, 'oak': 168,
+              'house_stucco': 182, 'house_plaster': 188, 'house_stone': 128, 'house_wood': 104}
     for name, i in fetch_env.TEXTURES.items():
         path = fetch_env.tex_path(i)
         if not os.path.exists(path):
@@ -869,6 +870,17 @@ def townhouse(night=False):
     px = W / 6.0                                      # 1m = 85px
     v = 0.7 + 0.2 * noise(1.4, W, 471, h=H) + 0.1 * noise(2.4, W, 472, h=H)
     rgb = np.stack([v * 236, v * 230, v * 220], axis=-1)
+    try:                                              # 받아 둔 실사 회벽 사진이 있으면 벽 바탕으로 (2m 한 장을 6m에 세 번)
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import fetch_env
+        pth = fetch_env.tex_path(fetch_env.TEXTURES['house_stucco'])
+        if os.path.exists(pth):
+            ph = np.asarray(Image.open(pth).convert('RGB').resize((W // 3, W // 3), Image.LANCZOS)).astype(np.float32)
+            ph = np.tile(ph, (H // (W // 3) + 1, 3, 1))[:H, :W]
+            ph = ph * (215.0 / max(1.0, float(_lum(ph).mean())))
+            rgb = ph
+    except Exception as e:
+        print('  거리 건물 실사 벽 건너뜀:', e, flush=True)
     r = rng(473)
     litm = np.zeros((H, W), bool)
     for fl in range(3):
@@ -2559,6 +2571,140 @@ def line_folder(folder, sky=False):
         mask.save(os.path.join(folder, name + '_lna.png'), optimize=True)      # 선 그림에서 쓰는 매끄러운 가림 그림
 
 
+# ───────────── 실제 녹음 효과음 (BigSoundBank CC0, fetch_env.SFX_IDS) ─────────────
+# (이름, 번호, 방식, 고를 소리 순서, 최대 길이 초, 크기 dB)
+#   event: 녹음 속 소리 덩어리(짖음 하나·야옹 하나·발걸음 하나)를 찾아 그중 하나만 / loop: 가운데를 잘라 이음매 없이 되풀이 / whole: 통째로
+REAL_SFX = (
+    [(f'cat_meow{i}', 1888 + i, 'event', 'longest', 1.6, -4) for i in range(1, 10)]
+    + [('cat_mew', 494, 'event', 'longest', 1.0, -6),
+       ('cat_mrrp1', 1472, 'event', 'longest', 0.9, -7), ('cat_mrrp2', 1473, 'event', 'longest', 0.9, -7), ('cat_mrrp3', 1474, 'event', 'longest', 0.9, -7),
+       ('cat_chirp', 1475, 'event', 0, 0.5, -7), ('cat_chirp2', 1476, 'event', 0, 0.5, -7), ('cat_chirp3', 1477, 'event', 0, 0.5, -7),
+       ('cat_yawn', 1478, 'event', 'longest', 1.4, -9), ('cat_chatter', 1479, 'event', 0, 0.8, -9),
+       ('cat_trill', 98, 'event', 'longest', 1.2, -6),
+       ('cat_purr', 436, 'loop', 0, 6.0, -16),
+       ('cat_growl', 1885, 'event', 'longest', 1.8, -8),
+       ('dog_bark1', 612, 'event', 0, 0.7, -3), ('dog_bark2', 612, 'event', 1, 0.7, -3), ('dog_bark3', 612, 'event', 2, 0.7, -3),
+       ('dog_yip1', 682, 'event', 0, 0.5, -5), ('dog_yip2', 682, 'event', 1, 0.5, -5),
+       ('dog_howl', 2450, 'event', 'longest', 3.0, -7),
+       ('dog_playgrowl', 1060, 'event', 'longest', 1.2, -8),
+       ('dog_pant', 1547, 'loop', 0, 4.0, -20),
+       ('splash1', 690, 'event', 0, 0.8, -14), ('splash2', 690, 'event', 1, 0.8, -14),
+       ('splash3', 690, 'event', 2, 0.8, -14), ('splash4', 690, 'event', 3, 0.8, -14),
+       ('stream_loop', 823, 'loop', 0, 12.0, -18), ('fall_loop', 507, 'loop', 0, 12.0, -16),
+       ('fire_loop', 30, 'loop', 0, 14.0, -12),
+       ('plane_pass', 3005, 'whole', 0, 14.0, -6), ('plane_pass2', 2478, 'whole', 0, 16.0, -6)])
+
+
+def _decode(path):
+    """mp3 → 48kHz 모노 (맥: afconvert, 아니면 ffmpeg)"""
+    import subprocess, wave
+    out = path[:-4] + '.wav'
+    if not os.path.exists(out):
+        for cmd in (['afconvert', '-f', 'WAVE', '-d', 'LEI16@48000', path, out],
+                    ['ffmpeg', '-y', '-loglevel', 'error', '-i', path, '-ac', '1', '-ar', str(SR), out]):
+            try:
+                subprocess.run(cmd, check=True, capture_output=True)
+                break
+            except Exception:
+                continue
+    if not os.path.exists(out):
+        return None
+    with wave.open(out) as w:
+        n, ch, sr, sw = w.getnframes(), w.getnchannels(), w.getframerate(), w.getsampwidth()
+        raw = w.readframes(n)
+    if sw != 2:
+        return None
+    x = np.frombuffer(raw, '<i2').astype(float) / 32768
+    if ch > 1:
+        x = x[: len(x) // ch * ch].reshape(-1, ch).mean(axis=1)
+    if sr != SR:
+        x = np.interp(np.arange(int(len(x) * SR / sr)) * sr / SR, np.arange(len(x)), x)
+    return x
+
+
+def _events(x):
+    """소리 덩어리 찾기: 10ms 단위 세기가 가장 큰 곳의 15%(또는 바탕 소음의 3배)를 넘는 구간, 120ms 안의 틈은 이어 봄"""
+    hop = int(SR * 0.01)
+    n = len(x) // hop
+    if n < 10:
+        return []
+    rms = np.sqrt(np.mean(x[: n * hop].reshape(n, hop) ** 2, axis=1) + 1e-12)
+    rs = np.convolve(rms, np.ones(3) / 3, 'same')
+    thr = max(rs.max() * 0.15, np.percentile(rs, 30) * 3)
+    act = rs > thr
+    ev = []
+    i = 0
+    while i < n:
+        if act[i]:
+            j = i
+            while j < n and (act[j] or act[j: j + 12].any()):
+                j += 1
+            if j - i >= 6:
+                ev.append((i * hop, j * hop, float(rs[i:j].sum())))
+            i = j
+        else:
+            i += 1
+    return ev
+
+
+def _save_rms(name, x, rms_db):
+    """되풀이 소리: 평균 세기로 맞춤 (튀는 소리 때문에 전체가 작아지지 않게), 넘치는 곳은 부드럽게 눌러 줌"""
+    import wave
+    x = np.asarray(x, float)
+    x = x / (np.sqrt(np.mean(x ** 2)) + 1e-9) * (10 ** (rms_db / 20))
+    x = np.tanh(x * 1.2) / 1.2
+    with wave.open(os.path.join(OUT, 'sfx', name + '.wav'), 'wb') as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
+        w.writeframes((np.clip(x, -1, 1) * 32767).astype('<i2').tobytes())
+
+
+def real_sfx():
+    """받아 둔 실제 녹음으로 효과음을 바꿈 (못 받았거나 풀지 못한 것은 직접 만든 소리 그대로)"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import fetch_env
+    done = 0
+    for name, sid, mode, pick, maxlen, db in REAL_SFX:
+        path = fetch_env.sfx_path(sid)
+        if not os.path.exists(path):
+            continue
+        x = _decode(path)
+        if x is None or len(x) < SR * 0.1:
+            continue
+        x = x - np.mean(x)
+        x = x - _lowpass(x, 60)                                      # 바람·손잡이 웅웅거림 빼기
+        if mode == 'loop':
+            L = int(SR * maxlen)
+            if len(x) > L + SR:
+                st = int(min(len(x) - L, len(x) * 0.2))
+                seg = x[st: st + L]
+            else:
+                seg = x
+            _save_rms(name, _loop(seg, min(1.0, len(seg) / SR * 0.15)), db)
+        elif mode == 'whole':
+            seg = x[: int(SR * maxlen)]
+            k = int(SR * 0.6)
+            if len(seg) > 2 * k:
+                seg[-k:] *= np.linspace(1, 0, k)
+            save_wav(name, seg, db)
+        else:
+            ev = _events(x)
+            if not ev:
+                continue
+            if pick == 'longest':
+                a, b, _ = max(ev, key=lambda e: e[2])
+            else:
+                a, b, _ = ev[int(pick) % len(ev)]
+            a = max(0, a - int(SR * 0.03)); b = min(len(x), b + int(SR * 0.12))
+            b = min(b, a + int(SR * maxlen))
+            seg = x[a:b].copy()
+            fi = int(SR * 0.005); fo = min(int(SR * 0.08), len(seg) // 4)
+            seg[:fi] *= np.linspace(0, 1, fi)
+            seg[-fo:] *= np.linspace(1, 0, fo)
+            save_wav(name, seg, db)
+        done += 1
+    print(f'  실제 녹음 효과음: {done}/{len(REAL_SFX)}개', flush=True)
+
+
 def _fetch_env():
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import fetch_env
@@ -2625,6 +2771,10 @@ def main():
             prop_simple('fabric', [(0, (120, 104, 88)), (0.5, (164, 148, 128)), (1, (196, 184, 166))], 429, beta=0.4),
             prop_simple('walnut', [(0, (52, 34, 22)), (0.5, (92, 62, 40)), (1, (136, 96, 62))], 431, aniso=(4, 0.2)),
             prop_simple('oak', [(0, (150, 140, 124)), (0.5, (184, 174, 156)), (1, (214, 206, 190))], 433, aniso=(4, 0.2)),
+            prop_simple('house_stucco', [(0, (170, 160, 140)), (0.5, (196, 186, 166)), (1, (218, 210, 192))], 435, beta=1.2),
+            prop_simple('house_plaster', [(0, (178, 176, 170)), (0.5, (204, 202, 196)), (1, (226, 224, 218))], 437, beta=1.0),
+            prop_simple('house_stone', [(0, (88, 84, 78)), (0.5, (132, 126, 116)), (1, (176, 170, 158))], 439, beta=2.0),
+            prop_simple('house_wood', [(0, (72, 50, 34)), (0.5, (112, 80, 54)), (1, (148, 110, 76))], 441, aniso=(4, 0.15)),
             prop_simple('bark', [(0, (52, 38, 28)), (0.5, (98, 74, 52)), (1, (140, 110, 80))], 417, aniso=(3, 0.2)),
             prop_simple('driftwood', [(0, (100, 96, 88)), (0.5, (150, 144, 132)), (1, (196, 190, 176))], 419, aniso=(0.2, 3)),
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
@@ -2636,6 +2786,7 @@ def main():
             photo_textures()),
         'sfx': lambda: sfx(),
         'cat': lambda: _cat(),
+        'realsfx': lambda: real_sfx(),      # 직접 만든 소리를 실제 녹음으로 바꿈 (sfx 다음에)
         'jazz': lambda: _jazz(),
         'art': lambda: _fetch_art(),
         'lines': lambda: line_art(),          # 오려 내기 그림을 다 만든 뒤에

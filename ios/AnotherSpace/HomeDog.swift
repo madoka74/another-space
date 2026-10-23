@@ -109,7 +109,7 @@ final class HomeDog {
         self.floorY = floorY
         let s = Self.size
         var g = Geo()
-        let y0: Float = -s * (42.0 / 512.0)                 // 발밑(그림 바닥 줄)이 바닥에 닿게
+        let y0: Float = -s * (24.0 / 512.0)                 // 발 맨 아래(그림의 488/512 줄 — 그려진 그림에서 잰 값)가 바닥에 닿게 (예전 470: 2cm 묻혔음)
         g.quad(SIMD3<Float>(-s / 2, y0, 0), SIMD3<Float>(s / 2, y0, 0), SIMD3<Float>(s / 2, y0 + s, 0), SIMD3<Float>(-s / 2, y0 + s, 0),
                SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
         if let m = g.mesh("dog") { card.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
@@ -139,6 +139,10 @@ final class HomeDog {
         }
         if let e = sg.entity("dogShadow", sm) { shadow = e; root.addChild(e) }
         root.position = SIMD3<Float>(p.x, floorY, p.y)
+        // 그리는 순서: 포털(0번) 뒤에 그림자 → 몸 → 말풍선 (하늘·풍경 쪽에서 지워지지 않게)
+        if let sh = shadow { Sorting.apply(sh, 27) }
+        Sorting.apply(card, 28)
+        Sorting.apply(bubble, 29)
         root.setOpacity(0)
         pending = Self.all
         show("dog_fwalk0")
@@ -165,10 +169,13 @@ final class HomeDog {
     }
 
     private var shown = ""
+    /// 몸 맨 아래가 기본(488)보다 더 아래로 그려진 장 — 그만큼 판을 올려 바닥에 딱 닿게 (픽셀)
+    private static let footPx: [String: Float] = ["dog_roll0": 23, "dog_roll1": 23]
     private func show(_ n: String) {
         guard n != shown else { return }
         shown = n
         card.model?.materials = [mat(n)]
+        card.position.y = 0.008 + (Self.footPx[n] ?? 0) * Self.size / 512      // 방 바닥 판(6mm 위)보다 살짝 위
     }
 
     private func loop(_ frames: [String], fps: Float) -> String {
@@ -184,8 +191,8 @@ final class HomeDog {
 
     // MARK: 소리
     private func say(_ name: String, _ gain: Double = -3) {
-        voiceCool = Float.random(in: 2.5...5)
-        Sfx.play(name, in: root, at: [0.15 * face, 0.35, 0], gain: gain)
+        voiceCool = Float.random(in: 7...14)         // 스스로 내는 소리 사이 (탭엔 늘 바로 대답)
+        Sfx.play(name, in: root, at: [0.15 * face, 0.35, 0], gain: min(0, gain), rolloff: 0.6)      // 실제 강아지 녹음, 거리에 따라 덜 줄게
     }
     private func bark(_ gain: Double = -3) { say("dog_bark\(Int.random(in: 1...3))", gain) }
     private func yip(_ gain: Double = -4) { say("dog_yip\(Int.random(in: 1...2))", gain) }
@@ -235,37 +242,39 @@ final class HomeDog {
     private var onFurniture: Bool { elev > 0.05 }
 
     /// 톡 침 (바라보고 탭)
+    /// 탭할 때마다 꼭 소리로 대답함 (멀리서도 또렷하게)
     func poke() {
-        guard act != .leave && act != .enter && act != .jumpUp && act != .jumpDown else { return }
+        guard act != .leave && act != .enter else { return }
+        if act == .jumpUp || act == .jumpDown { yip(0); emote("exclaim"); return }     // 뛰는 중엔 대답만
         taps = taps.filter { t - $0 < 6 } + [t]
-        if carrying { dropStick(); yip(-2); emote("exclaim"); start(.bow, 1.5); return }
+        if carrying { dropStick(); yip(0); emote("exclaim"); start(.bow, 1.5); return }
         goal = nil
         if taps.count >= 4 && !onFurniture {                   // 자꾸 치면 신나서 우다다
             taps.removeAll()
-            yip(-1)
+            bark(0)
             emote("exclaim")
             if let c = lastCtx { zoomies(c) } else { start(.jump, 1.0) }
             return
         }
         switch act {
         case .sleep, .lie:
-            say("dog_whine", -6); emote("question"); frontal = true; start(.tilt, 1.6); return
+            say("dog_whine", -2); emote("question"); frontal = true; start(.tilt, 1.6); return
         case .fetch, .bring, .wait:
-            yip(-3); emote("exclaim"); return
+            yip(0); emote("exclaim"); return
         default: break
         }
         if onFurniture {
-            emote("heart"); panting = 4; frontal = true; start(.love, 2.5)
+            yip(-1); emote("heart"); panting = 4; frontal = true; start(.love, 2.5)
             return
         }
         switch Int.random(in: 0...6) {
-        case 0: frontal = true; emote("heart"); panting = 4; start(.love, 3)
-        case 1: emote("heart"); yip(-3); start(.paw, 2)
-        case 2: emote("heart"); say("dog_playgrowl", -4); start(.roll, 2.4)
-        case 3: yip(-2); emote("exclaim"); start(.jump, 1.2)
-        case 4: bark(-2); emote("exclaim"); start(.bow, 1.8)
-        case 5: say("dog_whine", -5); emote("question"); frontal = true; start(.tilt, 1.8)
-        default: say("dog_howl", -5); emote("note", 2.4); start(.howl, 2.6)
+        case 0: yip(-1); frontal = true; emote("heart"); panting = 4; start(.love, 3)
+        case 1: emote("heart"); yip(0); start(.paw, 2)
+        case 2: emote("heart"); say("dog_playgrowl", -1); start(.roll, 2.4)
+        case 3: yip(0); emote("exclaim"); start(.jump, 1.2)
+        case 4: bark(0); emote("exclaim"); start(.bow, 1.8)
+        case 5: say("dog_whine", -2); emote("question"); frontal = true; start(.tilt, 1.8)
+        default: say("dog_howl", -2); emote("note", 2.4); start(.howl, 2.6)
         }
     }
 
@@ -382,7 +391,7 @@ final class HomeDog {
             } else if c.userSpeed > 0.3 && act != .walk && !onFurniture {
                 followT -= dt
                 if followT <= 0, let s = viewSpot(c, near: 1.1) { followT = 0.5; go(s, then: .sit, 2) }
-            } else if gazeT > 1.2 && (act == .sit || act == .lie || act == .pant || act == .onTop) && voiceCool <= 0 {
+            } else if gazeT > 2.5 && (act == .sit || act == .lie || act == .pant || act == .onTop) && voiceCool <= 0 {
                 gazeT = 0
                 say("dog_whine", -6)
                 emote("question", 1.2)
@@ -393,7 +402,7 @@ final class HomeDog {
 
         // 혼잣말
         if talkT <= 0 {
-            talkT = Float.random(in: 7...15)
+            talkT = Float.random(in: 20...45)          // 가끔만 (예전 7~15초는 너무 잦았음)
             switch act {
             case .sleep: emote("zzz", 2)
             case .walk where sniffing: say("dog_sniff", -8)
@@ -768,7 +777,7 @@ final class HomeDog {
             let k = actT.truncatingRemainder(dividingBy: 2.4)
             show(k < 1.6 ? loop(["dog_bow0", "dog_bow1"], fps: 4) : loop(["dog_fhappy", "dog_fsit1"], fps: 4))
             panting = 2
-            if voiceCool <= 0 && Int.random(in: 0...90) == 0 { bark(-6) }
+            if voiceCool <= 0 && Float.random(in: 0...1) < dt * 0.1 { bark(-6) }     // 놀자고 가끔 멍 (예전엔 매 화면마다 1/91 — 몇 초마다 짖었음)
         }
     }
 

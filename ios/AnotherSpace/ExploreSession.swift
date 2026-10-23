@@ -1456,11 +1456,8 @@ final class ExploreSession {
     private func soundTick(_ dt: Float) {
         guard current != 0, let wld = worlds[current], fade > 0.5 else { return }
         if t > nextEvent {
-            nextEvent = t + Float.random(in: 8...22)
-            let a = Float.random(in: 0...(2 * .pi))
-            let d = max(wld.halfSize.x, wld.halfSize.y) + Float.random(in: 0.5...4)
-            let p = wld.center + SIMD3<Float>(cos(a) * d, Float.random(in: 0.8...2.6), sin(a) * d)
-            player.playEvent(in: spaceRoot, at: p)
+            nextEvent = t + Float.random(in: 14...34)          // 가끔 (예전 8~22초는 잦아 어수선했음)
+            player.playEvent(in: spaceRoot, center: wld.center, extent: max(wld.halfSize.x, wld.halfSize.y), floorY: wld.center.y)
         }
         if wld.room.weather == "storm", t > nextThunder {
             nextThunder = t + Float.random(in: 12...28)
@@ -1770,6 +1767,24 @@ final class ExploreSession {
         }
     }
 
+    /// 바라보는 방향에 있는 반려동물을 톡 (가장 가운데에 가까운 아이). 톡했으면 true
+    private func pokeGazedPet(_ dir: SIMD3<Float>) -> Bool {
+        var best: Float = cos(8 * Float.pi / 180)
+        var pick = 0
+        let pets: [(Entity?, Int, Float)] = [(cat?.root, 1, 0.18), (dog?.root, 2, 0.24)]
+        for (r, k, up) in pets {
+            guard let r, r.isEnabledInHierarchy else { continue }
+            let c = r.position(relativeTo: nil) + SIMD3<Float>(0, up, 0)
+            let d = simd_distance(c, head)
+            guard d > 0.1, d < 7 else { continue }
+            let cs = simd_dot(simd_normalize(c - head), dir)
+            if cs > best { best = cs; pick = k }
+        }
+        if pick == 1 { cat?.poke(); return true }
+        if pick == 2 { dog?.poke(); return true }
+        return false
+    }
+
     // MARK: 탭
     /// 탭 하나: 열쇠·그림 버튼이면 바로 처리, 그 밖(탭 받는 상자)이면 0.4초 안에 또 오는지 기다림
     func tapped(_ e: Entity, at point: SIMD3<Float>? = nil, system: Bool = true) {
@@ -1812,6 +1827,12 @@ final class ExploreSession {
             cur = c.parent
         }
         if t - lastUITap < 0.25 { return }                         // 안내판을 누른 탭
+        // 고양이·강아지: 그림 판이 작아 조금만 멀어도 시선이 판을 빗나가 탭이 안 먹혔음 →
+        // 탭한 방향(머리 → 탭한 곳)이 아이 몸 가운데에서 8도 안이면 (7m 안) 그 아이를 톡
+        if let p = point, simd_distance(p, head) > 0.05, pokeGazedPet(simd_normalize(p - head)) {
+            pendingTap = nil
+            return
+        }
         // 밤하늘 별자리: 탭한 방향(머리 → 탭한 곳)에 별자리가 있으면 그 별자리를 이어 보여 주고 정보판을 띄움
         if let p = point, let st = stars, st.visible, let f = fit, simd_distance(p, head) > 0.05 {
             let dir = f.dirToSaved(simd_normalize(p - head))

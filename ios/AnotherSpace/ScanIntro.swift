@@ -21,16 +21,20 @@ enum Sfx {
     static func preload() { for n in ["key_appear", "key_turn", "door_open", "scan", "fire_out", "cat_trill", "cat_chirp", "cat_meow1", "cat_meow2", "cat_meow3", "cat_mrrp1", "cat_mrrp2", "cat_mrrp3", "bell1", "bell2", "bell3", "star_chime", "fire_pop1", "dog_bark1", "dog_yip1", "dog_yip2", "dog_tag1", "dog_tag2", "dog_sniff"] { _ = res(n) } }
 
     /// 그 자리에서 나는 소리 (parent 기준 위치)
-    static func play(_ name: String, in parent: Entity, at p: SIMD3<Float>, gain: Double) {
-        guard let r = res(name) else { return }
+    /// life: 소리 길이보다 넉넉히 (그 뒤 소리 자리를 치움), rolloff: 거리에 따라 줄어드는 정도 (작을수록 멀리까지 들림)
+    @discardableResult
+    static func play(_ name: String, in parent: Entity, at p: SIMD3<Float>, gain: Double, life: Double = 5, rolloff: Double? = nil) -> Entity? {
+        guard let r = res(name) else { return nil }
         let e = Entity()
         var sa = SpatialAudioComponent()
         sa.gain = gain
+        if let f = rolloff { sa.distanceAttenuation = .rolloff(factor: f) }
         e.components.set(sa)
         e.position = p
         parent.addChild(e)
         e.playAudio(r)
-        Task { try? await Task.sleep(for: .seconds(5)); e.removeFromParent() }
+        Task { try? await Task.sleep(for: .seconds(life)); e.removeFromParent() }
+        return e
     }
 
     /// 머리에 붙은 소리 (공간 전체에 퍼지는 효과)

@@ -28,6 +28,17 @@ final class Scenery {
     private var flyers: [Flyer] = []
     private struct Mover { let e: Entity; let a: SIMD3<Float>; let d: SIMD3<Float>; let len: Float; let speed: Float; var s: Float; let bob: Float }
     private var movers: [Mover] = []
+    // 도시 하늘 비행기 (가끔 한 번씩 지나감)
+    private var plane: Entity?
+    private var planeFloor: Float = 0
+    private var planeWait: Float = 0
+    private var planeA = SIMD3<Float>(0, 0, 0)
+    private var planeDir = SIMD3<Float>(1, 0, 0)
+    private var planeLen: Float = 200
+    private var planeS: Float = 0
+    private let planeSpeed: Float = 10
+    private var planeSound: Entity?
+    private var planeSoundAt: Float = 0
     private var plumes: [SmokePlume] = []
     private var boats: [(Entity, SIMD3<Float>, Float, Float, Float)] = []     // 배, 가운데, 각도, 반지름, 각속도
     private var blinkers: [(ModelEntity, Float)] = []                       // 깜빡이는 불빛, 주기
@@ -95,7 +106,7 @@ final class Scenery {
             addPlane(floorY: floorY, using: &g)
         case "cafe":
             addCafe(segs, floorY: floorY, ceilY: ceilY, night: night, using: &g)
-            addCafeCars(segs, floorY: floorY, night: night || room.time == "dusk", using: &g)      // 창밖 사람 그림은 뺌 (어색했음)
+            // 창밖 사람·자동차는 뺌 (벽을 뚫고 지나가 어색했음). 대신 가로수 낙엽·가로등 켜짐/깜빡임 — RoomWorld.tickCafe
         case "gallery":
             if !night && !wet { addBirds(3, R: R, floorY: floorY, color: [0.15, 0.15, 0.15], using: &g) }
             addDust(floorY: floorY)
@@ -525,13 +536,53 @@ final class Scenery {
         red.position = [-17, 0.6, -7]; green.position = [17, 0.6, -7]; white.position = [0, 7.6, -18.8]
         p.addChild(red); p.addChild(green); p.addChild(white)
         blinkers.append((white, 1.3))
-        let a = Float.random(in: 0...(2 * .pi), using: &g)
-        let dir = SIMD3<Float>(cos(a), 0, sin(a))
-        let len: Float = 1400
-        let start = center - dir * (len / 2) + SIMD3<Float>(0, floorY - center.y + 160, 0) + SIMD3<Float>(-dir.z, 0, dir.x) * 120
-        p.orientation = simd_quatf(angle: atan2(dir.x, dir.z), axis: [0, 1, 0])
+        // 실제 크기(38m)로 멀리(1.4km 길) 날리면 하늘 공(300m)·달(190m) 바깥으로 나가 달에 가리고 잘려 보였음 →
+        // 작게 줄여(약 5m) 하늘 안쪽(가장 멀어도 175m)으로만 지나가게. 보이는 크기·빠르기는 1km 남짓 위를 지나는 여객기쯤
+        p.scale = SIMD3<Float>(repeating: 0.14)
+        p.isEnabled = false
         far.addChild(p)
-        movers.append(Mover(e: p, a: start, d: dir, len: len, speed: 45, s: Float.random(in: 0...len, using: &g), bob: 0))
+        plane = p
+        planeFloor = floorY
+        planeWait = Float.random(in: 6...20, using: &g)
+    }
+
+    /// 비행기 한 번 지나가기: 방 위 아무 방향으로, 높이 105~125m, 옆으로 20~50m 비껴서. 지나갈 때 엔진 소리 (비행기 쪽에서)
+    private func startPlanePass() {
+        guard let p = plane else { return }
+        let a = Float.random(in: 0...(2 * .pi))
+        let dir = SIMD3<Float>(cos(a), 0, sin(a))
+        let alt = Float.random(in: 105...125), off = Float.random(in: 20...50) * (Bool.random() ? 1 : -1)
+        let half = sqrt(max(400, 175 * 175 - alt * alt - off * off))
+        planeLen = half * 2
+        planeA = SIMD3<Float>(center.x, planeFloor + alt, center.z) - dir * half + SIMD3<Float>(-dir.z, 0, dir.x) * off
+        planeDir = dir
+        planeS = 0
+        planeSound = nil
+        planeSoundAt = max(0, half - 7 * planeSpeed)          // 소리(약 14초)의 가장 큰 곳이 가장 가까이 올 때와 맞게
+        p.orientation = simd_quatf(angle: atan2(dir.x, dir.z), axis: [0, 1, 0])
+        p.position = planeA
+        p.isEnabled = true
+    }
+
+    private func tickPlane(_ dt: Float) {
+        guard let p = plane else { return }
+        if !p.isEnabled {
+            planeWait -= dt
+            if planeWait <= 0 { startPlanePass() }
+            return
+        }
+        planeS += planeSpeed * dt
+        p.position = planeA + planeDir * planeS
+        // 소리는 비행기 방향 12m 앞에 둔 소리 자리에서 (실제 거리로 두면 거의 안 들림) — 비행기를 따라 움직여 방향이 맞음
+        let toward = simd_normalize(p.position - center) * 12
+        if planeSound == nil && planeS >= planeSoundAt {
+            planeSound = Sfx.play(Bool.random() ? "plane_pass" : "plane_pass2", in: near, at: center + toward, gain: -3, life: 20, rolloff: 0.5)
+        }
+        planeSound?.position = center + toward
+        if planeS > planeLen {
+            p.isEnabled = false
+            planeWait = Float.random(in: 40...90)
+        }
     }
 
     // MARK: 연기·불·낙엽·안개
@@ -915,35 +966,6 @@ final class Scenery {
         if let e = lines.entity("cafeLines", Ink.line) { near.addChild(e) }
     }
 
-    /// 카페 통창 밖 차도를 가끔 지나가는 차 (창이 있는 쪽 차도, 두 차선에 한 대씩 — 15초쯤마다 한 번)
-    private func addCafeCars<G: RandomNumberGenerator>(_ segs: [WallSeg], floorY: Float, night: Bool, using g: inout G) {
-        let wins = segs.filter { $0.window }
-        guard !wins.isEmpty else { return }
-        // 창이 가장 많이 향한 쪽 (바깥 방향)
-        let sides: [(SIMD3<Float>, SIMD3<Float>, Float)] = [(ez, ex, halfSize.y), (-ez, -ex, halfSize.y), (ex, -ez, halfSize.x), (-ex, ez, halfSize.x)]
-        var best = sides[0], bs: Float = -1e9
-        for sd in sides {
-            var sc: Float = 0
-            for w in wins {
-                let n = L.flat(w.n) - L.flat(.zero)
-                sc += -simd_dot(SIMD3<Float>(n.x, 0, n.y), sd.0) * simd_distance(w.a, w.b)
-            }
-            if sc > bs { bs = sc; best = sd }
-        }
-        let (nOut, along, hN) = best
-        let colors: [SIMD3<Float>] = [[0.72, 0.1, 0.1], [0.92, 0.92, 0.9], [0.12, 0.18, 0.34], [0.14, 0.14, 0.15], [0.62, 0.64, 0.66], [0.24, 0.34, 0.28]]
-        let len: Float = 170
-        for (lane, dirSign) in [(Float(4.9), Float(1)), (8.1, -1)] {
-            let dir = along * dirSign
-            let base = SIMD3<Float>(center.x, floorY - 0.16, center.z) + nOut * (hN + lane) - dir * (len / 2)
-            let kind = Int.random(in: 0...2, using: &g)
-            let car = makeCar(kind: kind, color: kind == 2 ? SIMD3<Float>(0.96, 0.78, 0.12) : colors[Int.random(in: 0..<colors.count, using: &g)], night: night)
-            car.orientation = simd_quatf(angle: atan2(dir.x, dir.z), axis: [0, 1, 0])
-            far.addChild(car)
-            movers.append(Mover(e: car, a: base, d: dir, len: len, speed: Float.random(in: 9...12, using: &g), s: Float.random(in: 0...len, using: &g), bob: 0))
-        }
-    }
-
     /// 카페 창밖 길을 지나가는 사람들 (창이 있는 벽 바깥 4~6m, 벽과 나란히 걸어감)
     private func addPassersby<G: RandomNumberGenerator>(_ segs: [WallSeg], floorY: Float, using g: inout G) {
         let wins = segs.filter { $0.window }
@@ -1146,6 +1168,7 @@ final class Scenery {
     // MARK: 매 프레임 (지금 방만)
     func tick(_ dt: Float) {
         t += dt
+        tickPlane(dt)
         for p in plumes { p.tick(dt) }
         for f in flyers {
             f.ang += f.dir * f.speed / max(4, f.radius) * dt

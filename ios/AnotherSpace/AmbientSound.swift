@@ -311,14 +311,42 @@ final class AmbientPlayer {
         return r
     }
 
-    /// 지금 방의 사건 소리 하나를 그 자리에서 (position: parent 기준)
-    func playEvent(in parent: Entity, at position: SIMD3<Float>) {
+    /// 사건 소리 종류에 맞는 자리: (방 둘레에서 바깥으로 거리, 높이, 크기, 거리 줄어듦 정도). 이름·태그의 낱말로 가림.
+    /// 예전엔 무엇이든 방 바로 바깥 0.5~4m·사람 키 높이에서 났음 → 자동차·개 짖는 소리가 창 바로 옆에서 나 어색했음
+    static func spot(_ e: AmbientEntry) -> (d: ClosedRange<Float>, h: ClosedRange<Float>, gain: ClosedRange<Double>, roll: Double) {
+        let k = ((e.tag ?? "") + " " + e.file).lowercased()
+        func has(_ w: [String]) -> Bool { w.contains { k.contains($0) } }
+        if has(["kettle", "cup", "clink", "spoon", "clock", "page", "dish", "chair", "steam", "pour", "kitchen", "fridge", "drawer", "typing"]) {
+            return (-1.5 ... -0.3, 0.8...1.4, -12 ... -8, 1)                    // 방 안 (조용히)
+        }
+        if has(["car", "scooter", "bus", "truck", "horn", "siren", "train", "motor", "traffic", "tram", "bike", "plane", "jet", "heli"]) {
+            return (18...45, 0.5...2, -6 ... -2, 0.35)                           // 멀리 길
+        }
+        if has(["dog", "bark", "rooster", "cow", "sheep", "goat", "horse", "bell", "church", "chime"]) {
+            return (15...40, 0.5...3, -7 ... -3, 0.4)                           // 마을 건너
+        }
+        if has(["bird", "crow", "gull", "owl", "cuckoo", "pecker", "song", "chirp", "tweet", "cicada", "insect", "cricket", "frog"]) {
+            return (5...16, 3...9, -9 ... -4, 0.6)                              // 나무 위·풀숲
+        }
+        if has(["wave", "water", "splash", "drip", "creak", "wind", "leaves", "branch"]) {
+            return (3...10, 0.3...3, -9 ... -4, 0.7)
+        }
+        return (4...12, 1...4, -9 ... -4, 0.6)
+    }
+
+    /// 지금 방의 사건 소리 하나 (그 종류에 맞는 거리·높이·방향에서). center·extent: 방 가운데(parent 기준)·반 크기
+    func playEvent(in parent: Entity, center: SIMD3<Float>, extent: Float, floorY: Float) {
         guard let id = current, let e = pools[id]?.randomElement() else { return }
+        let sp = Self.spot(e)
+        let a = Float.random(in: 0...(2 * .pi))
+        let d = max(0.3, extent + Float.random(in: sp.d))
+        let position = SIMD3<Float>(center.x + cos(a) * d, floorY + Float.random(in: sp.h), center.z + sin(a) * d)
         Task {
             guard let u = await AmbientLibrary.shared.oneShot(e), current == id, let r = resource(u, loop: false) else { return }
             let ent = Entity()
             var sa = SpatialAudioComponent()
-            sa.gain = Double.random(in: -8 ... -3)
+            sa.gain = Double.random(in: sp.gain)
+            sa.distanceAttenuation = .rolloff(factor: sp.roll)
             ent.components.set(sa)
             ent.position = position
             parent.addChild(ent)

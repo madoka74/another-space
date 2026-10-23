@@ -353,3 +353,17 @@ extension Entity {
         }
     }
 }
+
+/// 그리는 순서 (모든 방·방 안 물건이 함께 씀).
+/// 포털(천장·벽·창·문 = 다른 세계로 열린 면)은 0번으로 가장 먼저 그리고, 방 안의 반투명한 것(방 안 해파리·개울 물·반려동물·모닥불 빛 등)은
+/// 그 뒤(25~30번)에 그림. 같은 묶음이 아니면 포털 너머 그림이 나중에 그려져, 방 안 반투명한 것이 하늘 쪽에서 네모나게 지워져 보였음
+@MainActor
+enum Sorting {
+    static let group = ModelSortGroup(depthPass: nil)
+
+    /// e와 그 아래 모든 그림에 순서를 줌
+    static func apply(_ e: Entity, _ order: Int) {
+        if e is ModelEntity { e.components.set(ModelSortGroupComponent(group: group, order: Int32(order))) }
+        for c in e.children { apply(c, order) }
+    }
+}

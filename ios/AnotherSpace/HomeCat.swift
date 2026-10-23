@@ -237,15 +237,16 @@ final class HomeCat {
         self.look = look
         self.pos = p
         self.floorY = floorY
-        // 그림 판: 55cm 정사각, 발밑(그림의 바닥 줄 470/512)이 바닥에 닿게
+        // 그림 판: 55cm 정사각, 발 맨 아래(그림의 481/512 줄 — 그려진 그림에서 잰 값)가 바닥에 닿게
+        // (예전엔 470으로 잡아 발이 6mm쯤 바닥에 묻혔고, 방 바닥 판이 6mm 위에 있어 더 묻혀 보였음 → 판 전체를 8mm 띄움 — show)
         let s: Float = 0.55
         var g = Geo()
-        let y0: Float = -s * (42.0 / 512.0)
+        let y0: Float = -s * (31.0 / 512.0)
         g.quad(SIMD3<Float>(-s / 2, y0, 0), SIMD3<Float>(s / 2, y0, 0), SIMD3<Float>(s / 2, y0 + s, 0), SIMD3<Float>(-s / 2, y0 + s, 0),
                SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
         if let m = g.mesh("cat") { card.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
         card.name = "homecat"
-        card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.42, 0.36, 0.12]).offsetBy(translation: [0, 0.18, 0])]))
+        card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.48, 0.42, 0.18]).offsetBy(translation: [0, 0.2, 0])]))
         card.components.set(InputTargetComponent())
         root.addChild(card)
         // 말풍선 판 (16cm)
@@ -271,6 +272,10 @@ final class HomeCat {
         }
         if let e = sg.entity("catShadow", sm) { shadow = e; root.addChild(e) }
         root.position = SIMD3<Float>(p.x, floorY, p.y)
+        // 그리는 순서: 포털(0번) 뒤에 그림자 → 몸 → 말풍선 (하늘·풍경 쪽에서 지워지지 않게)
+        if let sh = shadow { Sorting.apply(sh, 27) }
+        Sorting.apply(card, 28)
+        Sorting.apply(bubble, 29)
         root.setOpacity(0)
         pending = Self.all
         show("cat_fwalk0")
@@ -297,10 +302,13 @@ final class HomeCat {
     }
 
     private var shown = ""
+    /// 그림마다 몸 맨 아래가 기본(481)보다 더 아래로 그려진 장(누운 자세) — 그만큼 판을 올려 바닥에 딱 닿게 (픽셀)
+    private static let footPx: [String: Float] = ["cat_loaf0": 7, "cat_loaf1": 5, "cat_roll0": 3, "cat_roll1": 3, "cat_sleep0": 30, "cat_sleep1": 30]
     private func show(_ n: String) {
         guard n != shown else { return }
         shown = n
         card.model?.materials = [mat(n)]
+        card.position.y = 0.008 + (Self.footPx[n] ?? 0) * 0.55 / 512      // 방 바닥 판(6mm 위)보다 살짝 위
     }
 
     private func loop(_ frames: [String], fps: Float) -> String {
@@ -318,8 +326,8 @@ final class HomeCat {
 
     // MARK: 소리
     private func say(_ name: String, _ gain: Double = -3) {
-        meowCool = Float.random(in: 3...6)
-        Sfx.play(name, in: root, at: [0, 0.3, 0], gain: gain)
+        meowCool = Float.random(in: 7...14)          // 스스로 내는 소리 사이 (탭엔 늘 바로 대답)
+        Sfx.play(name, in: root, at: [0, 0.3, 0], gain: min(0, gain), rolloff: 0.6)      // 실제 고양이 녹음, 거리에 따라 덜 줄게
     }
     private func meow(_ gain: Double = -3) { say("cat_meow\(Int.random(in: 1...9))", gain) }
     private func mrrp(_ gain: Double = -4) { say(Bool.random() ? "cat_mrrp\(Int.random(in: 1...3))" : "cat_trill", gain) }
@@ -375,14 +383,16 @@ final class HomeCat {
     }
 
     /// 톡 침 (바라보고 탭)
+    /// 탭할 때마다 꼭 소리로 대답함 (멀리서도 또렷하게 — say는 거리에 따라 덜 줄어듦)
     func poke() {
-        guard act != .jumpUp && act != .jumpDown && act != .leave && act != .enter else { return }
+        guard act != .leave && act != .enter else { return }
+        if act == .jumpUp || act == .jumpDown { mrrp(0); emote("exclaim"); return }     // 뛰는 중엔 대답만
         taps = taps.filter { t - $0 < 6 } + [t]
         goal = nil
         // 너무 자꾸 치면 토라짐
         if taps.count >= 4 {
             taps.removeAll()
-            say("cat_hiss", -2)
+            say("cat_growl", -1)
             emote("anger")
             frontal = false
             start(.puff, 1.3)
@@ -390,19 +400,19 @@ final class HomeCat {
             return
         }
         if elev > 0.05 {
-            mrrp(-2)
+            mrrp(0)
             emote("question")
             start(.tilt, 1.8)
             return
         }
         switch act {
         case .sleep, .flop, .loaf, .knead:
-            say("cat_yawn", -3)
+            say("cat_yawn", -1)
             emote("question")
             start(.yawn, 1.6)
             return
         case .chase, .pounce:
-            chirp(-2)
+            chirp(0)
             emote("exclaim")
             return
         default: break
@@ -410,29 +420,29 @@ final class HomeCat {
         let me = SIMD2<Float>(lastHead.x, lastHead.z)
         switch Int.random(in: 0...6) {
         case 0:
-            chirp(-1); emote("heart"); start(.roll, 2.4)
+            chirp(0); emote("heart"); start(.roll, 2.4)
         case 1:
-            setPurr(true); emote("heart"); frontal = true; start(.love, 3.5)
+            mrrp(0); setPurr(true); emote("heart"); frontal = true; start(.love, 3.5)
         case 2:
-            mrrp(-2); emote("question"); start(.tilt, 1.8)
+            mrrp(0); emote("question"); start(.tilt, 1.8)
         case 3:
-            say("cat_mew", -2); emote("exclaim"); start(.hop, 0.55)
+            say("cat_mew", 0); emote("exclaim"); start(.hop, 0.55)
         case 4:
             let s = me + simd_normalize(pos - me) * 0.45
             if simd_distance(pos, me) > 0.7 {
-                say("cat_trill", -2); emote("heart"); go(s, then: .rub, 3)
+                say("cat_trill", 0); emote("heart"); go(s, then: .rub, 3)
             } else {
-                say("cat_trill", -2); emote("heart"); start(.rub, 3); setPurr(true)
+                say("cat_trill", 0); emote("heart"); start(.rub, 3); setPurr(true)
             }
         case 5:
-            say("cat_chatter", -4); emote("exclaim")
+            say("cat_chatter", -1); emote("exclaim")
             let d = simd_length(me - pos) > 0.01 ? simd_normalize(me - pos) : moveDir
             pounceFrom = pos
             pounceTo = pos + d * 0.35
             faceToward(pounceTo)
             start(.pounce, 1.6)
         default:
-            meow(-1); emote("note"); start(.meow, 1.4)
+            meow(0); emote("note"); start(.meow, 1.4)
         }
     }
 
@@ -583,7 +593,7 @@ final class HomeCat {
                 // 내가 걸으면 앞쪽 옆을 따라옴
                 followT -= dt
                 if followT <= 0, let s = viewSpot(c, near: 1.3) { followT = 0.6; go(s, then: .sit, 2.5) }
-            } else if gazeT > 1.2 && (act == .sit || act == .loaf || act == .onTop || act == .groom) && meowCool <= 0 {
+            } else if gazeT > 2.5 && (act == .sit || act == .loaf || act == .onTop || act == .groom) && meowCool <= 0 {
                 gazeT = 0
                 meow()
                 emote("note", 1.2)
@@ -593,7 +603,7 @@ final class HomeCat {
 
         // 혼잣말 (자는 중엔 가끔 그르릉만)
         if talkT <= 0 {
-            talkT = Float.random(in: 7...16)
+            talkT = Float.random(in: 20...45)          // 진짜 고양이처럼 가끔만 (예전 7~16초는 너무 잦았음)
             switch act {
             case .sleep, .flop: if Bool.random() { emote("zzz", 2) }
             case .chase, .pounce: say("cat_chatter", -6)
