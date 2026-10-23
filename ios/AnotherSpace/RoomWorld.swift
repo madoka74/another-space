@@ -227,6 +227,25 @@ final class RoomWorld {
         return l
     }
 
+    // MARK: 포털 그리는 순서
+    /// 이 방의 포털 면(천장·벽·창·문 자리 판·문 위 벽). 지금 방 것을 가장 나중에, 이웃 방, 먼 방 순서로 그림 — 'portalTier'.
+    /// v0.5.18에서 공간 뿌리의 OpacityComponent를 뺀 뒤로는 포털 면끼리 먼 것→가까운 것 순서가 보장되지 않아,
+    /// 다른 테마 방에 들어가 문 쪽을 돌아보면 지금 방의 문 자리 판(지금 방 풍경)보다 지나온 방의 벽·천장 포털이 나중에 그려져
+    /// 지나온 방 풍경이 그대로 보이곤 했음
+    private var portals: [ModelEntity] = []
+    private var portalTierNow = -1
+    private func addPortal(_ e: ModelEntity) {
+        portals.append(e)
+        e.components.set(ModelSortGroupComponent(group: sortGroup, order: -30))
+    }
+    /// 0: 먼 방, 1: 지금 방의 이웃 방, 2: 지금 방
+    func setPortalTier(_ k: Int) {
+        guard k != portalTierNow else { return }
+        portalTierNow = k
+        let order = Int32(-30 + 10 * min(2, max(0, k)))
+        for e in portals { e.components.set(ModelSortGroupComponent(group: sortGroup, order: order)) }
+    }
+
     private func layer(_ e: Entity, _ order: Int) {
         e.components.set(ModelSortGroupComponent(group: sortGroup, order: Int32(order)))
     }
@@ -298,7 +317,7 @@ final class RoomWorld {
         if let m = Self.flatMesh(rects, L, y: ceilY - 0.02, tile: 1) {
             let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
             p.components.set(PortalComponent(target: world))
-            layer(p, 0)
+            addPortal(p)
             local.addChild(p)
         }
         if style.open {
@@ -442,7 +461,7 @@ final class RoomWorld {
         if let m = portal.mesh("walls") {
             let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
             p.components.set(PortalComponent(target: world))
-            layer(p, 0)
+            addPortal(p)
             local.addChild(p)
         }
         if let e = fence.entity("fence", Tex.cutout(style.barrier, tint: Worlds.safe(tint, min: 0.45))) {
@@ -510,7 +529,7 @@ final class RoomWorld {
         if let m = win.mesh("window") {
             let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
             p.components.set(PortalComponent(target: world))
-            layer(p, 0)
+            addPortal(p)
             local.addChild(p)
             let frameCol: SIMD3<Float> = room.place == "cafe" ? SIMD3<Float>(0.09, 0.09, 0.1) : SIMD3<Float>(0.36, 0.26, 0.17)     // 카페: 검은 철제 창틀, 집: 나무 창틀
             if let f = frame.entity("frame", ink(frameCol * Worlds.safe(tint))) {
@@ -625,7 +644,7 @@ final class RoomWorld {
                         let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
                         e.components.set(PortalComponent(target: world))
                         place(e, 0)
-                        layer(e, 0)
+                        addPortal(e)
                         local.addChild(e)
                         list.append(e)
                     }
@@ -636,7 +655,7 @@ final class RoomWorld {
                             let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
                             e.components.set(PortalComponent(target: world))
                             place(e, 0)
-                            layer(e, 0)
+                            addPortal(e)
                             local.addChild(e)
                         }
                     }

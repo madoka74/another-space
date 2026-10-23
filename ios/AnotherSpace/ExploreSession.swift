@@ -185,6 +185,7 @@ final class ExploreSession {
     @ObservationIgnored private var hands: HandTrackingProvider?
     @ObservationIgnored private var grip: [Int: (Float, Float, Float, Float)] = [:]   // 문 → (손이 문짝에 가장 가까웠던 거리, 처음 닿은 때, 마지막으로 닿아 있던 때, 닿은 쪽)
     @ObservationIgnored private var coverPeak: [Int: Float] = [:]   // 닫혀 있는 동안 가장 많이 막혔던 비율
+    @ObservationIgnored private var leafLookAt: [Int: Float] = [:]   // 닫힌 실제 문짝을 마지막으로 바라본 때
     @ObservationIgnored private var leafSeen: Set<Int> = []         // 닫힌 실제 문이 보이던 문 (그 문이 열리면 바로 열린 공간으로)
     @ObservationIgnored private var solidDoors: Set<Int> = []       // 지금 막혀 보이는 문 (벽 또는 닫힌 실제 문)
     @ObservationIgnored private var leafDoor: Int?                  // 가장 가까이 보이는 닫힌 실제 문
@@ -499,7 +500,10 @@ final class ExploreSession {
     /// 비·눈·반딧불은 지금 방과 이웃 방만 (문턱을 넘을 때 이미 내리고 있게)
     private func refreshActive() {
         let on = (neighbors[current] ?? []).union([current])
-        for (id, w) in worlds { w.setActive(sky: on.contains(id), room: id == current) }
+        for (id, w) in worlds {
+            w.setActive(sky: on.contains(id), room: id == current)
+            w.setPortalTier(id == current ? 2 : (on.contains(id) ? 1 : 0))      // 포털 면은 지금 방 → 이웃 방 → 먼 방 순으로 나중에 그림
+        }
     }
 
     func stop() {
@@ -936,7 +940,8 @@ final class ExploreSession {
     private func placePeek(_ dt: Float) {
         // 닫힌 실제 문 앞에서 저절로 여는 현실 창은 문 쪽을 '바라볼 때'만 — 고개를 숙여 바닥·소파를 볼 땐 열지 않음
         // (예전엔 수평 방향만 따져서, 문 근처에서 아래를 보면 바닥 위에 현실 창이 떠 현실이 겹쳐 보였음)
-        let auto = leafDoor != nil && leafDoor != peekDismissed && fwd.y > -0.42
+        // (문 쪽을 바라보는지는 updateDoors에서 시선이 문짝에 닿는지로 판단 — 손잡이를 내려다봐도 유지, 바닥을 보면 꺼짐)
+        let auto = leafDoor != nil && leafDoor != peekDismissed
         let target: Float = (freePeek || auto) ? 1 : 0
         peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 6 : 16))
         let on = peekAmt > 0.01
@@ -1569,11 +1574,11 @@ final class ExploreSession {
             if leafOn {
                 urgent = true
                 anyLeaf = true
-                // 현실 원은 그 닫힌 문 쪽을 바라볼 때만 (양쪽에 문이 있어도 보는 쪽 문만, 다른 데를 보면 바로 사라짐)
-                let q = simd_clamp(p, ds.lo, ds.hi)
-                var to = q - p
-                if simd_length(to) < 0.25 { to = ds.mid - p }
-                let facing = look != .zero && simd_length(to) > 0.01 && simd_dot(simd_normalize(to), look) > 0.72
+                // 현실 원은 그 닫힌 문을 '바라볼 때'만 — 시선(3D)이 문짝 자리(양옆 35cm 여유, 바닥 5cm~2.3m)에 닿는지로 봄.
+                // 예전엔 문 가운데 쪽 수평 방향 44° 안 + 고개를 숙이면 끔 → 문 끝 손잡이(1m 높이)를 내려다보면 꺼졌다 켜졌다 반복.
+                // 문짝을 한 번 보면 0.7초 동안은 시선이 잠깐 벗어나도 유지(깜빡이지 않게). 바닥을 보면 시선이 문보다 바닥에 먼저 닿아 켜지지 않음
+                if gazeHitsDoor(ds, p, fs, headY: hs.y - L.floorY, L) { leafLookAt[i] = t }
+                let facing = t - (leafLookAt[i] ?? -100) < 0.7
                 if facing && (leaf == nil || dist < leaf!.1) { leaf = (i, dist) }
             }
             if closed || leafOn { solid.insert(i) }
@@ -1614,6 +1619,33 @@ final class ExploreSession {
         solidDoors = solid
         leafDoor = leaf?.0
         if !anyLeaf { peekDismissed = nil }        // 닫힌 문에서 벗어나면 더블탭으로 닫은 것도 풂
+    }
+
+    /// 시선(머리 → 앞, 3D)이 문 자리 상자(문 폭 양옆 35cm·앞뒤 15cm 여유)에 들어가는 곳의 높이가 바닥 5cm~2.3m 사이인지.
+    /// p: 머리 평면 좌표, fs: 앞 방향(저장 좌표), headY: 바닥에서 머리까지
+    private func gazeHitsDoor(_ ds: DoorSeg, _ p: SIMD2<Float>, _ fs: SIMD3<Float>, headY: Float, _ L: Layout) -> Bool {
+        guard simd_length(fs) > 0.01 else { return false }
+        let f = simd_normalize(fs)
+        let h = SIMD2<Float>(simd_dot(f.xz, L.ex), simd_dot(f.xz, L.ez))     // 평면 방향 (길이 = cos 숙인 각)
+        let mw: Float = 0.35, md: Float = 0.15
+        var lo = ds.lo, hi = ds.hi
+        if ds.alongU { lo += SIMD2<Float>(-md, -mw); hi += SIMD2<Float>(md, mw) } else { lo += SIMD2<Float>(-mw, -md); hi += SIMD2<Float>(mw, md) }
+        var t0: Float = 0, t1: Float = 6
+        for k in 0..<2 {
+            let o = k == 0 ? p.x : p.y, d = k == 0 ? h.x : h.y
+            let a = k == 0 ? lo.x : lo.y, b = k == 0 ? hi.x : hi.y
+            if abs(d) < 1e-5 {
+                if o < a || o > b { return false }
+            } else {
+                var ta = (a - o) / d, tb = (b - o) / d
+                if ta > tb { swap(&ta, &tb) }
+                t0 = max(t0, ta); t1 = min(t1, tb)
+                if t0 > t1 { return false }
+            }
+        }
+        // 상자 안을 지나는 동안 시선 높이가 문짝 높이에 걸치면 바라보는 것
+        let y0 = headY + f.y * t0, y1 = headY + f.y * t1
+        return max(y0, y1) > 0.05 && min(y0, y1) < 2.3
     }
 
     /// 문 모양 맞추기: prog nil = 닫혀서 열쇠가 떠 있음, 0~1 = 열쇠로 여는 중

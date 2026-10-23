@@ -876,7 +876,7 @@ def townhouse(night=False):
         pth = fetch_env.tex_path(fetch_env.TEXTURES['house_stucco'])
         if os.path.exists(pth):
             ph = np.asarray(Image.open(pth).convert('RGB').resize((W // 3, W // 3), Image.LANCZOS)).astype(np.float32)
-            ph = np.tile(ph, (H // (W // 3) + 1, 3, 1))[:H, :W]
+            ph = np.tile(ph, (H // (W // 3) + 1, 4, 1))[:H, :W]      # 170×3=510 < 512 → 네 번 이어 붙이고 자름 (v0.5.19 빌드 오류)
             ph = ph * (215.0 / max(1.0, float(_lum(ph).mean())))
             rgb = ph
     except Exception as e:
