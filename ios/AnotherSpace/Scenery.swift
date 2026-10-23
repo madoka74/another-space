@@ -28,6 +28,7 @@ final class Scenery {
     private var flyers: [Flyer] = []
     private struct Mover { let e: Entity; let a: SIMD3<Float>; let d: SIMD3<Float>; let len: Float; let speed: Float; var s: Float; let bob: Float }
     private var movers: [Mover] = []
+    private var plumes: [SmokePlume] = []
     private var boats: [(Entity, SIMD3<Float>, Float, Float, Float)] = []     // 배, 가운데, 각도, 반지름, 각속도
     private var blinkers: [(ModelEntity, Float)] = []                       // 깜빡이는 불빛, 주기
     private var flames: [(Entity, Float)] = []                              // 흔들리는 불빛 (벽난로)
@@ -81,7 +82,7 @@ final class Scenery {
             addLeaves(R: R, floorY: floorY, tint: tint, using: &g)
         case "valley":
             if !night && !wet { addBirds(2, R: R, floorY: floorY, color: [0.16, 0.12, 0.1], big: true, using: &g) }
-            addMist(R: R, floorY: floorY, using: &g)
+            // (멀리 피어오르던 큰 물안개 입자는 뺌 — 크고 둥근 덩어리로 보이고 앞뒤가 깨져 보였음)
         case "sea":
             if !night && !wet { addBirds(7, R: R, floorY: floorY, color: [0.95, 0.95, 0.95], using: &g) }
             addBoats(R: R, floorY: floorY, night: night, using: &g)
@@ -94,7 +95,7 @@ final class Scenery {
             addPlane(floorY: floorY, using: &g)
         case "cafe":
             addCafe(segs, floorY: floorY, ceilY: ceilY, night: night, using: &g)
-            addPassersby(segs, floorY: floorY, using: &g)
+            addCafeCars(segs, floorY: floorY, night: night || room.time == "dusk", using: &g)      // 창밖 사람 그림은 뺌 (어색했음)
         case "gallery":
             if !night && !wet { addBirds(3, R: R, floorY: floorY, color: [0.15, 0.15, 0.15], using: &g) }
             addDust(floorY: floorY)
@@ -584,7 +585,11 @@ final class Scenery {
             fire.mainEmitter.blendMode = look == .line ? .alpha : .additive
             fire.mainEmitter.opacityCurve = .quickFadeInOut
             emitter(fire, at: base + SIMD3<Float>(0, 0.15, 0), into: far)
-            emitter(smoke(size: 0.4, rate: 3, dark: 0.55), at: base + SIMD3<Float>(0, 1.0, 0), into: far)
+            // 연기는 그림 판 (입자는 뒤의 숲 띠가 나중에 그려지며 덮어 깨져 보였음)
+            let pl = SmokePlume(at: base + SIMD3<Float>(0, 0.7, 0), size: 0.3, height: 4, alpha: 0.3,
+                                color: night ? [0.5, 0.5, 0.52] : [0.82, 0.82, 0.84], look: look, sortGroup: sortGroup)
+            far.addChild(pl.root)
+            plumes.append(pl)
             // 둘레 돌
             var stones = Geo()
             var rg = SeededRNG(seed: 99)
@@ -910,6 +915,35 @@ final class Scenery {
         if let e = lines.entity("cafeLines", Ink.line) { near.addChild(e) }
     }
 
+    /// 카페 통창 밖 차도를 가끔 지나가는 차 (창이 있는 쪽 차도, 두 차선에 한 대씩 — 15초쯤마다 한 번)
+    private func addCafeCars<G: RandomNumberGenerator>(_ segs: [WallSeg], floorY: Float, night: Bool, using g: inout G) {
+        let wins = segs.filter { $0.window }
+        guard !wins.isEmpty else { return }
+        // 창이 가장 많이 향한 쪽 (바깥 방향)
+        let sides: [(SIMD3<Float>, SIMD3<Float>, Float)] = [(ez, ex, halfSize.y), (-ez, -ex, halfSize.y), (ex, -ez, halfSize.x), (-ex, ez, halfSize.x)]
+        var best = sides[0], bs: Float = -1e9
+        for sd in sides {
+            var sc: Float = 0
+            for w in wins {
+                let n = L.flat(w.n) - L.flat(.zero)
+                sc += -simd_dot(SIMD3<Float>(n.x, 0, n.y), sd.0) * simd_distance(w.a, w.b)
+            }
+            if sc > bs { bs = sc; best = sd }
+        }
+        let (nOut, along, hN) = best
+        let colors: [SIMD3<Float>] = [[0.72, 0.1, 0.1], [0.92, 0.92, 0.9], [0.12, 0.18, 0.34], [0.14, 0.14, 0.15], [0.62, 0.64, 0.66], [0.24, 0.34, 0.28]]
+        let len: Float = 170
+        for (lane, dirSign) in [(Float(4.9), Float(1)), (8.1, -1)] {
+            let dir = along * dirSign
+            let base = SIMD3<Float>(center.x, floorY - 0.16, center.z) + nOut * (hN + lane) - dir * (len / 2)
+            let kind = Int.random(in: 0...2, using: &g)
+            let car = makeCar(kind: kind, color: kind == 2 ? SIMD3<Float>(0.96, 0.78, 0.12) : colors[Int.random(in: 0..<colors.count, using: &g)], night: night)
+            car.orientation = simd_quatf(angle: atan2(dir.x, dir.z), axis: [0, 1, 0])
+            far.addChild(car)
+            movers.append(Mover(e: car, a: base, d: dir, len: len, speed: Float.random(in: 9...12, using: &g), s: Float.random(in: 0...len, using: &g), bob: 0))
+        }
+    }
+
     /// 카페 창밖 길을 지나가는 사람들 (창이 있는 벽 바깥 4~6m, 벽과 나란히 걸어감)
     private func addPassersby<G: RandomNumberGenerator>(_ segs: [WallSeg], floorY: Float, using g: inout G) {
         let wins = segs.filter { $0.window }
@@ -1112,6 +1146,7 @@ final class Scenery {
     // MARK: 매 프레임 (지금 방만)
     func tick(_ dt: Float) {
         t += dt
+        for p in plumes { p.tick(dt) }
         for f in flyers {
             f.ang += f.dir * f.speed / max(4, f.radius) * dt
             let p = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
@@ -1167,6 +1202,72 @@ final class Scenery {
             let k = 0.8 + 0.2 * sin(t * 9 + ph) * sin(t * 5.3 + ph * 2)
             e.scale = SIMD3<Float>(1 + 0.08 * sin(t * 7 + ph), k, 1)
             e.orientation = simd_quatf(angle: 0.08 * sin(t * 3.1 + ph), axis: [0, 0, 1])
+        }
+    }
+}
+
+/// 굴뚝·모닥불 연기: 입자 대신 그림 판(늘 나를 보는 판) 여러 장을 직접 띄워 올림.
+/// 입자는 그리는 순서를 정할 수 없어 더 먼 산·숲 띠가 나중에 그려지며 가까운 연기를 덮어 깨져 보였음 →
+/// 그림 판은 다른 풍경과 같은 순서 묶음(order 30, 맨 나중)에 넣고 깊이는 쓰지 않아, 앞의 것엔 가리고 뒤의 것 위엔 보임
+@MainActor
+final class SmokePlume {
+    let root = Entity()
+    private var puffs: [(e: ModelEntity, age: Float, life: Float, side: SIMD3<Float>)] = []
+    private let rise: Float, grow: Float, size0: Float, alpha: Float
+    private let wind: SIMD3<Float>
+
+    /// at: 연기가 나오는 곳, size: 처음 덩이 크기(m), height: 오르는 높이(m), alpha: 가장 짙을 때 불투명도
+    init(at p: SIMD3<Float>, size: Float, height: Float, alpha: Float, color: SIMD3<Float>, look: LookMode,
+         sortGroup: ModelSortGroup, wind: SIMD3<Float> = [0.12, 0, 0.05], count: Int = 10) {
+        root.position = p
+        size0 = size
+        let life: Float = 7
+        rise = height / life
+        grow = size * 3.2 / life
+        self.alpha = alpha
+        self.wind = wind
+        var m = UnlitMaterial(color: look == .line ? UIColor(white: 0.45, alpha: 1) : Tex.color(color))
+        if look != .line, let t = Tex.get("smoke_wisp") {
+            var tp = MaterialParameters.Texture(t); tp.sampler = Tex.clamp
+            m.color = .init(tint: Tex.color(color), texture: tp)
+        }
+        if let mk = Tex.get("smoke_wisp_a", raw: true) {
+            var mp = MaterialParameters.Texture(mk); mp.sampler = Tex.clamp
+            m.blending = .transparent(opacity: .init(scale: 1, texture: mp))
+        } else {
+            m.blending = .transparent(opacity: .init(floatLiteral: 0.3))
+        }
+        m.writesDepth = false
+        var q = Geo()
+        q.quad(SIMD3<Float>(-0.5, -0.5, 0), SIMD3<Float>(0.5, -0.5, 0), SIMD3<Float>(0.5, 0.5, 0), SIMD3<Float>(-0.5, 0.5, 0),
+               SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+        guard let mesh = q.mesh("smokeWisp") else { return }
+        for i in 0..<count {
+            let e = ModelEntity(mesh: mesh, materials: [m])
+            e.components.set(BillboardComponent())
+            e.components.set(ModelSortGroupComponent(group: sortGroup, order: 30))
+            e.setOpacity(0)
+            root.addChild(e)
+            let side = SIMD3<Float>(Float.random(in: -1...1), 0, Float.random(in: -1...1)) * size * 0.4
+            puffs.append((e: e, age: life * Float(i) / Float(count), life: life * Float.random(in: 0.85...1.15), side: side))
+        }
+    }
+
+    func tick(_ dt: Float) {
+        for i in puffs.indices {
+            var p = puffs[i]
+            p.age += dt
+            if p.age > p.life {
+                p.age -= p.life
+                p.side = SIMD3<Float>(Float.random(in: -1...1), 0, Float.random(in: -1...1)) * size0 * 0.4
+            }
+            let k = p.age / p.life
+            // 오르며 바람에 기울고 점점 퍼지며 옅어짐 (처음 잠깐 짙어짐)
+            p.e.position = SIMD3<Float>(0, rise * p.age, 0) + wind * pow(p.age, 1.4) + p.side * k
+            p.e.scale = SIMD3<Float>(repeating: size0 + grow * p.age)
+            let fade = min(1, k / 0.12) * pow(1 - k, 1.3)
+            p.e.setOpacity(alpha * fade)
+            puffs[i] = p
         }
     }
 }

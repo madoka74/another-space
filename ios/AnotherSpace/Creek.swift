@@ -220,11 +220,13 @@ final class ValleyCreek {
         var far: (Int, Float)? = nil
         for k in comp where flowD[k].isFinite {
             let w = L.flat(cellP(k))
-            if L.at(x: w.x, z: w.y).wall < 0.2, !L.doors.contains(where: { $0.zone(cellP(k), margin: 0.5) }),
-               far == nil || flowD[k] > far!.1 { far = (k, flowD[k]) }
+            guard L.at(x: w.x, z: w.y).wall < 0.2, !L.doors.contains(where: { $0.zone(cellP(k), margin: 0.5) }) else { continue }
+            // 들어온 곳에서 멀수록 + 벽 바깥이 트여 있을수록(다른 방이 없을수록) 좋은 나가는 곳
+            let sc = flowD[k] + outsideRoom(cellP(k)) * 0.25
+            if far == nil || sc > far!.1 { far = (k, sc) }
         }
         exitPt = nil
-        if let f = far, f.1 > 1.2 {
+        if let f = far, flowD[f.0] > 1.2 {
             let p = cellP(f.0)
             var best: (SIMD2<Float>, SIMD2<Float>, Float)? = nil
             for s in L.walls where s.room == roomId && !s.inner {
@@ -305,6 +307,26 @@ final class ValleyCreek {
         var out: [SIMD2<Float>] = []
         for (i, c) in cells.enumerated() where i % 3 == 2 || i == cells.count - 1 { out.append(L.flat(cellP(c))) }
         return out
+    }
+
+    /// 그 칸(평면 좌표, 벽 가까이)에서 가장 가까운 바깥벽 너머로 몇 m까지 다른 방 없이 트여 있는지 (최대 12m)
+    private func outsideRoom(_ p: SIMD2<Float>) -> Float {
+        var best: (SIMD2<Float>, Float)? = nil
+        for s in L.walls where s.room == roomId && !s.inner {
+            let ab = s.b - s.a
+            let len = simd_length(ab)
+            guard len > 0.3 else { continue }
+            let k = max(0, min(len, simd_dot(p - s.a, ab / len)))
+            let d = simd_distance(s.a + ab / len * k, p)
+            if best == nil || d < best!.1 { best = (s.n, d) }
+        }
+        guard let n = best?.0 else { return 0 }
+        var d: Float = 0.5
+        while d < 12 {
+            if L.walkable(p - n * d) { return d }
+            d += 0.5
+        }
+        return 12
     }
 
     /// 새로 알게 된 가구(blocked)가 물에 걸치면 그 자리를 비우고 다시 그림
@@ -447,10 +469,14 @@ final class ValleyCreek {
             let a = L.flat(x.0 - x.1 * 0.03)
             let base = L.flat(x.0 - x.1 * 4) - L.flat(x.0)
             let b0 = atan2(base.y, base.x)
-            // 바깥으로 곧게, 막히면(다른 방) 조금씩 비스듬히
-            for da: Float in [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9] {
-                let dir = SIMD2<Float>(cos(b0 + da), sin(b0 + da))
-                if branch(from: a, to: a + dir * 22, w0: 0.9, w1: 1.7, flow: 0.13, endRocks: true, &g) { break }
+            // 바깥으로 곧게, 막히면(다른 방) 조금씩 비스듬히 — 그래도 막히면 짧게라도 꼭 흘러 나가 바위 틈으로 사라지게
+            // (예전엔 22m 물길만 찾다 못 찾으면 나가는 물길이 아예 없어, 방 안 물이 벽에서 끊겨 보였음)
+            var done = false
+            for len: Float in [22, 12, 6, 2.5] where !done {
+                for da: Float in [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9] where !done {
+                    let dir = SIMD2<Float>(cos(b0 + da), sin(b0 + da))
+                    done = branch(from: a, to: a + dir * len, w0: 0.9, w1: len > 8 ? 1.7 : 1.1, flow: 0.13, endRocks: true, &g)
+                }
             }
         }
     }
@@ -715,7 +741,7 @@ final class ValleyCreek {
             let a = ripples[i].1 / 1.4
             if a >= 1 { ripples[i].0.removeFromParent(); ripples.remove(at: i); continue }
             ripples[i].0.scale = SIMD3<Float>(repeating: 0.12 + a * 0.9)
-            ripples[i].0.components.set(OpacityComponent(opacity: (1 - a) * (1 - a)))
+            ripples[i].0.setOpacity((1 - a) * (1 - a))
         }
         var g = SystemRandomNumberGenerator()
         // 손이 물 가까이(물 위 50cm 안) 오거나 발이 다가오면 둘레 물고기가 놀라 흩어짐

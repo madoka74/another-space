@@ -107,7 +107,7 @@ enum Worlds {
                               groundFar: [0.13, 0.20, 0.10], skylight: false)
         case "valley":
             return WorldStyle(floor: "pebble", floorTile: 1.4, wall: "", wallTile: 1, prop: "rock", propTile: 0.9, propTint: w,
-                              open: true, barrier: "barrier_valley", barrierH: 0.95, ground: "pebble", groundTile: 1.8,
+                              open: true, barrier: "barrier_valley", barrierH: 1.4, ground: "pebble", groundTile: 1.8,
                               groundFar: [0.40, 0.37, 0.32], skylight: false)
         case "sea":
             return WorldStyle(floor: "sand", floorTile: 2.0, wall: "", wallTile: 1, prop: "driftwood", propTile: 0.9, propTint: w,

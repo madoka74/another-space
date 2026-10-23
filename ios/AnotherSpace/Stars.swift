@@ -379,7 +379,7 @@ final class SkyStars {
             if g.picked { g.reveal = min(1, g.reveal + dt / 0.8) } else if g.reveal > 0 { g.reveal = max(0, g.reveal - dt * 1.5) }
             if let l = g.lines, l.isEnabled != g.picked { l.isEnabled = g.picked }
             if let lb = g.label {
-                lb.components.set(OpacityComponent(opacity: g.reveal * cl))
+                lb.setOpacity(g.reveal * cl)
                 if !g.picked && g.reveal <= 0 { lb.removeFromParent(); g.label = nil }
             }
         }
@@ -402,7 +402,8 @@ final class SkyStars {
 
     /// 달: 고도 30도쯤(방마다 다른 방향), 보이는 지름 2.2도 + 둘레 은은한 달무리
     private func addMoon(_ room: RoomRec) {
-        var rg = SeededRNG(seed: UInt64(room.id * 97 + 13))
+        // 테마·날씨·시간을 바꿔 세계를 새로 그릴 때마다 달 모양·자리가 새로 정해짐 (예전엔 방 번호로만 정해 늘 같은 모양이었음)
+        var rg = SystemRandomNumberGenerator()
         let az = Float.random(in: 0...(2 * .pi), using: &rg)
         let alt: Float = Float.random(in: 0.42...0.62, using: &rg)
         let v = simd_normalize(SIMD3<Float>(cos(alt) * cos(az), sin(alt), cos(alt) * sin(az)))
@@ -478,7 +479,7 @@ final class SkyStars {
         flipE.orientation = simd_quatf(angle: .pi, axis: [0, 1, 0])          // 글자 앞면이 나를 보게
         flipE.addChild(te)
         holder.addChild(flipE)
-        holder.components.set(OpacityComponent(opacity: 0))
+        holder.setOpacity(0)
         root.addChild(holder)
         return holder
     }

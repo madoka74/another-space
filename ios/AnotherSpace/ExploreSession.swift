@@ -232,6 +232,7 @@ final class ExploreSession {
     @ObservationIgnored private var hudPinned = false
     @ObservationIgnored private var tip: String?                     // 잠깐 알려 줄 사용법 (처음 한 번)
     @ObservationIgnored private var tipUntil: Float = 0
+    @ObservationIgnored private var seenRooms: Set<Int> = []
     @ObservationIgnored private var tipsShown = Set<String>()              // 안내판·테마 판을 옮겨 두었으면 그 자리에 둠 (닫힐 때까지)
     @ObservationIgnored private var toyTrail: [(Float, SIMD3<Float>)] = []   // 장난감을 끄는 동안의 자리 (던지는 빠르기)
     @ObservationIgnored private var docentShow: Float = 0
@@ -344,7 +345,7 @@ final class ExploreSession {
         if let r = ring.entity("peekRing", RoomWorld.gold(rough: 0.25, glow: 1.4)) { peek.addChild(r) }
         peek.isEnabled = false
         root.addChild(peek)
-        spaceRoot.components.set(OpacityComponent(opacity: 0))
+        spaceRoot.setOpacity(0)
 
         // 탭 받는 상자: 머리를 둘러싼 상자의 여섯 면(얇은 판) — 어디를 보고 집어도 탭이 들어옴 (열쇠·안내판이 더 가까우면 그쪽이 먼저)
         let wallT: Float = 0.05, half: Float = 4
@@ -1057,7 +1058,7 @@ final class ExploreSession {
         }
         if abs(fade - appliedFade) > 0.01 || (target == 1 && fade > 0.99 && appliedFade < 1) {
             let v = fade > 0.99 ? 1 : fade
-            spaceRoot.components.set(OpacityComponent(opacity: v))
+            spaceRoot.setOpacity(v)
             appliedFade = v
         }
         if fit != nil {
@@ -1267,7 +1268,6 @@ final class ExploreSession {
                               room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },      // 장난감은 지금 방 안에서만 (옆방 벽을 뚫고 나가지 않게)
                               ceil: L.ceil[min(255, max(1, current))])
         c.tick(dt, ctx)
-        if c.hasToy { showTip("ball", "털실 공을 엄지·검지로 집어 흔들거나 던져 보세요. 톡 치면 굴러가요.") }
         if c.done { cat = nil }
     }
 
@@ -1310,7 +1310,6 @@ final class ExploreSession {
                               room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },      // 장난감은 지금 방 안에서만 (옆방 벽을 뚫고 나가지 않게)
                               ceil: L.ceil[min(255, max(1, current))])
         g.tick(dt, ctx)
-        if g.hasToy { showTip("stick", "막대를 엄지·검지로 집어 던져 보세요. 설이가 물어 와요. 톡 치면 가져다줘요.") }
         if g.done { dog = nil }
     }
 
@@ -1436,7 +1435,9 @@ final class ExploreSession {
         if starPick != nil { closeStars() }
         if current != r { fire?.die(); seated = false; sitT = 0 }
         current = r
-        if t > themeQuiet { hudUntil = max(hudUntil, t + 4) }      // 방이 바뀌면 알림판으로 잠깐 알려 줌
+        // 처음 들어가는 방만 알림판으로 잠깐 알려 줌 (한 번 본 방은 다시 띄우지 않음)
+        if t > themeQuiet && !seenRooms.contains(r) { hudUntil = max(hudUntil, t + 4) }
+        seenRooms.insert(r)
         doorOpen.removeAll()
         guard let d = data, let L = layout, let rm = d.rec.room(r) else { return }
         if worlds[r] == nil {                               // 아직 못 만든 방이면 바로 만듦 (그림도 걺)
@@ -1606,7 +1607,7 @@ final class ExploreSession {
                 let o: Float = rid == showRoom ? sh : 0
                 if v.root.isEnabled != (o > 0.02) { v.root.isEnabled = o > 0.02 }
                 guard v.root.isEnabled else { continue }
-                v.root.components.set(OpacityComponent(opacity: o))
+                v.root.setOpacity(o)
                 if glowMat == nil { glowMat = RoomWorld.gold(rough: 0.22, glow: 0.2 + 2.2 * breath) }
                 if let gm = glowMat { for e in v.parts { e.model?.materials = [gm] } }
                 Self.pose(v, prog: rid == showRoom ? prog : nil, t: t)
@@ -1626,8 +1627,8 @@ final class ExploreSession {
             v.left.scale = [1, 1, 1]; v.right.scale = [1, 1, 1]
             v.keyRoot.position = [0, DoorView.keyY, DoorView.keyZ]
             v.keyRoot.orientation = simd_quatf(angle: 0, axis: [0, 1, 0])
-            v.keyRoot.components.set(OpacityComponent(opacity: 1))
-            v.lock.components.set(OpacityComponent(opacity: 1))
+            v.keyRoot.setOpacity(1)
+            v.lock.setOpacity(1)
             v.key.position = [0, 0.012 * sin(t * 1.3), 0]
             v.key.orientation = simd_quatf(angle: 0.3 * sin(t * 0.7), axis: [0, 1, 0])
             return
@@ -1639,8 +1640,8 @@ final class ExploreSession {
         v.keyRoot.position = [0, DoorView.keyY, DoorView.keyZ + (insertZ - DoorView.keyZ) * a]
         v.keyRoot.orientation = simd_quatf(angle: .pi / 2 * b, axis: [0, 0, 1]) * simd_quatf(angle: .pi / 2 * a, axis: [0, 1, 0])
         let fade = 1 - c
-        v.keyRoot.components.set(OpacityComponent(opacity: fade))
-        v.lock.components.set(OpacityComponent(opacity: fade))
+        v.keyRoot.setOpacity(fade)
+        v.lock.setOpacity(fade)
         let k = max(0.001, 1 - c)
         v.left.scale = [k, 1, 1]; v.right.scale = [k, 1, 1]
     }
@@ -1951,7 +1952,7 @@ final class ExploreSession {
         guard let card = docentCard else { return }
         let want: Float = docent != nil ? 1 : 0
         docentShow += (want - docentShow) * min(1, dt * 6)
-        card.components.set(OpacityComponent(opacity: docentShow))
+        card.setOpacity(docentShow)
         card.isEnabled = docentShow > 0.02
         for (_, w) in worlds { w.tickImmerse(dt) }
         decorT += dt
@@ -2058,7 +2059,7 @@ final class ExploreSession {
         }
         hudShow += (want - hudShow) * min(1, dt * 6)
         if want == 0 && hudShow < 0.02 { hudShow = 0 }
-        hud.components.set(OpacityComponent(opacity: hudShow))
+        hud.setOpacity(hudShow)
         hud.isEnabled = hudShow > 0.02
         if !hud.isEnabled && hudMenu && want == 0 && !themeOpen { hudMenu = false }
         if themeOpen { hud.isEnabled = false }

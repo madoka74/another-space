@@ -73,11 +73,10 @@ struct Decor {
             d.bands = [Band(tex: "far_city", night: "far_city_night", radius: 260, height: 160, base: -30, aspect: 2, layer: 1)]
             d.city = true
         case "cafe":
-            // 창밖: 길 건너 가게들이 늘어선 거리 (1층은 차양 달린 가게), 그 뒤로 먼 도시
-            d.bands = [Band(tex: "street_shops", night: "street_shops_night", radius: 9, relative: true, height: 9, base: -0.3, aspect: 4, layer: 2),
-                       Band(tex: "far_city", night: "far_city_night", radius: 70, relative: true, height: 90, base: -2, aspect: 2, layer: 1)]
-            // 통창 밖 길가: 가로수 (가게 거리보다 앞, 보도 위)
-            d.trees = [Trees(tex: "tree_broad", count: 6, h: 4.5...7, d: 2.6...4.2, aspect: 0.55)]
+            // 창밖: 보도·차도·맞은편 입체 거리 건물(1층 가게)은 addCafeStreet, 그 뒤로 먼 도시 띠
+            d.bands = [Band(tex: "far_city", night: "far_city_night", radius: 70, relative: true, height: 90, base: -2, aspect: 2, layer: 1)]
+            // 보도 위 가로수
+            d.trees = [Trees(tex: "tree_broad", count: 6, h: 4.5...7, d: 1.0...2.2, aspect: 0.55)]
         case "gallery":
             d.bands = [Band(tex: "pano_hills", radius: 270, height: 68, base: -7, aspect: 0, layer: 0)]
             d.trees = [Trees(tex: "tree_broad", count: 6, h: 7...11, d: 4...14)]
@@ -219,7 +218,8 @@ final class RoomWorld {
         if dc.paintings { for i in 0..<6 { l.append(("art_\(i)", "tex")) } }
         if r.place == "valley" { l += [("river", "tex"), ("river_hi", "tex"), ("fall", "tex"), ("pebble", "tex"), ("rock", "tex"), ("cliff", "tex"), ("ripple", "tex"), ("grass", "tex"), ("pine_branch", "tex"), ("bark", "tex")] }
         if r.place == "valley" { for i in 0..<6 { l.append(("fish_\(i)", "tex")) } }
-        if r.place == "cafe" { l += [("speaker_metal", "tex"), ("speaker_grille", "tex")] }
+        if r.place == "cafe" { l += [("speaker_metal", "tex"), ("speaker_grille", "tex"), ("concrete", "tex"), ("plaster", "tex"), ("canvas", "tex"),
+                                     (night ? "townhouse_night" : "townhouse", "tex"), (night ? "shopfront_night" : "shopfront", "tex")] }
         if r.place == "village" { l += [("plaster", "tex"), ("timber", "tex"), ("brick", "tex"), ("roof_tile", "tex")] }
         if r.place == "sea" { l += [("jelly_bell", "tex"), ("jelly_tent", "tex"), ("jelly_arm", "tex"), ("glow", "tex"), ("spark_dot", "tex")] }
         if r.place == "city" { for i in 0..<16 { l += [(String(format: "neon_%02da", i), "tex"), (String(format: "neon_%02db", i), "tex")] } }
@@ -423,7 +423,7 @@ final class RoomWorld {
                 if ok, t0 == nil { t0 = t }
                 if (!ok || t1 >= len + ext - 1e-4), let st = t0 {
                     let en = ok ? t1 : t
-                    if en - st > 0.04 {
+                    if en - st > 0.45 {                     // 짧은 토막(문 옆·모서리의 좁은 틈)은 세우지 않음 — 얇은 판이 덩그러니 서 있어 보였음
                         let fa = s.a + pd * st - s.n * off, fb = s.a + pd * en - s.n * off
                         let wa = L.flat(fa), wb = L.flat(fb)
                         fence.wall(SIMD3<Float>(wa.x, floorY, wa.y), SIMD3<Float>(wb.x, floorY, wb.y), y0: -0.05, y1: style.barrierH,
@@ -736,7 +736,7 @@ final class RoomWorld {
                 let (key, parts) = Self.makeKey()
                 keyRoot.addChild(key)
                 ui.addChild(keyRoot)
-                ui.components.set(OpacityComponent(opacity: 0))
+                ui.setOpacity(0)
                 ui.isEnabled = false
                 local.addChild(ui)
                 doorView[i] = DoorView(root: ui, left: left, right: right, lock: lock, keyRoot: keyRoot, key: key, parts: parts, hl: hl)
@@ -1022,14 +1022,15 @@ final class RoomWorld {
 
     private func addGround(_ dc: Decor, R: Float, floorY: Float) {
         var far = Geo()
-        let farY: Float = dc.city ? floorY - 30 : floorY - 0.08
+        let farY: Float = dc.city ? floorY - 30 : floorY - 0.4         // 가까운 땅(무늬)과 충분히 떨어뜨려 멀리서 두 땅이 번갈아 비치지 않게
         far.disc(center: SIMD3<Float>(center.x, farY, center.z), radius: 600, tile: 50, segments: 32)
         let farCol = dc.city ? SIMD3<Float>(0.13, 0.13, 0.15) : style.groundFar
         if !dc.sea, let e = far.entity("farGround", UnlitMaterial(color: Tex.color(farCol * tint))) { world.addChild(e) }
         // 가까운 땅 (무늬): 도시는 옥상 끝까지만, 바다는 모래사장만
         let nearR: Float = dc.city ? R + 3 : (dc.sea ? R + 9 : 80)
         var near = Geo()
-        near.disc(center: SIMD3<Float>(center.x, floorY - 0.03, center.z), radius: nearR, tile: style.groundTile)
+        // 카페: 차도(바닥 16cm 아래)가 땅에 묻히지 않게 땅을 더 낮게
+        near.disc(center: SIMD3<Float>(center.x, floorY - (room.place == "cafe" ? 0.3 : 0.03), center.z), radius: nearR, tile: style.groundTile)
         if let e = near.entity("ground", Tex.unlit(style.ground, tint: Worlds.safe(tint, min: 0.3))) { world.addChild(e) }
         if lineMode && !dc.sea && !dc.city {
             var hl = Geo()
@@ -1253,29 +1254,41 @@ final class RoomWorld {
     private var winOnMat: RealityKit.Material?
     private var winOffMat: RealityKit.Material?
     private var villageT: Float = 0
+    private var plumes: [SmokePlume] = []                         // 굴뚝·모닥불 연기 (그림 판)
 
-    /// 시골: 들 건너 20~45m에 띄엄띄엄 선 입체 시골집 (집마다 크기·층수·지붕 색·벽 재질·방향이 다름).
-    /// 박공지붕·처마·굴뚝·문·창. 해질녘·밤·새벽엔 창마다 불이 켜졌다 꺼졌다 하고, 몇 집 굴뚝에선 가는 연기가 오름
+    /// 시골: 들 건너 34~60m에 띄엄띄엄 선 입체 시골집 네 채 (서로·나무와 넉넉히 떨어져, 집마다 크기·층수·벽·지붕 색·방향이 다름).
+    /// 디테일: 돌 기단, 벽 모서리 띠, 처마 끝막이판·박공 널·용마루, 창마다 창틀·십자 살·창턱·덧창, 문틀·문 위 차양·돌계단·문 옆 등,
+    /// 벽돌 굴뚝과 굴뚝 덮개. 면마다 해 방향에 따라 밝기가 달라 입체로 보임.
+    /// 해질녘·밤·새벽엔 창 불빛이 가끔 켜졌다 꺼지고, 문 옆 등이 켜지며, 몇 집 굴뚝에선 가는 연기가 오름 (연기는 그림 판 — SmokePlume)
     private func addVillageHouses<G: RandomNumberGenerator>(_ rec: SpaceRec, _ L: Layout, floorY: Float, using g: inout G) {
         let wallKinds: [(String, SIMD3<Float>, Float)] = [("plaster", [0.96, 0.93, 0.86], 2.0), ("plaster", [0.93, 0.86, 0.7], 2.0),
-                                                          ("timber", [0.9, 0.82, 0.74], 1.8), ("brick", [0.82, 0.74, 0.7], 1.6), ("plaster", [0.82, 0.88, 0.9], 2.0)]
+                                                          ("timber", [0.9, 0.82, 0.74], 1.8), ("brick", [0.82, 0.74, 0.7], 1.6), ("plaster", [0.84, 0.88, 0.9], 2.0)]
         let roofCols: [SIMD3<Float>] = [[0.62, 0.26, 0.18], [0.34, 0.38, 0.44], [0.4, 0.28, 0.2], [0.3, 0.4, 0.3], [0.5, 0.2, 0.16]]
-        var walls = [Geo](repeating: Geo(), count: wallKinds.count), roofs = [Geo](repeating: Geo(), count: roofCols.count)
-        var trim = Geo(), chim = Geo(), lines = Geo()
+        let shutterCols: [SIMD3<Float>] = [[0.24, 0.36, 0.28], [0.22, 0.3, 0.42], [0.42, 0.26, 0.18], [0.6, 0.55, 0.45]]
+        let sun = Worlds.sunDir(room.time)
+        func shadeK(_ n: SIMD3<Float>) -> Int { let l = simd_dot(n, sun); return l > 0.25 ? 0 : (l > -0.25 ? 1 : 2) }
+        // 재질 묶음: 벽(종류×그늘), 지붕(색×그늘), 나무 장식(흰 판·짙은 나무), 덧창(색), 기단, 굴뚝
+        var walls = [[Geo]](repeating: [Geo(), Geo(), Geo()], count: wallKinds.count)
+        var roofs = [[Geo]](repeating: [Geo(), Geo(), Geo()], count: roofCols.count)
+        var whiteTrim = Geo(), darkWood = Geo(), plinth = Geo(), chim = Geo(), lines = Geo(), lampGlass = Geo()
+        var shutters = [Geo](repeating: Geo(), count: shutterCols.count)
         var winQuads: [Geo] = []
+        var lamps: [SIMD3<Float>] = []
         var smokeAt: [SIMD3<Float>] = []
         var houses: [(SIMD3<Float>, Float)] = []
         let lit = dark || room.time == "dusk"
+        let up = SIMD3<Float>(0, 1, 0)
         var g2 = g
-        let n = 8
+        let n = 4
+        let a0 = Float.random(in: 0...1, using: &g2)
         for i in 0..<n {
-            for _ in 0..<8 {
-                let W = Float.random(in: 5...9, using: &g2), D = Float.random(in: 4...6.5, using: &g2)
-                let floors = Float.random(in: 0...1, using: &g2) < 0.35 ? 2 : 1
-                let Hw: Float = floors == 2 ? Float.random(in: 5...5.6, using: &g2) : Float.random(in: 2.7...3.2, using: &g2)
-                let dd = Float.random(in: 20...45, using: &g2)
-                let p = around((Float(i) + Float.random(in: 0.1...0.9, using: &g2)) / Float(n), dd, rec, floorY - 0.05)
-                let r = simd_length(SIMD2<Float>(W, D)) / 2 + 0.6
+            for _ in 0..<12 {
+                let W = Float.random(in: 6...9.5, using: &g2), D = Float.random(in: 5...7, using: &g2)
+                let floors = Float.random(in: 0...1, using: &g2) < 0.4 ? 2 : 1
+                let Hw: Float = floors == 2 ? Float.random(in: 5.2...5.8, using: &g2) : Float.random(in: 2.9...3.3, using: &g2)
+                let dd = Float.random(in: 34...60, using: &g2)
+                let p = around(a0 + (Float(i) + Float.random(in: 0.15...0.85, using: &g2)) / Float(n), dd, rec, floorY - 0.05)
+                let r = simd_length(SIMD2<Float>(W, D)) / 2 + 1.0
                 var ok = true
                 for k in 0..<12 where ok {
                     let a = Float(k) / 12 * 2 * .pi
@@ -1285,34 +1298,42 @@ final class RoomWorld {
                     }
                 }
                 if !ok { continue }
-                if treeSpots.contains(where: { simd_distance($0.0.xz, p.xz) < r + $0.1 / 2 + 0.5 }) { continue }
-                if houses.contains(where: { simd_distance($0.0.xz, p.xz) < r + $0.1 + 3 }) { continue }
-                if riverGap(p) < r + 1 { continue }
+                if treeSpots.contains(where: { simd_distance($0.0.xz, p.xz) < r + $0.1 / 2 + 1.5 }) { continue }
+                if houses.contains(where: { simd_distance($0.0.xz, p.xz) < r + $0.1 + 12 }) { continue }
+                if riverGap(p) < r + 2 { continue }
                 houses.append((p, r))
-                // 앞(문 쪽)이 대략 방을 봄
                 let to = center - p
-                let yaw = atan2(to.x, to.z) + Float.random(in: -0.5...0.5, using: &g2)
+                let yaw = atan2(to.x, to.z) + Float.random(in: -0.45...0.45, using: &g2)
                 let fwd = SIMD3<Float>(sin(yaw), 0, cos(yaw)), side = SIMD3<Float>(cos(yaw), 0, -sin(yaw))
                 let hw = W / 2, hd = D / 2
                 let c = [p - side * hw - fwd * hd, p + side * hw - fwd * hd, p + side * hw + fwd * hd, p - side * hw + fwd * hd]   // 뒤왼·뒤오·앞오·앞왼
+                let normals = [-fwd, side, fwd, -side]                                                                      // c[k]→c[k+1] 면의 바깥쪽
                 let wk = Int(g2.next() % UInt64(wallKinds.count)), rk = Int(g2.next() % UInt64(roofCols.count))
+                let sk = Int(g2.next() % UInt64(shutterCols.count))
                 let tile = wallKinds[wk].2
-                let up = SIMD3<Float>(0, 1, 0)
-                // 벽 네 면 (앞뒤는 W, 옆은 D) + 옆면 박공 삼각형
-                let pitch = Float.random(in: 0.5...0.75, using: &g2)               // 지붕 기울기 (높이/반폭)
+                let pitch = Float.random(in: 0.55...0.8, using: &g2)
                 let rh = hd * pitch
+                let base: Float = 0.45                                          // 돌 기단 높이
+                // 기단 (조금 내밀어)
+                plinth.box(base: p, w: W + 0.12, d: D + 0.12, h: base, yaw: yaw, tile: 1.2)
+                // 벽 네 면 (기단 위) + 옆면 박공 삼각형 — 면마다 해 방향 그늘
                 for k in 0..<4 {
                     let a = c[k], b = c[(k + 1) % 4]
                     let L2 = simd_distance(a, b)
-                    walls[wk].wall(a, b, y0: 0, y1: Hw, u0: 0, u1: L2 / tile, v0: 0, v1: Hw / tile)
+                    walls[wk][shadeK(normals[k])].wall(a, b, y0: base, y1: Hw, u0: 0, u1: L2 / tile, v0: base / tile, v1: Hw / tile)
+                    // 모서리 띠 (회벽 집만, 흰 나무 판)
+                    if wallKinds[wk].0 == "plaster" {
+                        let d = simd_normalize(b - a)
+                        whiteTrim.wall(a + normals[k] * 0.02, a + d * 0.16 + normals[k] * 0.02, y0: base, y1: Hw, u0: 0, u1: 1)
+                        whiteTrim.wall(b - d * 0.16 + normals[k] * 0.02, b + normals[k] * 0.02, y0: base, y1: Hw, u0: 0, u1: 1)
+                    }
                 }
-                // 박공: 옆면(c0→c3 왼쪽, c1→c2 오른쪽) 위 삼각형 — 용마루는 앞뒤 가운데, 집 폭(W) 방향으로 뻗음
-                for (a, b) in [(c[0], c[3]), (c[1], c[2])] {
+                for (a, b, nn) in [(c[0], c[3], -side), (c[1], c[2], side)] {
                     let m = (a + b) / 2 + up * (Hw + rh)
-                    walls[wk].quad(a + up * Hw, b + up * Hw, m, m, SIMD2<Float>(0, Hw / tile), SIMD2<Float>(D / tile, Hw / tile),
-                                   SIMD2<Float>(D / 2 / tile, (Hw + rh) / tile), SIMD2<Float>(D / 2 / tile, (Hw + rh) / tile))
+                    walls[wk][shadeK(nn)].quad(a + up * Hw, b + up * Hw, m, m, SIMD2<Float>(0, Hw / tile), SIMD2<Float>(D / tile, Hw / tile),
+                                               SIMD2<Float>(D / 2 / tile, (Hw + rh) / tile), SIMD2<Float>(D / 2 / tile, (Hw + rh) / tile))
                 }
-                // 지붕: 처마 40cm 내밀고 양옆 30cm
+                // 지붕: 처마 40cm·양옆 30cm 내밀고 두께(끝막이판) + 용마루
                 let ov: Float = 0.4, sv: Float = 0.3
                 let ridgeL = p - side * (hw + sv) + up * (Hw + rh), ridgeR = p + side * (hw + sv) + up * (Hw + rh)
                 for s2: Float in [-1, 1] {
@@ -1320,112 +1341,146 @@ final class RoomWorld {
                     let drop = up * (Hw - ov * pitch)
                     let e0 = p - side * (hw + sv) + eave + drop, e1 = p + side * (hw + sv) + eave + drop
                     let slope = simd_distance(e0, ridgeL)
-                    roofs[rk].quad(e0, e1, ridgeR, ridgeL, SIMD2<Float>(0, 0), SIMD2<Float>((W + 2 * sv) / 1.6, 0),
-                                   SIMD2<Float>((W + 2 * sv) / 1.6, slope / 1.6), SIMD2<Float>(0, slope / 1.6))
+                    let rn = simd_normalize(fwd * s2 + up * (1 / max(0.3, pitch)))
+                    roofs[rk][shadeK(rn)].quad(e0, e1, ridgeR, ridgeL, SIMD2<Float>(0, 0), SIMD2<Float>((W + 2 * sv) / 1.6, 0),
+                                               SIMD2<Float>((W + 2 * sv) / 1.6, slope / 1.6), SIMD2<Float>(0, slope / 1.6))
+                    darkWood.wall(e0, e1, y0: -0.16, y1: 0, u0: 0, u1: 1)                   // 처마 끝막이판
+                    for (ea, ra) in [(e0, ridgeL), (e1, ridgeR)] {                              // 박공 널 (지붕 옆 끝을 따라)
+                        darkWood.quad(ea, ra, ra - up * 0.18, ea - up * 0.18, .zero, .zero, .zero, .zero)
+                    }
                     if lineMode {
                         lines.stroke(e0, e1, width: 0.05); lines.stroke(e0, ridgeL, width: 0.05); lines.stroke(e1, ridgeR, width: 0.05)
                     }
                 }
+                roofs[rk][0].wall(ridgeL, ridgeR, y0: -0.02, y1: 0.12, u0: 0, u1: W / 1.6, v0: 0, v1: 0.1)          // 용마루
                 if lineMode {
                     lines.stroke(ridgeL, ridgeR, width: 0.05)
                     for k in 0..<4 {
-                        lines.stroke(c[k], c[(k + 1) % 4], width: 0.05)
+                        lines.stroke(c[k] + up * base, c[(k + 1) % 4] + up * base, width: 0.04)
                         lines.stroke(c[k], c[k] + up * Hw, width: 0.05)
                     }
                 }
-                // 굴뚝 (지붕 한쪽 위로 솟음)
-                let cx = Float.random(in: -hw * 0.6...hw * 0.6, using: &g2)
-                let cz = Float.random(in: 0.2...0.5, using: &g2) * hd
+                // 굴뚝 + 덮개
+                let cx = Float.random(in: -hw * 0.55...hw * 0.55, using: &g2)
+                let cz = Float.random(in: 0.2...0.45, using: &g2) * hd
                 let cBase = p + side * cx - fwd * cz + up * (Hw + rh * (1 - cz / hd) - 0.3)
-                let cH = rh * (cz / hd) + 1.1
-                chim.box(base: cBase, w: 0.55, d: 0.55, h: cH, yaw: yaw, tile: 1.6)
-                if lineMode { lines.boxOutline(base: cBase, w: 0.55, d: 0.55, h: cH, yaw: yaw, width: 0.04) }
-                if smokeAt.count < 3 && Float.random(in: 0...1, using: &g2) < 0.6 { smokeAt.append(cBase + up * (cH + 0.1)) }
-                // 문 (앞면 가운데쯤) + 창 (층마다 2~4개)
-                let front = fwd * (hd + 0.02)
-                let dx = Float.random(in: -hw * 0.4...hw * 0.4, using: &g2)
-                let dc = p + front + side * dx
-                trim.quad(dc - side * 0.5, dc + side * 0.5, dc + side * 0.5 + up * 2.0, dc - side * 0.5 + up * 2.0,
-                          SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
-                if lineMode {
-                    lines.stroke(dc - side * 0.5, dc - side * 0.5 + up * 2, width: 0.035); lines.stroke(dc + side * 0.5, dc + side * 0.5 + up * 2, width: 0.035)
-                    lines.stroke(dc - side * 0.5 + up * 2, dc + side * 0.5 + up * 2, width: 0.035)
+                let cH = rh * (cz / hd) + 1.2
+                chim.box(base: cBase, w: 0.6, d: 0.6, h: cH, yaw: yaw, tile: 1.6)
+                darkWood.box(base: cBase + up * cH, w: 0.76, d: 0.76, h: 0.08, yaw: yaw, tile: 1)
+                if lineMode { lines.boxOutline(base: cBase, w: 0.6, d: 0.6, h: cH, yaw: yaw, width: 0.04) }
+                if smokeAt.count < 2 && Float.random(in: 0...1, using: &g2) < 0.7 { smokeAt.append(cBase + up * (cH + 0.15)) }
+                // 문: 문틀·문짝·문 위 작은 차양·돌계단·문 옆 등
+                let fo = fwd * (hd + 0.03)
+                let dx = Float.random(in: -hw * 0.35...hw * 0.35, using: &g2)
+                let dc = p + fo + side * dx
+                let dW: Float = 0.95, dH: Float = 2.05
+                darkWood.quad(dc - side * (dW / 2) + up * base, dc + side * (dW / 2) + up * base, dc + side * (dW / 2) + up * (base + dH), dc - side * (dW / 2) + up * (base + dH),
+                              .zero, .zero, .zero, .zero)
+                for sx: Float in [-1, 1] {
+                    whiteTrim.quad(dc + side * sx * (dW / 2) + up * base + fwd * 0.01, dc + side * sx * (dW / 2 + 0.1) + up * base + fwd * 0.01,
+                                   dc + side * sx * (dW / 2 + 0.1) + up * (base + dH + 0.1) + fwd * 0.01, dc + side * sx * (dW / 2) + up * (base + dH + 0.1) + fwd * 0.01,
+                                   .zero, .zero, .zero, .zero)
                 }
-                for fl in 0..<floors {
-                    let y0: Float = fl == 0 ? 0.95 : 3.45, y1 = y0 + 1.15
-                    let cnt = max(2, Int(W / 2.2))
-                    for k in 0..<cnt {
-                        let x = -hw + W * (Float(k) + 0.5) / Float(cnt)
-                        if fl == 0 && abs(x - dx) < 1.0 { continue }                  // 문 자리 피함
-                        for (face, sd, ax) in [(front, Float(1), side), (-fwd * (hd + 0.02), Float(-1), side)] {
-                            if sd < 0 && Float.random(in: 0...1, using: &g2) < 0.5 { continue }     // 뒷면은 듬성듬성
-                            let wc = p + face + ax * x
-                            var q = Geo()
-                            q.quad(wc - ax * 0.45 + up * y0, wc + ax * 0.45 + up * y0, wc + ax * 0.45 + up * y1, wc - ax * 0.45 + up * y1,
-                                   SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
-                            winQuads.append(q)
-                            // 창틀
-                            trim.quad(wc - ax * 0.52 + up * (y0 - 0.1), wc + ax * 0.52 + up * (y0 - 0.1), wc + ax * 0.52 + up * (y0 - 0.02), wc - ax * 0.52 + up * (y0 - 0.02),
-                                      .zero, .zero, .zero, .zero)
-                            if lineMode {
-                                let a0 = wc - ax * 0.45 + up * y0, a1 = wc + ax * 0.45 + up * y0, a2 = wc + ax * 0.45 + up * y1, a3 = wc - ax * 0.45 + up * y1
-                                lines.stroke(a0, a1, width: 0.03); lines.stroke(a1, a2, width: 0.03); lines.stroke(a2, a3, width: 0.03); lines.stroke(a3, a0, width: 0.03)
-                            }
+                whiteTrim.quad(dc - side * (dW / 2 + 0.1) + up * (base + dH) + fwd * 0.01, dc + side * (dW / 2 + 0.1) + up * (base + dH) + fwd * 0.01,
+                               dc + side * (dW / 2 + 0.1) + up * (base + dH + 0.12) + fwd * 0.01, dc - side * (dW / 2 + 0.1) + up * (base + dH + 0.12) + fwd * 0.01,
+                               .zero, .zero, .zero, .zero)
+                let canopy = up * (base + dH + 0.3)
+                roofs[rk][0].quad(dc - side * 0.75 + canopy, dc + side * 0.75 + canopy, dc + side * 0.75 + canopy + fwd * 0.7 - up * 0.3, dc - side * 0.75 + canopy + fwd * 0.7 - up * 0.3,
+                                  SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 0.5), SIMD2<Float>(0, 0.5))
+                plinth.box(base: dc + fwd * 0.35, w: 1.4, d: 0.7, h: 0.3, yaw: yaw, tile: 1)
+                plinth.box(base: dc + fwd * 0.75, w: 1.4, d: 0.5, h: 0.15, yaw: yaw, tile: 1)
+                let lampP = dc + side * (dW / 2 + 0.35) + up * (base + 1.85) + fwd * 0.12
+                lampGlass.box(base: lampP - up * 0.12, w: 0.14, d: 0.14, h: 0.22, yaw: yaw, tile: 1)
+                darkWood.box(base: lampP + up * 0.1, w: 0.2, d: 0.2, h: 0.04, yaw: yaw, tile: 1)
+                lamps.append(lampP)
+                if lineMode {
+                    let a = dc - side * (dW / 2) + up * base, b = dc + side * (dW / 2) + up * base
+                    lines.stroke(a, a + up * dH, width: 0.035); lines.stroke(b, b + up * dH, width: 0.035); lines.stroke(a + up * dH, b + up * dH, width: 0.035)
+                }
+                // 창: 층마다 벽 길이에 맞춰 2~4개 (앞면은 다, 뒷면은 듬성듬성, 옆면 하나씩) — 창틀·십자 살·창턱·덧창
+                let wW: Float = 0.9, wH: Float = 1.15
+                func window(_ wc: SIMD3<Float>, _ ax: SIMD3<Float>, _ nrm: SIMD3<Float>, _ y0: Float) {
+                    let o = nrm * 0.03
+                    let a = wc - ax * (wW / 2) + up * y0 + o, b = wc + ax * (wW / 2) + up * y0 + o
+                    var q = Geo()
+                    q.quad(a, b, b + up * wH, a + up * wH, SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+                    winQuads.append(q)
+                    let fw: Float = 0.07, f2 = nrm * 0.01
+                    for (p0, p1) in [(a, b), (a + up * wH, b + up * wH)] { whiteTrim.quad(p0 - ax * fw + f2, p1 + ax * fw + f2, p1 + ax * fw + up * fw + f2, p0 - ax * fw + up * fw + f2, .zero, .zero, .zero, .zero) }
+                    for p0 in [a, b] { whiteTrim.quad(p0 - ax * (fw / 2) + f2, p0 + ax * (fw / 2) + f2, p0 + ax * (fw / 2) + up * wH + f2, p0 - ax * (fw / 2) + up * wH + f2, .zero, .zero, .zero, .zero) }
+                    let mid = (a + b) / 2
+                    whiteTrim.quad(mid - ax * 0.025 + f2, mid + ax * 0.025 + f2, mid + ax * 0.025 + up * wH + f2, mid - ax * 0.025 + up * wH + f2, .zero, .zero, .zero, .zero)
+                    whiteTrim.quad(a + up * (wH * 0.55) + f2, b + up * (wH * 0.55) + f2, b + up * (wH * 0.55 + 0.05) + f2, a + up * (wH * 0.55 + 0.05) + f2, .zero, .zero, .zero, .zero)
+                    // 창턱 (앞으로 12cm)
+                    whiteTrim.quad(a - ax * 0.1 - up * 0.03, b + ax * 0.1 - up * 0.03, b + ax * 0.1 - up * 0.03 + nrm * 0.12, a - ax * 0.1 - up * 0.03 + nrm * 0.12, .zero, .zero, .zero, .zero)
+                    // 덧창 (회벽 집)
+                    if wallKinds[wk].0 == "plaster" {
+                        for (p0, sx) in [(a, Float(-1)), (b, Float(1))] {
+                            shutters[sk].quad(p0 + ax * sx * 0.08, p0 + ax * sx * 0.5, p0 + ax * sx * 0.5 + up * wH, p0 + ax * sx * 0.08 + up * wH,
+                                              SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
                         }
                     }
+                    if lineMode {
+                        lines.stroke(a, b, width: 0.03); lines.stroke(b, b + up * wH, width: 0.03); lines.stroke(b + up * wH, a + up * wH, width: 0.03); lines.stroke(a + up * wH, a, width: 0.03)
+                        lines.stroke(mid, mid + up * wH, width: 0.02)
+                    }
+                }
+                for fl in 0..<floors {
+                    let y0: Float = base + (fl == 0 ? 0.5 : 2.95)
+                    let cnt = max(2, min(4, Int(W / 2.3)))
+                    for k in 0..<cnt {
+                        let x = -hw + W * (Float(k) + 0.5) / Float(cnt)
+                        if fl == 0 && abs(x - dx) < 1.25 { continue }                  // 문·등 자리 피함
+                        window(p + side * x + fwd * hd, side, fwd, y0)
+                        if Float.random(in: 0...1, using: &g2) < 0.5 { window(p + side * x - fwd * hd, -side, -fwd, y0) }
+                    }
+                    window(p + side * hw, fwd, side, y0)
+                    if fl == 0 { window(p - side * hw, -fwd, -side, y0) }
                 }
                 break
             }
         }
         g = g2
-        for (i, geo) in walls.enumerated() {
-            let (tx, col, _) = wallKinds[i]
-            if let e = geo.entity("houseWalls\(i)", lineMode ? Ink.paper(1) : Tex.unlit(tx, tint: Worlds.safe(tint * col * shades[1], min: 0.2))) { layer(e, 5); world.addChild(e) }
+        let tk = Worlds.safe(tint, min: 0.2)
+        for (i, set) in walls.enumerated() {
+            for (k, geo) in set.enumerated() {
+                let (tx, col, _) = wallKinds[i]
+                if let e = geo.entity("houseWalls\(i)_\(k)", lineMode ? Ink.paper(k) : Tex.unlit(tx, tint: Worlds.safe(tint * col * shades[k], min: 0.18))) { layer(e, 5); world.addChild(e) }
+            }
         }
-        for (i, geo) in roofs.enumerated() {
-            if let e = geo.entity("houseRoof\(i)", lineMode ? Ink.paper(2) : Tex.unlit("roof_tile", tint: Worlds.safe(tint * roofCols[i] * 1.5, min: 0.15))) { layer(e, 5); world.addChild(e) }
+        for (i, set) in roofs.enumerated() {
+            for (k, geo) in set.enumerated() {
+                if let e = geo.entity("houseRoof\(i)_\(k)", lineMode ? Ink.paper(min(2, k + 1)) : Tex.unlit("roof_tile", tint: Worlds.safe(tint * roofCols[i] * 1.5 * shades[k], min: 0.12))) { layer(e, 5); world.addChild(e) }
+            }
         }
+        for (i, geo) in shutters.enumerated() {
+            if let e = geo.entity("houseShutters\(i)", lineMode ? Ink.paper(1) : Tex.unlit("planks", tint: Worlds.safe(tint * shutterCols[i] * 1.6, min: 0.15))) { layer(e, 6); world.addChild(e) }
+        }
+        if let e = plinth.entity("housePlinth", lineMode ? Ink.paper(2) : Tex.unlit("rock", tint: Worlds.safe(tint * 0.8, min: 0.2))) { layer(e, 5); world.addChild(e) }
         if let e = chim.entity("houseChimneys", lineMode ? Ink.paper(1) : Tex.unlit("brick", tint: Worlds.safe(tint * 0.75, min: 0.2))) { layer(e, 5); world.addChild(e) }
-        if let e = trim.entity("houseTrim", lineMode ? Ink.line : UnlitMaterial(color: Tex.color(SIMD3<Float>(0.24, 0.17, 0.12) * Worlds.safe(tint, min: 0.3)))) { layer(e, 6); world.addChild(e) }
+        if let e = whiteTrim.entity("houseTrimWhite", lineMode ? Ink.paper(0) : UnlitMaterial(color: Tex.color(SIMD3<Float>(0.9, 0.88, 0.84) * tk))) { layer(e, 6); world.addChild(e) }
+        if let e = darkWood.entity("houseTrimDark", lineMode ? Ink.line : Tex.unlit("planks_dark", tint: Worlds.safe(tint * 0.75, min: 0.15))) { layer(e, 6); world.addChild(e) }
+        let lampM: RealityKit.Material = lineMode ? Ink.paper(0) : UnlitMaterial(color: Tex.color(lit ? [1, 0.82, 0.5] : SIMD3<Float>(0.7, 0.72, 0.7) * tk))
+        if let e = lampGlass.entity("houseLamps", lampM) { layer(e, 6); world.addChild(e) }
+        if lit && !lineMode { for c in lamps { glowSprite(at: c, size: 0.9, color: [1, 0.76, 0.45]) } }
         if lineMode, let e = lines.entity("houseLines", Ink.line) { layer(e, 7); world.addChild(e) }
         // 창: 낮엔 하늘이 비친 어두운 유리, 해질녘·밤·새벽엔 켜진 창(따뜻한 불빛)과 꺼진 창이 섞여 있고 가끔씩 바뀜
         let onM: RealityKit.Material = lineMode ? Ink.paper(0) : UnlitMaterial(color: Tex.color([1, 0.78, 0.46]))
-        let offM: RealityKit.Material = lineMode ? Ink.paper(0) : UnlitMaterial(color: Tex.color(SIMD3<Float>(0.16, 0.2, 0.25) * Worlds.safe(tint, min: 0.35)))
+        let offM: RealityKit.Material = lineMode ? Ink.paper(0) : UnlitMaterial(color: Tex.color(SIMD3<Float>(0.18, 0.22, 0.27) * Worlds.safe(tint, min: 0.35)))
         winOnMat = onM; winOffMat = offM
         for (i, q) in winQuads.enumerated() {
-            let on = lit && Float.random(in: 0...1, using: &g) < 0.55
+            let on = lit && Float.random(in: 0...1, using: &g) < 0.5
             guard let e = q.entity("houseWin\(i)", on ? onM : offM) else { continue }
             layer(e, 6)
             world.addChild(e)
             villageWins.append((e: e, next: Float.random(in: 8...50, using: &g), on: on))
         }
-        // 굴뚝 연기: 가늘게 오르며 퍼지는 옅은 연기 (집 크기에 맞게 작게)
+        // 굴뚝 연기: 가늘게 오르며 퍼지는 옅은 연기 (그림 판 — 먼 산 띠에 가려 깨지지 않게)
+        let sc: SIMD3<Float> = dark ? [0.42, 0.42, 0.46] : [0.86, 0.86, 0.88]
         for c in smokeAt {
-            var pe = ParticleEmitterComponent()
-            pe.mainEmitter.image = Tex.particle("smoke_puff")
-            pe.emitterShape = .sphere
-            pe.emitterShapeSize = [0.12, 0.05, 0.12]
-            pe.birthDirection = .world
-            pe.emissionDirection = [0.12, 1, 0.05]
-            pe.speed = 0.45
-            pe.speedVariation = 0.15
-            pe.mainEmitter.birthRate = 5
-            pe.mainEmitter.lifeSpan = 7
-            pe.mainEmitter.size = 0.28
-            pe.mainEmitter.sizeVariation = 0.08
-            pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 4.5
-            pe.mainEmitter.noiseStrength = 0.12
-            pe.mainEmitter.noiseScale = 1.5
-            pe.mainEmitter.acceleration = [0.12, 0, 0.04]                  // 바람에 조금씩 기울며 흩어짐
-            let sc: SIMD3<Float> = dark ? [0.42, 0.42, 0.46] : [0.86, 0.86, 0.88]
-            pe.mainEmitter.color = .constant(.single(lineMode ? UIColor(white: 0.45, alpha: 0.12) : Tex.color(sc, alpha: 0.22)))
-            pe.mainEmitter.blendMode = .alpha
-            pe.mainEmitter.opacityCurve = .gradualFadeInOut
-            let e = Entity()
-            e.components.set(pe)
-            e.position = c
-            layer(e, 18)
-            world.addChild(e)
+            let pl = SmokePlume(at: c, size: 0.35, height: 5, alpha: 0.32, color: sc, look: look, sortGroup: sortGroup)
+            world.addChild(pl.root)
+            plumes.append(pl)
         }
     }
 
@@ -1441,6 +1496,129 @@ final class RoomWorld {
         }
     }
 
+    /// 카페 통창 밖 거리: 보도(3m, 바닥과 같은 높이) → 연석 → 2차선 차도(7m, 가운데 점선·양쪽 실선) → 맞은편 보도 → 맞은편 3~5층 건물 줄.
+    /// 건물마다 폭·층수·벽 색이 다르고 1층은 가게(진열창·유리문·간판 띠, 몇 곳은 천 차양), 위층은 흰 창틀 창. 지붕 끝 돌림띠.
+    /// 해질녘·밤엔 가게 진열창과 위층 창 일부에 불이 켜짐
+    private func addCafeStreet<G: RandomNumberGenerator>(_ rec: SpaceRec, floorY: Float, using g: inout G) {
+        let hx = halfSize.x, hz = halfSize.y
+        let ex3 = SIMD3<Float>(rec.ex.x, 0, rec.ex.y), ez3 = SIMD3<Float>(rec.ez.x, 0, rec.ez.y)
+        let lit = dark || room.time == "dusk"
+        func P(_ u: Float, _ v: Float, _ y: Float) -> SIMD3<Float> { SIMD3<Float>(center.x, floorY + y, center.z) + ex3 * u + ez3 * v }
+        func uvOf(_ p: SIMD3<Float>, _ t: Float) -> SIMD2<Float> { SIMD2<Float>(p.x, p.z) / t }
+        let corners: [(Float, Float)] = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
+        func ring(_ geo: inout Geo, _ d0: Float, _ d1: Float, _ y: Float, _ t: Float) {
+            for k in 0..<4 {
+                let (ax, az) = corners[k], (bx, bz) = corners[(k + 1) % 4]
+                let a0 = P(ax * (hx + d0), az * (hz + d0), y), b0 = P(bx * (hx + d0), bz * (hz + d0), y)
+                let a1 = P(ax * (hx + d1), az * (hz + d1), y), b1 = P(bx * (hx + d1), bz * (hz + d1), y)
+                geo.quad(a0, b0, b1, a1, uvOf(a0, t), uvOf(b0, t), uvOf(b1, t), uvOf(a1, t))
+            }
+        }
+        func curb(_ geo: inout Geo, _ d: Float) {
+            for k in 0..<4 {
+                let (ax, az) = corners[k], (bx, bz) = corners[(k + 1) % 4]
+                let a = P(ax * (hx + d), az * (hz + d), -0.16), b = P(bx * (hx + d), bz * (hz + d), -0.16)
+                geo.wall(a, b, y0: 0, y1: 0.15, u0: 0, u1: simd_distance(a, b) / 1.2, v0: 0, v1: 0.12)
+            }
+        }
+        var walk = Geo(), road = Geo(), curbs = Geo(), paint = Geo(), lines = Geo()
+        ring(&walk, 0, 3.0, -0.015, 1.6)
+        ring(&walk, 10, 12.6, -0.015, 1.6)
+        ring(&road, 3.0, 10, -0.16, 4)
+        curb(&curbs, 3.0); curb(&curbs, 10)
+        // 차선: 가운데 흰 점선(2m 칠·3m 빔), 양쪽 가장자리 실선
+        for k in 0..<4 {
+            let (ax, az) = corners[k], (bx, bz) = corners[(k + 1) % 4]
+            for (d, dash, w) in [(Float(6.5), true, Float(0.12)), (3.35, false, 0.1), (9.65, false, 0.1)] {
+                let a = P(ax * (hx + d), az * (hz + d), -0.155), b = P(bx * (hx + d), bz * (hz + d), -0.155)
+                let len = simd_distance(a, b), dir = (b - a) / len
+                let nrm = SIMD3<Float>(-dir.z, 0, dir.x) * (w / 2)
+                var t: Float = 1.5
+                while t < len - 1.5 {
+                    let t1 = dash ? min(len - 1.5, t + 2) : len - 1.5
+                    let p0 = a + dir * t, p1 = a + dir * t1
+                    paint.quad(p0 - nrm, p1 - nrm, p1 + nrm, p0 + nrm, .zero, .zero, .zero, .zero)
+                    if lineMode { lines.stroke(p0, p1, width: 0.03) }
+                    t = dash ? t + 5 : len
+                }
+            }
+        }
+        if let e = walk.entity("sidewalk", lineMode ? Ink.paper(0) : Tex.unlit("concrete", tint: Worlds.safe(tint * 0.95, min: 0.25))) { layer(e, 4); world.addChild(e) }
+        if let e = road.entity("road", lineMode ? Ink.paper(1) : Tex.unlit("asphalt", tint: Worlds.safe(tint * 0.75, min: 0.18))) { layer(e, 4); world.addChild(e) }
+        if let e = curbs.entity("curbs", lineMode ? Ink.line : Tex.unlit("concrete", tint: Worlds.safe(tint * 0.8, min: 0.22))) { layer(e, 4); world.addChild(e) }
+        if let e = paint.entity("roadPaint", lineMode ? Ink.line : UnlitMaterial(color: Tex.color(SIMD3<Float>(0.85, 0.85, 0.8) * Worlds.safe(tint, min: 0.4)))) { layer(e, 5); world.addChild(e) }
+        // 맞은편 건물 줄: 네 방향, 앞면이 거리를 봄
+        let wallCols: [SIMD3<Float>] = [[1, 0.97, 0.9], [0.98, 0.9, 0.72], [0.9, 0.66, 0.54], [0.78, 0.86, 0.8], [0.8, 0.84, 0.92], [0.94, 0.94, 0.94]]
+        let signCols: [SIMD3<Float>] = [[0.25, 0.35, 0.3], [0.5, 0.2, 0.18], [0.2, 0.26, 0.4], [0.75, 0.62, 0.3], [0.3, 0.3, 0.32]]
+        var upper = [Geo](repeating: Geo(), count: wallCols.count)
+        var shops = [Geo](repeating: Geo(), count: signCols.count)
+        var plain = Geo(), roofG = Geo(), awn = [Geo](repeating: Geo(), count: signCols.count)
+        let up = SIMD3<Float>(0, 1, 0)
+        let sides: [(SIMD3<Float>, SIMD3<Float>, Float, Float)] = [(ez3, ex3, hz, hx + 21.6), (-ez3, -ex3, hz, hx + 21.6), (ex3, -ez3, hx, hz + 12.6), (-ex3, ez3, hx, hz + 12.6)]
+        for (nOut, along, hN, hL) in sides {
+            var x = -hL
+            while x < hL - 3 {
+                let w = min(hL - x, Float.random(in: 6...9, using: &g))
+                guard w > 3 else { break }
+                let floors = Int.random(in: 2...4, using: &g)
+                let H: Float = 3.4 + Float(floors) * 3
+                let D: Float = 9
+                let f0 = SIMD3<Float>(center.x, floorY - 0.015, center.z) + nOut * (hN + 12.6) + along * x       // 앞면 왼쪽 아래
+                let f1 = f0 + along * w
+                let b0 = f0 + nOut * D, b1 = f1 + nOut * D
+                let wc = Int(g.next() % UInt64(wallCols.count)), sc = Int(g.next() % UInt64(signCols.count))
+                // 위층 (앞·옆·뒤): 3층마다 9m 그림
+                for (a, b) in [(f0, f1), (f1, b1), (b1, b0), (b0, f0)] {
+                    let L2 = simd_distance(a, b)
+                    upper[wc].wall(a, b, y0: 3.4, y1: H, u0: 0, u1: L2 / 6, v0: 0, v1: (H - 3.4) / 9)
+                }
+                // 1층: 앞은 가게, 옆·뒤는 벽
+                shops[sc].wall(f0 - nOut * 0.02, f1 - nOut * 0.02, y0: 0, y1: 3.4, u0: 0, u1: max(1, (w / 6).rounded()), v0: 0, v1: 1)
+                for (a, b) in [(f1, b1), (b1, b0), (b0, f0)] {
+                    plain.wall(a, b, y0: 0, y1: 3.4, u0: 0, u1: simd_distance(a, b) / 2, v0: 0, v1: 3.4 / 2)
+                }
+                // 지붕 + 끝 돌림띠
+                roofG.quad(f0 + up * H, f1 + up * H, b1 + up * H, b0 + up * H, .zero, SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+                roofG.wall(f0 - nOut * 0.2 + up * H, f1 - nOut * 0.2 + up * H, y0: -0.05, y1: 0.35, u0: 0, u1: w / 2, v0: 0, v1: 0.2)
+                // 차양 (가게 절반쯤)
+                if Float.random(in: 0...1, using: &g) < 0.55 {
+                    let ia = f0 + along * 0.3, ib = f1 - along * 0.3
+                    let out = -nOut * 1.3
+                    awn[sc].quad(ia + up * 3.15, ib + up * 3.15, ib + out + up * 2.65, ia + out + up * 2.65,
+                                 SIMD2<Float>(0, 0), SIMD2<Float>(w / 0.6, 0), SIMD2<Float>(w / 0.6, 1), SIMD2<Float>(0, 1))
+                    awn[sc].quad(ia + out + up * 2.65, ib + out + up * 2.65, ib + out + up * 2.4, ia + out + up * 2.4,
+                                 SIMD2<Float>(0, 0), SIMD2<Float>(w / 0.6, 0), SIMD2<Float>(w / 0.6, 0.3), SIMD2<Float>(0, 0.3))
+                }
+                if lineMode {
+                    for (a, b) in [(f0, f1), (f1, b1), (b1, b0), (b0, f0)] {
+                        lines.stroke(a + up * H, b + up * H, width: 0.05); lines.stroke(a + up * 3.4, b + up * 3.4, width: 0.04)
+                        lines.stroke(a, a + up * H, width: 0.05)
+                    }
+                }
+                x += w
+            }
+        }
+        for (i, geo) in upper.enumerated() {
+            let litTint: SIMD3<Float> = wallCols[i] * Float(0.9) + SIMD3<Float>(repeating: 0.1)
+            let dayTint: SIMD3<Float> = Worlds.safe(tint * wallCols[i], min: 0.3)
+            let m: RealityKit.Material = lineMode ? Ink.paper(0) : Tex.unlit(lit ? "townhouse_night" : "townhouse", tint: lit ? litTint : dayTint)
+            if let e = geo.entity("streetHouses\(i)", m) { layer(e, 5); world.addChild(e) }
+        }
+        for (i, geo) in shops.enumerated() {
+            let litTint: SIMD3<Float> = signCols[i] * Float(0.25) + SIMD3<Float>(repeating: 0.8)
+            let mix: SIMD3<Float> = signCols[i] * Float(0.3) + SIMD3<Float>(repeating: 0.75)
+            let dayTint: SIMD3<Float> = Worlds.safe(tint * mix, min: 0.3)
+            let m: RealityKit.Material = lineMode ? Ink.paper(1) : Tex.unlit(lit ? "shopfront_night" : "shopfront", tint: lit ? litTint : dayTint)
+            if let e = geo.entity("streetShops\(i)", m) { layer(e, 5); world.addChild(e) }
+        }
+        for (i, geo) in awn.enumerated() {
+            if let e = geo.entity("streetAwning\(i)", lineMode ? Ink.paper(2) : Tex.unlit("canvas", tint: Worlds.safe(tint * signCols[i] * 1.8, min: 0.2))) { layer(e, 6); world.addChild(e) }
+        }
+        if let e = plain.entity("streetPlain", lineMode ? Ink.paper(1) : Tex.unlit("plaster", tint: Worlds.safe(tint * 0.8, min: 0.25))) { layer(e, 5); world.addChild(e) }
+        if let e = roofG.entity("streetRoofs", lineMode ? Ink.paper(2) : Tex.unlit("concrete", tint: Worlds.safe(tint * 0.55, min: 0.15))) { layer(e, 5); world.addChild(e) }
+        if lineMode, let e = lines.entity("streetLines", Ink.line) { layer(e, 6); world.addChild(e) }
+    }
+
     /// 카페 통창 밖 보도의 가로등: 검은 철제 기둥 + 등갓 달린 등 (해질녘·밤엔 불빛), 창에서 1.6~2m 바깥
     private func addStreetLamps<G: RandomNumberGenerator>(_ rec: SpaceRec, _ L: Layout, floorY: Float, using g: inout G) {
         var pole = Geo(), head = Geo(), lines = Geo()
@@ -1449,7 +1627,7 @@ final class RoomWorld {
         let n = 5
         for i in 0..<n {
             for _ in 0..<5 {
-                let p = around((Float(i) + Float.random(in: 0.2...0.8, using: &g)) / Float(n), Float.random(in: 1.6...2.0, using: &g), rec, floorY)
+                let p = around((Float(i) + Float.random(in: 0.2...0.8, using: &g)) / Float(n), Float.random(in: 2.5...2.7, using: &g), rec, floorY)      // 보도 끝(차도 쪽)
                 var ok = true
                 for k in 0..<8 {
                     let a = Float(k) / 8 * 2 * .pi
@@ -1802,6 +1980,28 @@ final class RoomWorld {
             }
             arc += seg
         }
+        // 절벽 밑 너덜 비탈: 절벽에서 무너져 내린 돌 비탈(높이 2.5m→바닥, 폭 5m 안팎)과 큰 바위들 — 절벽과 땅이 만나는 곳이 자연스럽게
+        var talus = Geo(), boulders = Geo()
+        for i in 0..<N {
+            let a0 = Float(i) / Float(N) * 2 * .pi, a1 = Float(i + 1) / Float(N) * 2 * .pi
+            func inner(_ a: Float) -> SIMD3<Float> {
+                let r = base - 5.5 + 1.6 * sin(a * 11 + s1) + 0.8 * sin(a * 29 + s2)
+                return SIMD3<Float>(center.x + cos(a) * r, floorY - 0.02, center.z + sin(a) * r)
+            }
+            let o0 = pt(a0, 4.5, topH(a0)), o1 = pt(a1, 4.5, topH(a1))
+            let i0 = inner(a0), i1 = inner(a1)
+            talus.quad(i0, i1, o1, o0, SIMD2<Float>(i0.x, i0.z) / 3, SIMD2<Float>(i1.x, i1.z) / 3, SIMD2<Float>(o1.x, o1.z) / 3 + SIMD2<Float>(0, 0.8),
+                       SIMD2<Float>(o0.x, o0.z) / 3 + SIMD2<Float>(0, 0.8))
+        }
+        for _ in 0..<90 {
+            let a = Float.random(in: 0...(2 * .pi), using: &g)
+            let r = base - Float.random(in: 2...7, using: &g)
+            let bp = SIMD3<Float>(center.x + cos(a) * r, floorY - 0.1, center.z + sin(a) * r)
+            let bs = Float.random(in: 0.5...1.8, using: &g)
+            if riverGap(bp) > bs + 0.6 { boulders.rock(at: bp, size: bs, using: &g) }
+        }
+        if let e = talus.entity("cliffTalus", Tex.unlit("rock", tint: Worlds.safe(tint * 0.7, min: 0.18))) { layer(e, 2); world.addChild(e) }
+        if let e = boulders.entity("cliffBoulders", Tex.unlit("rock", tint: Worlds.safe(tint * 0.8, min: 0.2))) { layer(e, 3); world.addChild(e) }
         let tx = Tex.get("cliff") != nil ? "cliff" : "rock"
         if let e = wall.entity("cliffRing", Tex.unlit(tx, tint: Worlds.safe(tint * 0.85, min: 0.2))) { layer(e, 2); world.addChild(e) }
         if let e = top.entity("cliffTop", Tex.unlit("grass", tint: Worlds.safe(tint * 0.7, min: 0.2))) { layer(e, 2); world.addChild(e) }
@@ -1913,7 +2113,7 @@ final class RoomWorld {
                 world.addChild(e)
             }
         }
-        if room.place == "cafe" { addStreetLamps(rec, L, floorY: floorY, using: &g) }
+        if room.place == "cafe" { addStreetLamps(rec, L, floorY: floorY, using: &g); addCafeStreet(rec, floorY: floorY, using: &g) }
         if room.place == "village" { addVillageHouses(rec, L, floorY: floorY, using: &g) }
         if let rk = dc.rocks {
             var geo = Geo()
@@ -2507,6 +2707,7 @@ final class RoomWorld {
         scenery?.tick(dt)
         tickSpeaker(dt)
         tickVillage(dt)
+        for p in plumes { p.tick(dt) }
         for (e, v) in clouds {
             e.position += v * dt
             let off = e.position - center

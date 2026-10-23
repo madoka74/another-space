@@ -89,14 +89,15 @@ final class JellySea {
 
     // MARK: 자리
     private var lo: Float { floorY + min(1.35, ceilY - floorY - 0.7) }       // 가구보다 높이 (뒤가 벽·천장 창이라 또렷이 그려짐)
-    private var hi: Float { ceilY - 0.22 }
+    // 빛무리(갓 크기의 3배 넘는 판)까지 천장 창 아래에 들게: 천장을 넘으면 그 면에서 곧게 잘려 보였음
+    private var hi: Float { max(lo + 0.1, ceilY - 0.66) }
 
     /// 가구 높이 (저장 좌표 xz → 바닥에서 m). 탐험이 채워 줌 — 키 큰 가구(책장 등) 위·옆을 지날 때 촉수까지 닿지 않게
     var furnitureH: ((SIMD2<Float>) -> Float)?
 
     private func insideOK(_ p: SIMD3<Float>) -> Bool {
         let c = L.at(x: p.x, z: p.z)
-        guard c.room == roomId && c.wall > 0.35 else { return false }
+        guard c.room == roomId && c.wall > 0.55 else { return false }          // 빛무리까지 벽(창) 앞에 들게
         if let fh = furnitureH {
             let offs: [SIMD2<Float>] = [[0, 0], [0.3, 0], [-0.3, 0], [0, 0.3], [0, -0.3]]
             for o in offs where floorY + fh(SIMD2<Float>(p.x, p.z) + o) + 0.6 > p.y { return false }      // 갓 아래 촉수(약 50cm)까지 여유

@@ -59,6 +59,50 @@ final class HomeCat {
         return (fixed, hit)
     }
 
+    /// 길 찾기: 10cm 칸 위에서 설 수 있는 바닥(c.free)만 지나 a → (b에서 reach 안의 아무 칸)까지 가는 길 (경유점, 30cm 간격).
+    /// 가구가 가로막아 곧장 못 가는 장난감도 돌아서 감 (예전엔 앞만 보고 비켜 가다 막힌 구석에서 멈춰 섰음). 못 가면 nil
+    static func plan(from a: SIMD2<Float>, to b: SIMD2<Float>, reach: Float, _ c: Ctx) -> [SIMD2<Float>]? {
+        let cs: Float = 0.1
+        let lo = simd_min(a, b) - SIMD2<Float>(repeating: 2), hi = simd_max(a, b) + SIMD2<Float>(repeating: 2)
+        let nx = min(90, Int(((hi.x - lo.x) / cs).rounded(.up))), nz = min(90, Int(((hi.y - lo.y) / cs).rounded(.up)))
+        guard nx > 1, nz > 1 else { return nil }
+        func cp(_ i: Int, _ j: Int) -> SIMD2<Float> { lo + SIMD2<Float>((Float(i) + 0.5) * cs, (Float(j) + 0.5) * cs) }
+        func cell(_ p: SIMD2<Float>) -> (Int, Int) { (min(nx - 1, max(0, Int((p.x - lo.x) / cs))), min(nz - 1, max(0, Int((p.y - lo.y) / cs)))) }
+        var ok = [Int8](repeating: -1, count: nx * nz)          // -1 모름, 0 막힘, 1 빈 바닥
+        func free(_ i: Int, _ j: Int) -> Bool {
+            let k = j * nx + i
+            if ok[k] < 0 { ok[k] = c.free(cp(i, j)) ? 1 : 0 }
+            return ok[k] == 1
+        }
+        let (si, sj) = cell(a)
+        var prev = [Int32](repeating: -1, count: nx * nz)
+        let s0 = sj * nx + si
+        prev[s0] = Int32(s0)
+        var q = [s0], qi = 0, goal = -1
+        while qi < q.count {
+            let k = q[qi]; qi += 1
+            let i = k % nx, j = k / nx
+            if simd_distance(cp(i, j), b) <= reach { goal = k; break }
+            for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
+                let x = i + di, y = j + dj
+                guard x >= 0, y >= 0, x < nx, y < nz else { continue }
+                let n = y * nx + x
+                guard prev[n] < 0, free(x, y) else { continue }
+                if di != 0 && dj != 0 && (!free(i + di, j) || !free(i, j + dj)) { continue }     // 모서리를 비스듬히 뚫지 않게
+                prev[n] = Int32(k)
+                q.append(n)
+            }
+        }
+        guard goal >= 0 else { return nil }
+        var cells: [Int] = []
+        var k = goal
+        while k != s0 { cells.append(k); k = Int(prev[k]) }
+        cells.reverse()
+        var out: [SIMD2<Float>] = []
+        for (n, k) in cells.enumerated() where n % 3 == 2 || n == cells.count - 1 { out.append(cp(k % nx, k / nx)) }
+        return out
+    }
+
     /// 방 안(장난감이 다닐 수 있는 곳)이면 그대로, 아니면 둘레를 넓혀 가며 찾은 가장 가까운 방 안 자리 (못 찾으면 내 쪽으로)
     static func inside(_ p: SIMD3<Float>, _ c: Ctx, radius r: Float) -> SIMD3<Float> {
         let q = SIMD2<Float>(p.x, p.z)
@@ -168,6 +212,8 @@ final class HomeCat {
     private var hits = 0
     private var hitsMax = 4
     private var ballHeld = false                 // 내가 손으로 집고 있음
+    private var chasePath: [SIMD2<Float>] = []   // 공까지 돌아가는 길
+    private var planT: Float = 0
     private var heldAt = SIMD3<Float>(0, 0, 0)
     private var ballAir: (SIMD3<Float>, SIMD3<Float>)?    // 던져서 날아가는 중 (자리, 빠르기)
     private var wantChase = false                // 가구 위에서 공을 보면 내려와서 쫓음
@@ -225,7 +271,7 @@ final class HomeCat {
         }
         if let e = sg.entity("catShadow", sm) { shadow = e; root.addChild(e) }
         root.position = SIMD3<Float>(p.x, floorY, p.y)
-        root.components.set(OpacityComponent(opacity: 0))
+        root.setOpacity(0)
         pending = Self.all
         show("cat_fwalk0")
         Sfx.play("cat_trill", in: root, at: [0, 0.25, 0], gain: -4)
@@ -308,6 +354,7 @@ final class HomeCat {
 
     // MARK: 동작 바꾸기
     private func start(_ a: Act, _ dur: Float) {
+        if a == .chase { chasePath = []; planT = 0 }
         act = a
         actT = 0
         actDur = dur
@@ -561,12 +608,12 @@ final class HomeCat {
         switch act {
         case .enter:
             opacity = min(1, opacity + dt * 2.5)
-            root.components.set(OpacityComponent(opacity: opacity))
+            root.setOpacity(opacity)
             if opacity >= 1 { frontal = true; start(.sit, 1.5) }
             show("cat_fsit0")
         case .leave:
             opacity = max(0, opacity - dt * 2)
-            root.components.set(OpacityComponent(opacity: opacity))
+            root.setOpacity(opacity)
             if opacity <= 0 { remove(); return }
         case .walk:
             stepWalk(dt, c)
@@ -999,18 +1046,30 @@ final class HomeCat {
             return
         }
         if actT > actDur { start(.sit, 2); return }
+        // 공까지 길을 찾아 돌아서 감 (0.8초마다·길이 끝나면 다시 찾음). 공이 굴러가도 따라감
+        planT -= dt
+        if planT <= 0 || chasePath.isEmpty {
+            planT = 0.8
+            if let p = Self.plan(from: pos, to: ballPos, reach: 0.3, c) {
+                chasePath = p
+            } else {
+                // 갈 수 있는 길이 없음(공이 가구 틈에 낌): 가까우면 앞발을 길게 뻗어 쳐 냄, 아니면 포기하고 앉음
+                chasePath = []
+                if d < 0.55 { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else { start(.sit, 2) }
+                return
+            }
+        }
+        while let w = chasePath.first, simd_distance(pos, w) < 0.06 { chasePath.removeFirst() }
+        let aim = chasePath.first ?? ballPos
+        let av = aim - pos
+        let ad = simd_length(av)
+        if ad > 0.001 { moveDir = av / ad }
         show(walkFrame(moveDir))
         jingle(dt)
         let speed: Float = running ? 1.5 : 0.6
-        // 곧장 못 가면(가구에 막힘) 옆으로 비켜 돌아감
-        let step = min(max(0, d - 0.15), speed * dt)
-        var moved = false
-        for ang in [Float(0), 0.6, -0.6, 1.2, -1.2, 1.8, -1.8] {
-            let dv = SIMD2<Float>(moveDir.x * cos(ang) - moveDir.y * sin(ang), moveDir.x * sin(ang) + moveDir.y * cos(ang))
-            if c.free(pos + dv * step) { pos += dv * step; moved = true; break }
-        }
-        if !moved && actT > 3 { start(.sit, 2) }
-        faceToward(ballPos)
+        let np = pos + moveDir * min(ad, speed * dt)
+        if c.free(np) || !c.free(pos) { pos = np } else { planT = 0 }
+        faceToward(aim)
     }
 
     // MARK: 무엇을 할지

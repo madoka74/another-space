@@ -341,3 +341,15 @@ enum Dots {
         return try? TextureResource.generate(from: cg, options: .init(semantic: .color))
     }
 }
+
+extension Entity {
+    /// 투명도. 1이면 OpacityComponent를 아예 뺌 — 1이라도 붙어 있으면 그 아래 전체가 '반투명 그리기'로 넘어가
+    /// 앞뒤 순서가 깨지고(가까운 연기가 먼 산에 가림, 해파리가 직선으로 잘림) 포털 너머로 현실이 비쳐 보였음 (visionOS 26)
+    func setOpacity(_ v: Float) {
+        if v >= 0.999 {
+            if components[OpacityComponent.self] != nil { components.remove(OpacityComponent.self) }
+        } else {
+            components.set(OpacityComponent(opacity: max(0, v)))
+        }
+    }
+}

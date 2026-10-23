@@ -78,6 +78,8 @@ final class HomeDog {
     private var stickAir: (SIMD3<Float>, SIMD3<Float>)?     // 날아가는 중 (자리, 빠르기)
     private var stickSpin: Float = 0
     private var pickT: Float = 0                            // 막대 앞에서 고개 숙여 무는 중
+    private var fetchPath: [SIMD2<Float>] = []             // 막대까지 돌아가는 길
+    private var planT: Float = 0
     private var wantFetch = false                           // 가구 위에서 막대를 보면 내려와서 가져옴
     // 말풍선
     private var bubbleT: Float = -1
@@ -137,7 +139,7 @@ final class HomeDog {
         }
         if let e = sg.entity("dogShadow", sm) { shadow = e; root.addChild(e) }
         root.position = SIMD3<Float>(p.x, floorY, p.y)
-        root.components.set(OpacityComponent(opacity: 0))
+        root.setOpacity(0)
         pending = Self.all
         show("dog_fwalk0")
         Sfx.play("dog_yip1", in: root, at: [0, 0.35, 0], gain: -4)
@@ -214,6 +216,7 @@ final class HomeDog {
 
     // MARK: 동작
     private func start(_ a: Act, _ dur: Float) {
+        if a == .fetch { fetchPath = []; planT = 0; pickT = 0 }
         act = a
         actT = 0
         actDur = dur
@@ -405,12 +408,12 @@ final class HomeDog {
         switch act {
         case .enter:
             opacity = min(1, opacity + dt * 2.5)
-            root.components.set(OpacityComponent(opacity: opacity))
+            root.setOpacity(opacity)
             if opacity >= 1 { frontal = true; start(.sit, 1.5) }
             show("dog_fsit1")
         case .leave:
             opacity = max(0, opacity - dt * 2)
-            root.components.set(OpacityComponent(opacity: opacity))
+            root.setOpacity(opacity)
             if opacity <= 0 { remove(); return }
         case .walk:
             stepWalk(dt, c)
@@ -780,7 +783,7 @@ final class HomeDog {
         if d > 0.001 { moveDir = v / d }
         show(walkFrame(moveDir))
         jingle(dt)
-        if d < 0.46 && stickAir == nil {                          // 가구 곁의 막대도 입이 닿게 (몸은 가구에서 여유를 둠)
+        if (d < 0.46 || (d < 0.65 && pickT > 0)) && stickAir == nil {                          // 가구 곁의 막대도 입이 닿게 (몸은 가구에서 여유를 둠)
             // 막대 앞에서 고개를 숙여 킁킁 → 덥석 물고 돌아섬 (바로 물려 있는 것처럼 보이지 않게)
             pickT += dt
             faceToward(target)
@@ -793,13 +796,26 @@ final class HomeDog {
             return
         }
         if actT > actDur { start(.sit, 2); return }
-        // 곧장 못 가면(가구에 막힘) 옆으로 비켜 돌아감
-        let step = min(max(0, d - 0.22), 1.9 * dt)
-        for ang in [Float(0), 0.6, -0.6, 1.2, -1.2, 1.8, -1.8] {
-            let dv = SIMD2<Float>(moveDir.x * cos(ang) - moveDir.y * sin(ang), moveDir.x * sin(ang) + moveDir.y * cos(ang))
-            if c.free(pos + dv * step) { pos += dv * step; break }
+        // 막대까지 길을 찾아 돌아서 감 (가구에 막힌 구석에서 멈춰 서지 않게). 길이 없으면 가까운 데까지 가서 고개를 내밀어 물음
+        planT -= dt
+        if planT <= 0 || fetchPath.isEmpty {
+            planT = 0.8
+            if let p = HomeCat.plan(from: pos, to: target, reach: 0.4, c) {
+                fetchPath = p
+            } else {
+                fetchPath = []
+                if d < 0.65 && stickAir == nil { pickT = 0.4 - dt }        // 다음 프레임에 덥석 (고개를 내밀어 물기)
+                else { start(.sit, 2); return }
+            }
         }
-        faceToward(target)
+        while let w = fetchPath.first, simd_distance(pos, w) < 0.06 { fetchPath.removeFirst() }
+        let aim = fetchPath.first ?? target
+        let av = aim - pos
+        let ad = simd_length(av)
+        if ad > 0.001 { moveDir = av / ad }
+        let np = pos + moveDir * min(ad, 1.9 * dt)
+        if c.free(np) || !c.free(pos) { pos = np } else { planT = 0 }
+        faceToward(aim)
     }
 
     private func stepBring(_ dt: Float, _ c: Ctx) {

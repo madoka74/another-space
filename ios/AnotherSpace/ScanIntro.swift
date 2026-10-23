@@ -119,7 +119,7 @@ final class ScanIntro {
         let mat = Self.material()
         for (k, g) in geos {
             guard let e = g.entity("scan\(k)", mat) else { continue }
-            e.components.set(OpacityComponent(opacity: 0))
+            e.setOpacity(0)
             e.isEnabled = false
             root.addChild(e)
             let d = Float(k) * step
@@ -184,7 +184,7 @@ final class ScanIntro {
             }
             let on = o > 0.01
             if e.isEnabled != on { e.isEnabled = on }
-            if on { e.components.set(OpacityComponent(opacity: o)) }
+            if on { e.setOpacity(o) }
         }
         if t > 2.2 {
             for e in rain {

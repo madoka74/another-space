@@ -417,6 +417,13 @@ def photo_band(name):
         first[none] = hh - 1
         pad = np.concatenate([first[-4:], first, first[:4]]).astype(np.float32)
         first = np.median(np.lib.stride_tricks.sliding_window_view(pad, 9), axis=1)        # 능선을 고르게 (한 바퀴 이어지게)
+        # 가늘게 솟은 것(전봇대·송전탑·안테나·외딴 나무 줄기)은 지움: 능선을 '열기'(좁은 창 최댓값 → 최솟값)로 깎아
+        # 폭 60칸(수 m)보다 좁게 위로 솟은 부분은 둘레 능선 높이로 — 멀리 산 위에 파란 세로 줄처럼 보였음
+        k = 61
+        padk = np.concatenate([first[-k:], first, first[:k]])
+        mx = np.max(np.lib.stride_tricks.sliding_window_view(padk, k), axis=1)          # 한 바퀴 이어서 (끝이 처음과 이어짐)
+        mn = np.min(np.lib.stride_tricks.sliding_window_view(mx, k), axis=1)
+        first = mn[1:len(first) + 1]
         sky_frac = float((first > hh * 0.3).mean())
         if sky_frac > 0.6:
             yy = np.arange(hh)[:, None].astype(np.float32)
@@ -854,6 +861,90 @@ def wood(seed, H=BH, W=BW, dark=(70, 50, 34), lit=(150, 116, 80), vertical=False
     return colorize(g, [(0, dark), (1, lit)])
 
 
+def townhouse(night=False):
+    """카페 맞은편 거리의 3층 건물 벽 (가로 6m × 세로 9m, 앱에서 건물마다 벽 색을 입힘): 밝은 회벽 바탕에
+    층마다 키 큰 창 둘(흰 창틀·창턱·위 장식), 층 사이 띠 돌림. 밤엔 창마다 켜짐·꺼짐·커튼 너머 어스름이 섞임"""
+    W, H = 512, 768
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    px = W / 6.0                                      # 1m = 85px
+    v = 0.7 + 0.2 * noise(1.4, W, 471, h=H) + 0.1 * noise(2.4, W, 472, h=H)
+    rgb = np.stack([v * 236, v * 230, v * 220], axis=-1)
+    r = rng(473)
+    litm = np.zeros((H, W), bool)
+    for fl in range(3):
+        y_floor = H - (fl + 1) * 3 * px               # 이 층 바닥 (그림 위쪽이 0)
+        band = (yy > y_floor - 0.12 * px) & (yy < y_floor + 0.06 * px)
+        rgb[band] = rgb[band] * 0.86
+        for k in range(2):
+            cx = (1.5 + 3 * k) * px
+            x0, x1 = cx - 0.55 * px, cx + 0.55 * px
+            yb = y_floor + 3 * px - 0.9 * px; yt = yb - 1.6 * px
+            frame = (xx > x0 - 0.1 * px) & (xx < x1 + 0.1 * px) & (yy > yt - 0.1 * px) & (yy < yb + 0.06 * px)
+            glass = (xx > x0) & (xx < x1) & (yy > yt) & (yy < yb)
+            rgb[frame] = [238, 236, 230]
+            if night:
+                t = r.random()
+                col = np.array([255, 200, 130.0]) * (0.75 + 0.25 * r.random()) if t < 0.38 else (np.array([110, 80, 54.0]) if t < 0.55 else np.array([14, 16, 22.0]))
+                rgb[glass] = col
+                if t < 0.55:
+                    litm |= glass
+            else:
+                g = 0.75 + 0.25 * (yy - yt) / max(1, (yb - yt))
+                rgb[glass] = (np.array([118, 138, 160.0])[None, :] * g[glass][:, None])
+            mull = glass & (np.abs(xx - cx) < 0.03 * px)
+            mull |= glass & (np.abs(yy - (yt + 0.55 * px)) < 0.03 * px)
+            rgb[mull] = [236, 234, 228]
+            sill = (xx > x0 - 0.18 * px) & (xx < x1 + 0.18 * px) & (yy > yb + 0.06 * px) & (yy < yb + 0.16 * px)
+            rgb[sill] = [212, 208, 200]
+            head = (xx > x0 - 0.16 * px) & (xx < x1 + 0.16 * px) & (yy > yt - 0.3 * px) & (yy < yt - 0.12 * px)
+            rgb[head] = rgb[head] * 0.9
+    if night:
+        out = rgb * 0.3
+        out[litm] = rgb[litm]
+        rgb = out
+    save_jpg('townhouse_night' if night else 'townhouse', rgb, q=90)
+
+
+def shopfront(night=False):
+    """거리 건물 1층 가게 앞 (가로 6m × 세로 3.2m): 위 간판 띠(앱에서 가게마다 색), 큰 진열창(가는 창살)과 유리문,
+    진열창 속 선반·물건 실루엣 — 낮엔 어두운 유리에 하늘빛, 밤엔 따뜻한 가게 불빛"""
+    W, H = 512, 272
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    px = W / 6.0
+    rgb = np.zeros((H, W, 3)) + [70, 64, 58]
+    sign = yy < 0.55 * px
+    rgb[sign] = [200, 196, 190]
+    rim = sign & ((yy < 0.05 * px) | (yy > 0.5 * px))
+    rgb[rim] = [150, 146, 140]
+    r = rng(481)
+    win = (yy > 0.75 * px) & (yy < H - 0.25 * px) & (xx > 0.2 * px) & (xx < 4.4 * px)
+    door = (yy > 0.75 * px) & (xx > 4.7 * px) & (xx < 5.75 * px)
+    inside = win | door
+    if night:
+        base = np.array([255, 196, 120.0])
+        glow_ = 0.75 + 0.25 * np.exp(-((xx - 2.4 * px) ** 2) / (2 * (1.6 * px) ** 2))
+        rgb[inside] = (base[None, :] * glow_[inside][:, None])
+        shelf_c = np.array([150, 96, 52.0])
+    else:
+        g = 0.55 + 0.35 * (yy / H)
+        rgb[inside] = (np.array([70, 86, 104.0])[None, :] * g[inside][:, None])
+        shelf_c = np.array([46, 44, 44.0])
+    # 진열창 속 선반과 물건 실루엣
+    for sy in (1.35, 1.95):
+        shelf = win & (np.abs(yy - sy * px) < 0.03 * px)
+        rgb[shelf] = shelf_c
+        x = 0.35 * px
+        while x < 4.2 * px:
+            w = r.uniform(0.12, 0.3) * px; h = r.uniform(0.15, 0.4) * px
+            obj = win & (xx > x) & (xx < x + w) & (yy < sy * px) & (yy > sy * px - h)
+            rgb[obj] = shelf_c * r.uniform(0.7, 1.3)
+            x += w + r.uniform(0.05, 0.25) * px
+    frame = ((np.abs(xx - 0.2 * px) < 3) | (np.abs(xx - 4.4 * px) < 3) | (np.abs(xx - 2.3 * px) < 2) | (np.abs(xx - 4.7 * px) < 3) | (np.abs(xx - 5.75 * px) < 3)) & (yy > 0.7 * px)
+    frame |= (np.abs(yy - 0.75 * px) < 3) & (xx > 0.15 * px) & (xx < 5.8 * px)
+    rgb[frame] = [30, 30, 32]
+    save_jpg('shopfront_night' if night else 'shopfront', rgb, q=90)
+
+
 def roof_tile():
     """시골집 지붕 기와 (밝은 회색 바탕 — 앱에서 집마다 붉은·푸른·갈색·초록으로 물들임): 가로 줄마다 엇갈린 둥근 기와,
     줄 아래쪽은 그늘, 기와마다 조금씩 다른 밝기와 얼룩"""
@@ -937,8 +1028,8 @@ def barrier_forest():
 
 
 def barrier_valley():
-    """냇가 바위 둑 (1m) — 크고 작은 둥근 바위가 겹겹이 놓이고 윗면엔 이끼, 틈엔 풀·고사리.
-    낮게 깔려서 그 너머 계곡 풍경(폭포·절벽·강)이 잘 보임"""
+    """냇가 바위 둑 (1.4m, 시골 돌담·캠핑장 울타리쯤) — 크고 작은 둥근 바위가 겹겹이 쌓이고 윗면엔 이끼, 틈엔 풀·고사리.
+    너무 높지 않아 그 너머 계곡 풍경(폭포·절벽·강)이 보이고, 너무 낮지 않아 계곡다운 바위 둑으로 보임"""
     yy, xx = np.mgrid[0:BH, 0:BW].astype(np.float32)
     rgb = np.zeros((BH, BW, 3)); a = np.zeros((BH, BW))
     r = rng(221)
@@ -948,7 +1039,7 @@ def barrier_valley():
     mossn = noise(2.0, BW, 226, h=BH)
     shape = noise(3.2, BW, 229, h=BH)          # 윤곽을 매끈하게 울퉁불퉁 (털처럼 보풀지 않게)
     # 뒤 줄(작고 높게) → 앞 줄(크고 낮게) 순으로 겹쳐 그림
-    rows = [(0.8, 0.18, 0.34, 30), (0.93, 0.24, 0.46, 22), (1.06, 0.3, 0.56, 14)]
+    rows = [(0.62, 0.28, 0.46, 30), (0.82, 0.32, 0.56, 22), (1.04, 0.36, 0.64, 14)]      # 1.4m 둑: 위 끝이 들쭉날쭉하게 거의 꽉 차게
     for ri, (base, hmin, hmax, cnt) in enumerate(rows):
         for _ in range(cnt):
             cx = r.random() * BW
@@ -2043,6 +2134,20 @@ def fire_art():
     rgba = np.concatenate([np.full((S2, S2, 3), 245.0), (a * 255)[..., None]], axis=-1)
     os.makedirs(os.path.join(OUT, 'tex'), exist_ok=True)
     Image.fromarray(rgba.astype(np.uint8), 'RGBA').save(os.path.join(OUT, 'tex', 'smoke_puff.png'), optimize=True)
+    # 연기 한 가닥 (그물 판으로 그리는 연기: 흰색 + 가림 그림 smoke_wisp_a) — 둥근 원반처럼 보이지 않게
+    # 가장자리가 불규칙하게 풀어진 옅은 덩어리, 가운데도 고르지 않게 결이 있음
+    S3 = 256
+    yy3, xx3 = np.mgrid[0:S3, 0:S3].astype(float)
+    u3, v3 = (xx3 - S3 / 2) / (S3 / 2), (yy3 - S3 / 2) / (S3 / 2)
+    warp = (noise(beta=2.4, size=S3, seed=931) - 0.5) * 0.5
+    d3 = np.sqrt((u3 + warp) ** 2 / 0.8 + (v3 - warp * 0.6) ** 2)
+    body = np.clip(1 - d3, 0, 1) ** 1.4
+    curl = noise(beta=1.6, size=S3, seed=932)
+    a3 = np.clip(body * (0.55 + 0.9 * (curl - 0.35)), 0, 1)
+    a3 = np.asarray(Image.fromarray((a3 * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(3))) / 255.0
+    a3 *= np.clip((1 - np.hypot(u3, v3)) * 2.5, 0, 1)
+    shade3 = 0.82 + 0.18 * (1 - np.clip(v3 + 0.3, 0, 1))
+    save_png('smoke_wisp', np.stack([shade3 * 248, shade3 * 248, shade3 * 250], axis=-1), a3 * 0.85)
     # 불티·숯불 알갱이 (가운데가 밝은 작은 점)
     a = np.clip(1 - d, 0, 1) ** 2.5
     rgba = np.concatenate([np.full((S2, S2, 3), 255.0), (a * 255)[..., None]], axis=-1)
@@ -2527,6 +2632,7 @@ def main():
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
             people(), menu_board(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True),
             jelly_art(), fish_art(), neon_art(), speaker_art(), roof_tile(),
+            townhouse(), townhouse(night=True), shopfront(), shopfront(night=True),
             photo_textures()),
         'sfx': lambda: sfx(),
         'cat': lambda: _cat(),

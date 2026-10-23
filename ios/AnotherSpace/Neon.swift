@@ -238,8 +238,8 @@ final class NeonCity {
                      period: Float.random(in: 0.6...1.6, using: &g), phase: Float.random(in: 0...6, using: &g),
                      startAt: Float.random(in: 0.2...3.5, using: &g), nextStutter: Float.random(in: 8...40, using: &g), near: near)
         s.p = p
-        for e in ents { e.components.set(OpacityComponent(opacity: 0)) }
-        spill?.components.set(OpacityComponent(opacity: 0))
+        for e in ents { e.setOpacity(0) }
+        spill?.setOpacity(0)
         if near {
             // 가까운 간판: 낮은 웅웅 소리
             if let u = Bundle.main.url(forResource: "neon_hum", withExtension: "wav", subdirectory: "sfx") {
@@ -296,8 +296,8 @@ final class NeonCity {
             }
             if abs(lv - s.level) > 0.02 || lv == 0 {
                 s.level = lv
-                for e in s.ents { e.components.set(OpacityComponent(opacity: max(0, min(1, lv)))) }
-                s.spill?.components.set(OpacityComponent(opacity: max(0, min(1, lv))))
+                for e in s.ents { e.setOpacity(max(0, min(1, lv))) }
+                s.spill?.setOpacity(max(0, min(1, lv)))
             }
         }
     }

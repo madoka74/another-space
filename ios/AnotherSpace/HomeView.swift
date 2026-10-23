@@ -227,6 +227,7 @@ struct SafetySheet: View {
                 Label("천천히 걸어요. 빠르거나 방 밖이면 현실이 보여요.", systemImage: "figure.walk")
                 Label("탭: 메뉴판 · 더블탭: 현실 원", systemImage: "hand.tap")
                 Label("닫힌 문 앞에선 현실 원이 저절로 열려요.", systemImage: "door.left.hand.closed")
+                Label("집·시골의 고양이 공·강아지 막대는 엄지·검지로 집어 던질 수 있어요.", systemImage: "pawprint")
                 Label("나가기: 메뉴판 또는 디지털 크라운", systemImage: "arrow.uturn.backward")
             }
             .font(.title3)

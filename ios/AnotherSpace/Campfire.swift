@@ -174,7 +174,7 @@ final class Campfire {
             gl = q.entity("fireGlow", m)
         }
         glow = gl
-        if let gl { gl.components.set(OpacityComponent(opacity: 0)); root.addChild(gl) }
+        if let gl { gl.setOpacity(0); root.addChild(gl) }
 
         // 불길: 일렁이는 불 그림 16장을 판마다 다른 장에서 시작해 넘김 (가운데 큰 불 + 둘레 작은 불혀). 그림이 없으면 예전 불꽃 모양
         let inkC = UIColor(white: 0.12, alpha: 1)
@@ -217,7 +217,7 @@ final class Campfire {
             flames.append((holder, Float(k) * 1.37 + Float.random(in: 0...1, using: &g), h))
             if !frameMats.isEmpty { flameCards.append((fl, start)) }
         }
-        flameRoot.components.set(OpacityComponent(opacity: tm == "morning" || tm == "afternoon" ? 0.85 : 1))
+        flameRoot.setOpacity(tm == "morning" || tm == "afternoon" ? 0.85 : 1)
         root.addChild(flameRoot)
         // 자리에 맞춘 크기 (좁으면 작은 모닥불): 돌·장작·숯·불길·바닥 불빛을 함께 줄임
         remains.scale = SIMD3<Float>(repeating: k)
@@ -464,7 +464,7 @@ final class Campfire {
     func revive() {
         guard dying, !done else { return }
         dying = false
-        remains.components.set(OpacityComponent(opacity: 1))
+        remains.setOpacity(1)
         setRate(smokeE, baseRates.2, on: true)
         setRate(skySmokeE, skyRate, on: true)
         setRate(steamE, baseRates.3, on: true)
@@ -508,7 +508,7 @@ final class Campfire {
                 setRate(steamE, 0, on: false)
             }
             let fadeR = max(0, 1 - max(0, dieT - 1.0) / 3.5)
-            remains.components.set(OpacityComponent(opacity: fadeR))
+            remains.setOpacity(fadeR)
             if dieT > 3.0 && dieT - dt <= 3.0 { setRate(skySmokeE, 0, on: false) }
             if dieT > 8.5 {
                 loop?.stop(); hiss?.stop()
@@ -551,11 +551,11 @@ final class Campfire {
         }
         if let gl = glow {
             let f = 0.85 + 0.15 * sin(t * 11) * sin(t * 4.7 + 0.6)
-            gl.components.set(OpacityComponent(opacity: glowK * amt * f * breath))
+            gl.setOpacity(glowK * amt * f * breath)
         }
         if let em = ember {
             let f: Float = dying ? max(0, 1 - dieT / 3) : 0.75 + 0.25 * sin(t * 1.3)
-            em.components.set(OpacityComponent(opacity: f))
+            em.setOpacity(f)
         }
     }
 
