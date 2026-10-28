@@ -264,7 +264,7 @@ final class HomeCat {
         var sm = UnlitMaterial(color: UIColor(white: 0, alpha: 1))
         if let mask = Tex.get("glow_a", raw: true) {
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
-            sm.blending = .transparent(opacity: .init(scale: 0.3, texture: mp))
+            sm.blending = .transparent(opacity: .init(scale: 0.42, texture: mp))      // 발밑이 바닥에 닿아 보이게 조금 짙게
             sm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         } else {
             sm.blending = .transparent(opacity: .init(floatLiteral: 0.15))
@@ -308,7 +308,7 @@ final class HomeCat {
         guard n != shown else { return }
         shown = n
         card.model?.materials = [mat(n)]
-        card.position.y = 0.008 + (Self.footPx[n] ?? 0) * 0.55 / 512      // 방 바닥 판(6mm 위)보다 살짝 위
+        card.position.y = 0.003 + (Self.footPx[n] ?? 0) * 0.55 / 512      // 발 끝이 방 바닥 판(6mm 위)에 3mm 닿아 묻히게 — 떠 보이지 않게 (보이는 묻힘은 1mm 남짓)
     }
 
     private func loop(_ frames: [String], fps: Float) -> String {
@@ -765,7 +765,7 @@ final class HomeCat {
         let q = simd_quatf(angle: yaw, axis: [0, 1, 0])
         // 가까이서 내려다볼 때도 잘 보이게 그림 판을 내 눈 쪽으로 젖힘 (발밑을 축으로)
         let flat = max(0.2, simd_length(SIMD2<Float>(d.x, d.z)))
-        let pitch = min(0.95, max(0, atan2(d.y - 0.2, flat))) * 0.8
+        let pitch = min(0.95, max(0, atan2(d.y - 0.2, flat))) * 0.5      // 많이 젖히면 바닥에서 일어선 판처럼 떠 보여 덜 젖힘
         card.orientation = q * simd_quatf(angle: -pitch, axis: [1, 0, 0])
         bubble.orientation = q * simd_quatf(angle: -pitch, axis: [1, 0, 0])
         // 돌아서기: 0.26초 동안 정면 그림을 거침 (가로로 살짝 좁아졌다 넓어짐)

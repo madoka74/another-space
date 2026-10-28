@@ -9,6 +9,9 @@ struct WallSeg: Sendable {
     var room: Int
     var window: Bool
     var inner = false          // 방과 방 사이 벽 (양쪽 방이 각자 1cm씩 안쪽에 하나씩 세움)
+    /// 바깥벽인데 벽 너머 45cm 안에 다른 방이 있음 (실제 벽 두께만큼 떨어진 옆방) → 그 방 번호, 없으면 0.
+    /// 이런 벽엔 창을 내지 않음 (창 너머가 바로 옆방이라 두 방이 서로 창을 그려 겹쳐 보이고, 옆방 물건이 창으로 비쳤음)
+    var nearRoom = 0
 }
 
 /// 문 하나 = 문·통로 사각형 하나가 두 방을 잇는 곳 (평면 좌표 m).
@@ -223,10 +226,21 @@ struct Layout: Sendable {
             }
             return false
         }
+        /// 바깥벽 칸 경계 (a~b 가운데, 바깥 방향 out) 너머 45cm 안에 있는 다른 방 (없으면 0)
+        func across(_ p: SIMD2<Float>, _ out: SIMD2<Float>, _ mine: Int) -> Int {
+            for k in 0..<9 {
+                let q = p + out * (0.025 + Float(k) * 0.05)
+                let u = Int(((q.x - bu) / r).rounded(.down)), v = Int(((q.y - bv) / r).rounded(.down))
+                guard u >= 0, v >= 0, u < w, v < h else { return 0 }
+                let i = v * w + u
+                if wk[i] != 0 { return Int(ow[i]) != mine ? Int(ow[i]) : 0 }
+            }
+            return 0
+        }
         var segs: [WallSeg] = []
         /// 같은 줄에서 이어지는 조각을 합침 (lane: 0 = 위·왼쪽 칸을 향한 벽, 1 = 아래·오른쪽 칸을 향한 벽)
         func merge(_ cur: inout [WallSeg?], _ lane: Int, _ seg: WallSeg?) {
-            if let s = seg, var c = cur[lane], c.room == s.room, c.n == s.n, c.window == s.window, c.inner == s.inner,
+            if let s = seg, var c = cur[lane], c.room == s.room, c.n == s.n, c.window == s.window, c.inner == s.inner, c.nearRoom == s.nearRoom,
                simd_distance(c.b, s.a) < 1e-4 {
                 c.b = s.b; cur[lane] = c
             } else {
@@ -246,7 +260,9 @@ struct Layout: Sendable {
                     let b = a + SIMD2<Float>(r, 0)
                     if (up == 0) != (dn == 0) {
                         let n = SIMD2<Float>(0, up != 0 ? -1 : 1)
-                        let seg = WallSeg(a: a, b: b, n: n, room: Int(ow[up != 0 ? iu : id]), window: isWin((a + b) / 2, -n))
+                        let rm = Int(ow[up != 0 ? iu : id])
+                        let nr = across((a + b) / 2, -n, rm)
+                        let seg = WallSeg(a: a, b: b, n: n, room: rm, window: nr == 0 && isWin((a + b) / 2, -n), nearRoom: nr)
                         lanes[up != 0 ? 0 : 1] = seg
                     } else if iu >= 0 && id >= 0 && split(iu, id) {
                         lanes[0] = WallSeg(a: a, b: b, n: SIMD2<Float>(0, -1), room: Int(ow[iu]), window: false, inner: true)
@@ -269,7 +285,9 @@ struct Layout: Sendable {
                     let b = a + SIMD2<Float>(0, r)
                     if (lf == 0) != (rt == 0) {
                         let n = SIMD2<Float>(lf != 0 ? -1 : 1, 0)
-                        let seg = WallSeg(a: a, b: b, n: n, room: Int(ow[lf != 0 ? il : ir]), window: isWin((a + b) / 2, -n))
+                        let rm = Int(ow[lf != 0 ? il : ir])
+                        let nr = across((a + b) / 2, -n, rm)
+                        let seg = WallSeg(a: a, b: b, n: n, room: rm, window: nr == 0 && isWin((a + b) / 2, -n), nearRoom: nr)
                         lanes[lf != 0 ? 0 : 1] = seg
                     } else if il >= 0 && ir >= 0 && split(il, ir) {
                         lanes[0] = WallSeg(a: a, b: b, n: SIMD2<Float>(-1, 0), room: Int(ow[il]), window: false, inner: true)

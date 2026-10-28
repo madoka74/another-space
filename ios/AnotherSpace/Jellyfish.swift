@@ -45,6 +45,8 @@ final class JellySea {
     private let ceilY: Float
     private let center: SIMD3<Float>
     private let reach: Float
+    private var worldC = SIMD3<Float>(0, 0, 0)       // 바다 위 해파리가 떠다니는 둘레의 가운데·반지름 (같은 세계 무리 전체)
+    private var worldR: Float = 1
     private let look: LookMode
     private let glowK: Float
     var head: SIMD3<Float>?
@@ -52,7 +54,9 @@ final class JellySea {
     private static let palette: [SIMD3<Float>] = [[0.55, 0.85, 1.0], [0.78, 0.62, 1.0], [1.0, 0.62, 0.86], [0.5, 1.0, 0.9],
                                                   [1.0, 0.78, 0.62], [0.72, 0.8, 1.0]]
 
-    init(center: SIMD3<Float>, halfSize: SIMD2<Float>, floorY: Float, ceilY: Float, layout: Layout, room: RoomRec, look: LookMode) {
+    /// outside: 바다 위 큰 해파리도 만들지 (같은 세계 무리에선 대표 방만), worldCenter·worldHalf: 무리 전체 가운데·크기 (바다 위 해파리 자리)
+    init(center: SIMD3<Float>, halfSize: SIMD2<Float>, floorY: Float, ceilY: Float, layout: Layout, room: RoomRec, look: LookMode,
+         outside: Bool = true, worldCenter: SIMD3<Float>? = nil, worldHalf: SIMD2<Float>? = nil) {
         self.L = layout
         self.roomId = room.id
         self.floorY = floorY
@@ -74,12 +78,16 @@ final class JellySea {
             add(inside: true, at: p, size: Float.random(in: 0.08...0.14, using: &g), color: Self.palette[i % Self.palette.count], &g)
         }
         // 방 밖 바다 위: 몇 마리만, 너무 크지 않게 (갓 지름 50cm~1m), 방에서 2~10m
-        for i in 0..<4 {
-            for _ in 0..<8 {
+        // (집 안 어디에도 1.5m 안으로 다가오지 않게 — 포털 너머 세계 것은 내 앞(옆방·문간 자리)에 있어도 그려져, 문 너머로 크게 보였음)
+        let wc = worldCenter ?? center
+        let wr = worldHalf.map { simd_length($0) } ?? reach
+        worldC = wc; worldR = wr
+        for i in 0..<(outside ? 4 : 0) {
+            for _ in 0..<12 {
                 let a = Float.random(in: 0...(2 * .pi), using: &g)
-                let d = reach + Float.random(in: 2...10, using: &g)
-                let p = SIMD3<Float>(center.x + cos(a) * d, floorY + Float.random(in: 1.4...4.5, using: &g), center.z + sin(a) * d)
-                guard !L.walkable(L.plane(p.x, p.z)) else { continue }
+                let d = wr + Float.random(in: 3...11, using: &g)
+                let p = SIMD3<Float>(wc.x + cos(a) * d, floorY + Float.random(in: 1.4...4.5, using: &g), wc.z + sin(a) * d)
+                guard !nearHouse(p) else { continue }
                 add(inside: false, at: p, size: Float.random(in: 0.25...0.5, using: &g), color: Self.palette[(i + 2) % Self.palette.count], &g)
                 break
             }
@@ -88,6 +96,15 @@ final class JellySea {
     }
 
     // MARK: 자리
+    /// 집 안(어느 방이든 걸을 수 있는 곳) 1.5m 안인지 — 바다 위 해파리는 늘 그 밖에서만
+    private func nearHouse(_ p: SIMD3<Float>) -> Bool {
+        for k in 0..<9 {
+            let a = Float(k) / 8 * 2 * .pi
+            let q = k == 8 ? p : p + SIMD3<Float>(cos(a), 0, sin(a)) * 1.5
+            if L.walkable(L.plane(q.x, q.z)) { return true }
+        }
+        return false
+    }
     private var lo: Float { floorY + min(1.35, ceilY - floorY - 0.7) }       // 가구보다 높이 (뒤가 벽·천장 창이라 또렷이 그려짐)
     // 빛무리(갓 크기의 3배 넘는 판)까지 천장 창 아래에 들게: 천장을 넘으면 그 면에서 곧게 잘려 보였음
     private var hi: Float { max(lo + 0.1, ceilY - 0.66) }
@@ -98,6 +115,9 @@ final class JellySea {
     private func insideOK(_ p: SIMD3<Float>) -> Bool {
         let c = L.at(x: p.x, z: p.z)
         guard c.room == roomId && c.wall > 0.55 else { return false }          // 빛무리까지 벽(창) 앞에 들게
+        // 문 자리 앞뒤 1m 안엔 가지 않음 (문간을 빛무리가 가득 채워 보였음)
+        let pl = L.plane(p.x, p.z)
+        if L.doors.contains(where: { !$0.single && $0.dist(pl) < 1.0 }) { return false }
         if let fh = furnitureH {
             let offs: [SIMD2<Float>] = [[0, 0], [0.3, 0], [-0.3, 0], [0, 0.3], [0, -0.3]]
             for o in offs where floorY + fh(SIMD2<Float>(p.x, p.z) + o) + 0.6 > p.y { return false }      // 갓 아래 촉수(약 50cm)까지 여유
@@ -322,10 +342,10 @@ final class JellySea {
                 } else {
                     let a = Float.random(in: 0...(2 * .pi), using: &g)
                     var p = j.pos + SIMD3<Float>(cos(a) * 2.5, Float.random(in: -1.2...1.2, using: &g), sin(a) * 2.5)
-                    let off = SIMD2<Float>(p.x - center.x, p.z - center.z)
+                    let off = SIMD2<Float>(p.x - worldC.x, p.z - worldC.z)
                     let r = simd_length(off)
-                    if r > reach + 11 { p.x = center.x + off.x / r * (reach + 9); p.z = center.z + off.y / r * (reach + 9) }
-                    if L.walkable(L.plane(p.x, p.z)) { p = j.pos }
+                    if r > worldR + 12 { p.x = worldC.x + off.x / r * (worldR + 10); p.z = worldC.z + off.y / r * (worldR + 10) }
+                    if nearHouse(p) { p = j.pos }
                     p.y = min(floorY + 5, max(floorY + 1.2, p.y))
                     j.target = p
                 }
@@ -352,7 +372,7 @@ final class JellySea {
                 if !insideOK(np) { j.vel.x *= -0.4; j.vel.z *= -0.4; np.x = j.pos.x; np.z = j.pos.z; j.retarget = 0 }
                 if np.y < lo || np.y > hi { j.vel.y *= -0.3 }
                 np.y = min(hi, max(lo, np.y))
-            } else if L.walkable(L.plane(np.x, np.z)) {
+            } else if nearHouse(np) {
                 np.x = j.pos.x; np.z = j.pos.z; j.retarget = 0
             }
             j.pos = np

@@ -135,29 +135,84 @@ def far_ear(hc, ang, ear_swing=0.0):
 
 
 # ───────── 옆모습 몸 ─────────
+def gait(base, p, stride, lift):
+    """발 하나의 걸음: 땅을 딛고 뒤로 미는 동안(62%)은 바닥에서 앞→뒤, 드는 동안(38%)은 들어 올려 앞으로.
+    돌려줌: (발 자리, 굽힘 0~1 — 들어 올리는 동안 무릎·발목이 접히는 정도)"""
+    p %= 1.0
+    if stride == 0:
+        return (base, FOOT_Y), 0.0
+    if p < 0.62:
+        u = p / 0.62
+        return (base + stride * (1 - 2 * u), FOOT_Y), 0.0
+    u = (p - 0.62) / 0.38
+    sm = u * u * (3 - 2 * u)
+    return (base - stride + 2 * stride * sm, FOOT_Y - lift * math.sin(math.pi * u)), math.sin(math.pi * u)
+
+
 def legs_pose(ph, stride=18, lift=12):
-    """걷는 발 네 개의 발 자리 (뒷다리 먼·가까운, 앞다리 먼·가까운)"""
-    def foot(px, p):
-        s = math.sin(p * 2 * math.pi)
-        c = math.cos(p * 2 * math.pi)
-        return (px + s * stride, FOOT_Y - max(0, c) * lift)
-    return [foot(198, ph + 0.5), foot(176, ph + 0.75), foot(284, ph), foot(304, ph + 0.25)]
+    """걷는 발 네 개 (뒷다리 먼·가까운, 앞다리 먼·가까운): (발 자리, 굽힘)"""
+    return [gait(198, ph + 0.5, stride, lift), gait(176, ph + 0.75, stride, lift),
+            gait(284, ph, stride, lift), gait(304, ph + 0.25, stride, lift)]
+
+
+def ik(a, t, l1, l2, bend):
+    """두 마디 다리: 뿌리 a 에서 끝 t 까지 길이 l1·l2 마디의 관절 자리. bend > 0 이면 관절이 앞(+x)으로, < 0 이면 뒤로"""
+    dx, dy = t[0] - a[0], t[1] - a[1]
+    d = max(abs(l1 - l2) + 1.0, min(l1 + l2 - 0.5, math.hypot(dx, dy)))
+    base = math.atan2(dy, dx)
+    c = max(-1.0, min(1.0, (l1 * l1 + d * d - l2 * l2) / (2 * l1 * d)))
+    A = math.acos(c)
+    j1 = (a[0] + l1 * math.cos(base + A), a[1] + l1 * math.sin(base + A))
+    j2 = (a[0] + l1 * math.cos(base - A), a[1] + l1 * math.sin(base - A))
+    return j1 if (j1[0] - j2[0]) * bend > 0 else j2
+
+
+def hind_leg(hip, foot, flex=0.0, k=1.0):
+    """뒷다리: 굵은 털 허벅지 → 무릎(앞으로 굽음) → 정강이 → 뒤꿈치(뒤로 꺾임) → 발등 → 둥근 털 발.
+    들어 올릴 때(flex) 뒤꿈치가 더 접혀 발이 몸 쪽으로 당겨짐"""
+    hock = (foot[0] - 15 - 12 * flex, foot[1] - 40 + 8 * flex)
+    stifle = ik(hip, hock, 62 * k, 56 * k, +1)
+    paw = (foot[0] + 4 - 4 * flex, foot[1])
+    return [capsule(hip, stifle, 33 * k, 25 * k), capsule(stifle, hock, 23 * k, 18 * k), fluff(stifle, 25 * k, 24 * k, 0, n=8, amp=0.07),
+            capsule(hock, (paw[0] - 2, paw[1] - 8), 18 * k, 17 * k), fluff(paw, 25 * k, 15 * k, -10 * flex, n=8, amp=0.07)]
+
+
+def front_leg(shoulder, foot, flex=0.0, k=1.0):
+    """앞다리: 어깨 → 팔꿈치(뒤로 굽음) → 아래팔(곧음) → 앞발목(들 때 뒤로 접힘) → 둥근 털 발"""
+    wrist = (foot[0] - 2 + 16 * flex, foot[1] - 24 + 6 * flex)
+    elbow = ik(shoulder, wrist, 52 * k, 64 * k, -1)
+    paw = (foot[0] + 3 - 6 * flex, foot[1])
+    return [capsule(shoulder, elbow, 29 * k, 23 * k), capsule(elbow, wrist, 22 * k, 19 * k),
+            capsule(wrist, (paw[0], paw[1] - 7), 19 * k, 17 * k), fluff(paw, 25 * k, 15 * k, 14 * flex, n=8, amp=0.07)]
 
 
 def leg(top, foot, r0=24, r1=21):
-    """곧고 굵은 다리 + 둥근 털 발 (한 덩어리)"""
+    """곧은 다리 + 둥근 털 발 (앉은 자세·정면·뒷모습에서 씀)"""
     return [capsule(top, (foot[0], foot[1] - 8), r0, r1), fluff((foot[0] + 3, foot[1]), 25, 15, 0, n=8, amp=0.07)]
+
+
+def _ff(f):
+    """발 자리만 주면 굽힘 0"""
+    if isinstance(f[0], tuple):
+        return f
+    return (f, 0.0)
 
 
 def draw_stand(cv, feet, body=(240, 318, 98, 58, -3), head=(366, 200), hang=0.0, mouth='closed', eyek='open',
                tail=(0.0,), ear_swing=0.0, tongue=0.0, bob=0.0, carry=False):
     bx, by, brx, bry, bang = body
     by += bob
-    (rf, rn, ff, fn) = feet
+    (rf, rfx), (rn, rnx), (ff, ffx), (fn, fnx) = [_ff(f) for f in feet]
     hc = (head[0], head[1] + bob * 0.6)
     tw = tail[0]
+    # 엉덩이·어깨 관절 자리 (몸이 기울면 같이): 뒷다리는 엉덩이 아래, 앞다리는 가슴 아래
+    ca, sa = math.cos(math.radians(bang)), math.sin(math.radians(bang))
+    def on_body(dx, dy):
+        return (bx + dx * ca - dy * sa, by + dx * sa + dy * ca)
+    hip_n, hip_f = on_body(-brx * 0.58, 14), on_body(-brx * 0.42, 10)
+    sho_n, sho_f = on_body(brx * 0.62, 16), on_body(brx * 0.46, 12)
     # 먼 다리·먼 귀 (뒤에, 조금 그늘)
-    layer(cv, leg((rf[0], by + 20), rf) + leg((ff[0], by + 20), ff) + [far_ear(hc, hang, ear_swing)], FUR_D)
+    layer(cv, hind_leg(hip_f, rf, rfx, 0.94) + front_leg(sho_f, ff, ffx, 0.94) + [far_ear(hc, hang, ear_swing)], FUR_D)
     # 한 덩어리: 몸 + 엉덩이 털 + 가슴 털 + 목 + 머리 + 가까운 다리 + 꼬리(방울)
     a = math.radians(tw)
     tb = (bx - brx * 0.86, by - bry * 0.55)                                 # 꼬리 밑동
@@ -168,14 +223,14 @@ def draw_stand(cv, feet, body=(240, 318, 98, 58, -3), head=(366, 200), hang=0.0,
               capsule((bx + brx * 0.72, by - 18), (hc[0] - 8, hc[1] + 28), 40, 36),  # 목
               capsule(tb, tt, 11, 9), fluff(tt, 25, 23, 0, n=10, amp=0.1)]
     shapes += side_head_shapes(hc, hang, 'closed' if carry else mouth)
-    shapes += leg((rn[0], by + 24), rn, 27, 22) + leg((fn[0], by + 22), fn, 25, 21)
+    shapes += hind_leg(hip_n, rn, rnx) + front_leg(sho_n, fn, fnx)
     layer(cv, shapes, FUR)
     patch(cv, [fluff((bx - 6, by - bry * 0.55), brx * 0.62, 16, bang, n=12, amp=0.08)], FUR_L)       # 등 빛
     curls(cv, (bx - 10, by + 4), brx * 0.7, bry * 0.55, 6, 1.3)
     curls(cv, (bx - brx * 0.62, by + 8), 30, 36, 3, 4.2)
-    for f in (rn, fn):                                                       # 다리 사이 가는 결
-        cv.line([(f[0] - 4, f[1] - 4), (f[0] - 4, f[1] + 8)], w=W_LINE * 0.3, col=OUTL)
-        cv.line([(f[0] + 8, f[1] - 4), (f[0] + 8, f[1] + 8)], w=W_LINE * 0.3, col=OUTL)
+    for f in (rn, fn):                                                       # 발가락 사이 가는 결
+        cv.line([(f[0] - 2, f[1] - 2), (f[0] - 2, f[1] + 8)], w=W_LINE * 0.3, col=OUTL)
+        cv.line([(f[0] + 10, f[1] - 2), (f[0] + 10, f[1] + 8)], w=W_LINE * 0.3, col=OUTL)
     side_head_detail(cv, hc, hang, 'closed' if carry else mouth, eyek, ear_swing, 0 if carry else tongue, carry=carry)
 
 

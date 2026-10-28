@@ -66,8 +66,16 @@ final class Scenery {
     private let floorY0: Float
     private let ceilY0: Float
 
+    private let roomCenter: SIMD3<Float>
+    private let roomHalf: SIMD2<Float>
+
+    /// center·halfSize: 하늘 세계 쪽 둘레 기준 (같은 세계 무리 전체), roomCenter·roomHalf: 이 방 자체 (방 안 먼지 등).
+    /// far: 하늘 세계 쪽 것(새·배·차·연기·낙엽)을 만들지 — 같은 세계 무리에선 대표 방만 (방마다 만들면 같은 하늘에 두 번 겹침)
     init(room: RoomRec, look: LookMode, tint: SIMD3<Float>, center: SIMD3<Float>, halfSize: SIMD2<Float>, angle: Float,
-         floorY: Float, ceilY: Float, segs: [WallSeg], layout: Layout, sortGroup: ModelSortGroup, blocked: Set<Int64> = []) {
+         floorY: Float, ceilY: Float, segs: [WallSeg], layout: Layout, sortGroup: ModelSortGroup, blocked: Set<Int64> = [],
+         far farOn: Bool = true, roomCenter: SIMD3<Float>? = nil, roomHalf: SIMD2<Float>? = nil) {
+        self.roomCenter = roomCenter ?? center
+        self.roomHalf = roomHalf ?? halfSize
         self.blocked = blocked
         self.roomRec = room
         self.segsAll = segs
@@ -84,34 +92,37 @@ final class Scenery {
         let night = room.time == "night"
         let wet = ["rain", "storm", "heavysnow"].contains(room.weather)
         let R = simd_length(halfSize)
+        let sky = farOn && !night && !wet           // 새 (하늘 세계 쪽, 대표 방만)
         switch room.place {
         case "camp":
-            if !night && !wet { addBirds(6, R: R, floorY: floorY, color: [0.12, 0.12, 0.14], using: &g) }
-            addCampfire(R: R, floorY: floorY, night: night || room.time == "dusk", using: &g)
+            if sky { addBirds(6, R: R, floorY: floorY, color: [0.12, 0.12, 0.14], using: &g) }
+            if farOn { addCampfire(R: R, floorY: floorY, night: night || room.time == "dusk", using: &g) }
         case "forest":
-            if !night && !wet { addBirds(5, R: R, floorY: floorY, color: [0.1, 0.1, 0.1], using: &g) }
-            addLeaves(R: R, floorY: floorY, tint: tint, using: &g)
+            if sky { addBirds(5, R: R, floorY: floorY, color: [0.1, 0.1, 0.1], using: &g) }
+            if farOn { addLeaves(R: R, floorY: floorY, tint: tint, using: &g) }
         case "valley":
-            if !night && !wet { addBirds(2, R: R, floorY: floorY, color: [0.16, 0.12, 0.1], big: true, using: &g) }
+            if sky { addBirds(2, R: R, floorY: floorY, color: [0.16, 0.12, 0.1], big: true, using: &g) }
             // (멀리 피어오르던 큰 물안개 입자는 뺌 — 크고 둥근 덩어리로 보이고 앞뒤가 깨져 보였음)
         case "sea":
-            if !night && !wet { addBirds(7, R: R, floorY: floorY, color: [0.95, 0.95, 0.95], using: &g) }
-            addBoats(R: R, floorY: floorY, night: night, using: &g)
+            if sky { addBirds(7, R: R, floorY: floorY, color: [0.95, 0.95, 0.95], using: &g) }
+            if farOn { addBoats(R: R, floorY: floorY, night: night, using: &g) }
         case "village":
-            if !night && !wet { addBirds(6, R: R, floorY: floorY, color: [0.12, 0.12, 0.12], using: &g) }
+            if sky { addBirds(6, R: R, floorY: floorY, color: [0.12, 0.12, 0.12], using: &g) }
             // 마을 집과 굴뚝 연기는 RoomWorld.addVillageHouses (입체 집 지붕 위 굴뚝에서 작게)
         case "city":
-            if !night && !wet { addBirds(4, R: R, floorY: floorY, color: [0.35, 0.35, 0.38], using: &g) }
-            addCars(R: R, floorY: floorY, night: night || room.time == "dusk", using: &g)
-            addPlane(floorY: floorY, using: &g)
+            if sky { addBirds(4, R: R, floorY: floorY, color: [0.35, 0.35, 0.38], using: &g) }
+            if farOn {
+                addCars(R: R, floorY: floorY, night: night || room.time == "dusk", using: &g)
+                addPlane(floorY: floorY, using: &g)
+            }
         case "cafe":
             addCafe(segs, floorY: floorY, ceilY: ceilY, night: night, using: &g)
             // 창밖 사람·자동차는 뺌 (벽을 뚫고 지나가 어색했음). 대신 가로수 낙엽·가로등 켜짐/깜빡임 — RoomWorld.tickCafe
         case "gallery":
-            if !night && !wet { addBirds(3, R: R, floorY: floorY, color: [0.15, 0.15, 0.15], using: &g) }
+            if sky { addBirds(3, R: R, floorY: floorY, color: [0.15, 0.15, 0.15], using: &g) }
             addDust(floorY: floorY)
         default:   // 집 (숲속 통나무집)
-            if !night && !wet { addBirds(4, R: R, floorY: floorY, color: [0.1, 0.1, 0.1], using: &g) }
+            if sky { addBirds(4, R: R, floorY: floorY, color: [0.1, 0.1, 0.1], using: &g) }
             addFireplace(segs, floorY: floorY, ceilY: ceilY, using: &g)
         }
     }
@@ -122,6 +133,7 @@ final class Scenery {
         guard !decorCells.isEmpty, !decorCells.isDisjoint(with: nb) else { return false }
         blocked = nb
         for c in Array(near.children) { c.removeFromParent() }
+        fireCtl?.stop(); fireCtl = nil; fireSound = nil
         flames.removeAll()
         decorCells.removeAll()
         var g = SeededRNG(seed: UInt64(roomRec.id * 4241 + 77))
@@ -130,6 +142,7 @@ final class Scenery {
                 addCafe(segsAll, floorY: floorY0, ceilY: ceilY0, night: roomRec.time == "night", using: &g)
             } else if roomRec.place == "home" {
                 addFireplace(segsAll, floorY: floorY0, ceilY: ceilY0, using: &g)
+                setSound(true)                        // 옮기는 것은 지금 방뿐 — 새 자리에서 장작 소리
             }
         }
         return true
@@ -651,7 +664,9 @@ final class Scenery {
                 let a = Float(k) / 9 * 2 * .pi
                 stones.rock(at: base + SIMD3<Float>(cos(a) * 0.55, 0, sin(a) * 0.55), size: 0.13, using: &rg)
             }
-            if let e = stones.entity("stones", solid([0.42, 0.4, 0.38])) { far.addChild(e) }
+            // 선 그림: 흰 돌 + 같은 펜 굵기 외곽선 (예전엔 검게 칠한 덩어리)
+            if let e = stones.entity("stones", look == .line ? Ink.paper(1) : solid([0.42, 0.4, 0.38])) { far.addChild(e) }
+            if look == .line, let h = stones.inkHull("stonesInk", width: { p in Geo.penWidth(at: simd_distance(p, self.center + SIMD3<Float>(0, 1.5, 0))) }) { far.addChild(h) }
             return
         }
     }
@@ -748,7 +763,9 @@ final class Scenery {
             }
         }
         if let e = wain.entity("wainscot", look == .line ? Ink.paper(1) : Tex.unlit("planks_dark", tint: [0.85, 0.72, 0.6], folder: "tex", sampler: Tex.tiling)) { near.addChild(e) }
-        if let e = rail.entity("rail", wood) { near.addChild(e) }
+        // 몰딩: 징두리 위 끝을 덮는 짙은 나무 띠 (예전엔 밝은 나무색 얇은 띠라 벽에 흰 줄처럼 보였음)
+        let railM: RealityKit.Material = look == .line ? Ink.paper(1) : Tex.unlit("planks_dark", tint: [0.62, 0.48, 0.36], folder: "tex", sampler: Tex.tiling)
+        if let e = rail.entity("rail", railM) { near.addChild(e) }
         // 메뉴판 (가장 긴 벽 가운데)
         if let s = walls.first, let sp = span(s), top > 2.1 {
             let (a, b, dir) = sp
@@ -757,20 +774,21 @@ final class Scenery {
             let w = min(1.0, simd_distance(a, b) - 0.2), h = min(1.15, top - 1.25)
             decorCells.formUnion(frontCells(s, mid: mid, width: w, depth: 0.6))
             let n = s.n
-            let c = p3(mid + n * 0.025, 1.15 + h / 2)
+            let c = p3(mid + n * 0.04, 1.15 + h / 2)                 // 칠판 면은 나무 틀 앞면(3.7cm)보다 앞에 (예전엔 틀 앞면이 칠판을 덮어 나무 판만 보였음), 틀 뒷면은 벽에서 7mm
             let n3 = SIMD3<Float>((L.flat(n) - L.flat(.zero)).x, 0, (L.flat(n) - L.flat(.zero)).y)
             let r3 = SIMD3<Float>((L.flat(dir) - L.flat(.zero)).x, 0, (L.flat(dir) - L.flat(.zero)).y)
             var board = Geo()
             let hw = r3 * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
             board.quad(c - hw - hh, c + hw - hh, c + hw + hh, c - hw + hh, SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
-            let bm: UnlitMaterial = look == .line ? Ink.paper(0) : {
-                var m = UnlitMaterial(color: Tex.color([0.12, 0.14, 0.13]))
+            // 칠판 그림 (선 그림이면 윤곽선 그림 menu_board_ln, 흑백이면 색을 뺀 그림 — Tex 가 표시 방식대로 읽음)
+            let bm: UnlitMaterial = {
+                var m = UnlitMaterial(color: look == .line ? .white : Tex.color([0.12, 0.14, 0.13]))
                 if let t = Tex.get("menu_board") { var p = MaterialParameters.Texture(t); p.sampler = Tex.clamp; m.color = .init(tint: .white, texture: p) }
                 return m
             }()
             if let e = board.entity("menu", bm) { near.addChild(e) }
             let frame = ModelEntity(mesh: .generateBox(width: w + 0.08, height: h + 0.08, depth: 0.03), materials: [wood])
-            frame.position = c - n3 * 0.012
+            frame.position = c - n3 * 0.018                        // 틀: 벽에서 0.3~3.3cm
             frame.orientation = simd_quatf(angle: atan2(n3.x, n3.z), axis: [0, 1, 0])
             near.addChild(frame)
             if look == .line {
@@ -784,7 +802,7 @@ final class Scenery {
             if cw >= 1.2 {
                 let yaw = atan2(n3.x, n3.z)
                 let rot = simd_quatf(angle: yaw, axis: [0, 1, 0])
-                let base = p3(mid, 0) + n3 * 0.21
+                let base = p3(mid, 0) + n3 * 0.218                  // 뒷면을 벽에서 8mm 띄움
                 decorCells.formUnion(frontCells(s, mid: mid, width: cw + 0.2, depth: 0.9))
                 func box(_ w: Float, _ h: Float, _ d: Float, _ at: SIMD3<Float>, _ m: RealityKit.Material, outline: Bool = true) {
                     let e = ModelEntity(mesh: .generateBox(width: w, height: h, depth: d), materials: [m])
@@ -888,7 +906,7 @@ final class Scenery {
             let r3 = SIMD3<Float>((L.flat(dir) - L.flat(.zero)).x, 0, (L.flat(dir) - L.flat(.zero)).y)
             let yaw = atan2(n3.x, n3.z)
             for y: Float in [1.55, 1.9] where y < top - 0.25 {
-                let c = p3(mid, y) + n3 * 0.07
+                let c = p3(mid, y) + n3 * 0.078                     // 뒷면을 벽에서 8mm 띄움 (옆방 벽과 같은 줄에 겹쳐 그 방에서 가는 막대로 비쳐 보였음)
                 let shelf = ModelEntity(mesh: .generateBox(width: len, height: 0.025, depth: 0.14), materials: [wood])
                 shelf.position = c
                 shelf.orientation = simd_quatf(angle: yaw, axis: [0, 1, 0])
@@ -933,6 +951,22 @@ final class Scenery {
                 }
             }
         }
+        // 포스터: 메뉴판·선반이 없는 벽의 빈 곳(벽 앞 35cm에 가구 없음)에 액자에 넣은 커피·디저트 포스터 — 눈높이, 벽마다 1~2장, 모두 4장까지.
+        // (그림 아이콘 + 읽히지 않는 흘림 글씨, 선 그림은 윤곽선 그림 cafe_poster_n_ln)
+        var posterK = Int.random(in: 0...3, using: &g)
+        var placed = 0
+        for s in walls.dropFirst(2) where placed < 4 && top > 2.0 {
+            guard let run = clearRun(s, doorEnds: doorEnds, depth: 0.35, minLen: 0.62) else { continue }
+            let L0 = simd_distance(s.a, s.b), dir = (s.b - s.a) / L0
+            let runLen = run.1 - run.0
+            let n = min(2, max(1, Int(runLen / 1.0)))
+            for k in 0..<n where placed < 4 {
+                let mid = s.a + dir * (run.0 + runLen * (Float(k) + 0.5) / Float(n))
+                addPoster(s, mid: mid, idx: posterK % 4, floorY: floorY, top: top, lines: &lines)
+                posterK += 1
+                placed += 1
+            }
+        }
         // 펜던트 조명: 짧게(아래 끝이 천장 30cm 아래) — 머리에 닿지 않게 천장이 2.3m 넘을 때만, 벽에서 60cm 안쪽에 1.6m 간격
         if top >= 2.3 {
             let shadeM = solid([0.12, 0.12, 0.13]), bulbM = solid(night ? [1, 0.82, 0.5] : [1, 0.92, 0.75])
@@ -971,6 +1005,37 @@ final class Scenery {
             }
         }
         if let e = lines.entity("cafeLines", Ink.line) { near.addChild(e) }
+    }
+
+    /// 액자 속 포스터 하나 (벽 s 의 mid 앞, 가운데 높이 1.45m — 천장이 낮으면 더 낮게)
+    private func addPoster(_ s: WallSeg, mid: SIMD2<Float>, idx: Int, floorY: Float, top: Float, lines: inout Geo) {
+        let w: Float = 0.42, h: Float = 0.58
+        let cy = min(1.45, top - 0.25 - h / 2)
+        let n3 = SIMD3<Float>((L.flat(s.n) - L.flat(.zero)).x, 0, (L.flat(s.n) - L.flat(.zero)).y)
+        let d2 = (s.b - s.a) / max(0.01, simd_distance(s.a, s.b))
+        let r3 = SIMD3<Float>((L.flat(d2) - L.flat(.zero)).x, 0, (L.flat(d2) - L.flat(.zero)).y)
+        let f = L.flat(mid)
+        let base = SIMD3<Float>(f.x, floorY + cy, f.y)
+        // 액자 (얇은 검은 나무 틀, 벽에서 0.2~2.2cm) + 그 앞 포스터 (2.4cm)
+        let frameM: RealityKit.Material = look == .line ? Ink.paper(0) : UnlitMaterial(color: Tex.color([0.1, 0.09, 0.08]))
+        let frame = ModelEntity(mesh: .generateBox(width: w + 0.05, height: h + 0.05, depth: 0.02), materials: [frameM])
+        frame.position = base + n3 * 0.018                  // 뒷면이 벽에서 8mm
+        frame.orientation = simd_quatf(angle: atan2(n3.x, n3.z), axis: [0, 1, 0])
+        near.addChild(frame)
+        var m = UnlitMaterial(color: .white)
+        if let t = Tex.get("cafe_poster_\(idx)") { var p = MaterialParameters.Texture(t); p.sampler = Tex.clamp; m.color = .init(tint: .white, texture: p) }
+        var q = Geo()
+        let c = base + n3 * 0.03
+        let hw = r3 * (w / 2), hh = SIMD3<Float>(0, h / 2, 0)
+        q.quad(c - hw - hh, c + hw - hh, c + hw + hh, c - hw + hh, SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
+        if let e = q.entity("poster\(idx)", m) { near.addChild(e) }
+        if look == .line {
+            let fw = r3 * (w / 2 + 0.025), fh = SIMD3<Float>(0, h / 2 + 0.025, 0), o = base + n3 * 0.032
+            for (p, r) in [(o - fw - fh, o + fw - fh), (o + fw - fh, o + fw + fh), (o + fw + fh, o - fw + fh), (o - fw + fh, o - fw - fh)] {
+                lines.stroke(p, r, width: 0.01)
+            }
+        }
+        decorCells.formUnion(frontCells(s, mid: mid, width: w + 0.1, depth: 0.35))
     }
 
     /// 카페 창밖 길을 지나가는 사람들 (창이 있는 벽 바깥 4~6m, 벽과 나란히 걸어감)
@@ -1016,7 +1081,8 @@ final class Scenery {
     }
 
     /// 벽 s 를 따라 문 끝(margin 안)을 피하고, 벽 앞 depth m 안에 가구 기둥이 없는 가장 긴 구간 (벽 시작점에서 거리 t0, t1)
-    private func clearRun(_ s: WallSeg, doorEnds: [SIMD2<Float>], depth: Float, minLen: Float) -> (Float, Float)? {
+    /// strict: 앞쪽이 모두 이 방 바닥이고 문이 쓸고 지나가는 자리도 아니어야 (벽난로처럼 앞이 트여 보여야 하는 것)
+    private func clearRun(_ s: WallSeg, doorEnds: [SIMD2<Float>], depth: Float, minLen: Float, strict: Bool = false) -> (Float, Float)? {
         let len = simd_distance(s.a, s.b)
         guard len > minLen else { return nil }
         let dir = (s.b - s.a) / len
@@ -1030,7 +1096,12 @@ final class Scenery {
             if ok {
                 var o: Float = 0.05
                 while o <= depth + 1e-3 {
-                    if blocked.contains(RoomWorld.clutterKey(q + s.n * o)) { ok = false; break }
+                    let qq = q + s.n * o
+                    if blocked.contains(RoomWorld.clutterKey(qq)) { ok = false; break }
+                    if strict {
+                        let w = L.flat(qq)
+                        if L.at(x: w.x, z: w.y).room != s.room || Skin.inSwing(L, qq) { ok = false; break }
+                    }
                     o += 0.1
                 }
             }
@@ -1048,7 +1119,8 @@ final class Scenery {
 
     // MARK: 통나무집 벽난로
     private func addFireplace<G: RandomNumberGenerator>(_ segs: [WallSeg], floorY: Float, ceilY: Float, using g: inout G) {
-        // 자리: 창이 아닌 벽 중 문 끝에서 50cm 떨어지고, 벽 앞 1m 안에 가구가 없는 1.5m 구간 (긴 벽부터)
+        // 자리: 창이 아닌 벽 중 문 끝에서 50cm 떨어지고, 벽 앞 1.3m가 모두 이 방의 빈 바닥(가구·문 쓸리는 자리 없음)인 1.7m 구간 (긴 벽부터).
+        // 그런 곳이 없으면 벽난로를 두지 않음 (가구에 묻히거나 막힌 자리에 억지로 두지 않게)
         var doorEnds: [SIMD2<Float>] = []
         for ds in L.doors {
             for r in [ds.roomA, ds.roomB] where segs.first?.room == r {
@@ -1058,7 +1130,7 @@ final class Scenery {
         }
         var pick: (WallSeg, SIMD2<Float>)? = nil
         for s in segs.filter({ !$0.window && simd_distance($0.a, $0.b) > 1.6 }).sorted(by: { simd_distance($0.a, $0.b) > simd_distance($1.a, $1.b) }) {
-            guard let run = clearRun(s, doorEnds: doorEnds, depth: 1.0, minLen: 1.5) else { continue }
+            guard let run = clearRun(s, doorEnds: doorEnds, depth: 1.3, minLen: 1.7, strict: true) else { continue }
             let dir = (s.b - s.a) / simd_distance(s.a, s.b)
             pick = (s, s.a + dir * ((run.0 + run.1) / 2))
             break
@@ -1076,20 +1148,20 @@ final class Scenery {
         // 둘레(양옆 기둥 + 위 선반) 깊이 22cm
         for x: Float in [-0.5, 0.5] {
             let p = ModelEntity(mesh: .generateBox(width: 0.24, height: 0.95, depth: 0.22), materials: [stone])
-            p.position = [x, 0.475, 0.11]
+            p.position = [x, 0.475, 0.118]                    // 뒷면·윤곽선을 벽에서 8mm 띄움 (옆방 벽과 같은 줄에 겹쳐 그 방에서 비쳐 보이지 않게)
             root.addChild(p)
         }
         let mantel = ModelEntity(mesh: .generateBox(width: 1.36, height: 0.12, depth: 0.28), materials: [stone])
-        mantel.position = [0, 1.0, 0.14]
+        mantel.position = [0, 1.0, 0.148]
         root.addChild(mantel)
         let box = ModelEntity(mesh: .generateBox(width: 0.76, height: 0.8, depth: 0.04), materials: [dark])
-        box.position = [0, 0.4, 0.02]
+        box.position = [0, 0.4, 0.028]
         root.addChild(box)
         if look == .line {
             var l = Geo()
-            l.boxOutline(base: [-0.5, 0, 0.11], w: 0.24, d: 0.22, h: 0.95, yaw: 0, width: 0.012)
-            l.boxOutline(base: [0.5, 0, 0.11], w: 0.24, d: 0.22, h: 0.95, yaw: 0, width: 0.012)
-            l.boxOutline(base: [0, 0.94, 0.14], w: 1.36, d: 0.28, h: 0.12, yaw: 0, width: 0.012)
+            l.boxOutline(base: [-0.5, 0, 0.118], w: 0.24, d: 0.22, h: 0.95, yaw: 0, width: 0.012)
+            l.boxOutline(base: [0.5, 0, 0.118], w: 0.24, d: 0.22, h: 0.95, yaw: 0, width: 0.012)
+            l.boxOutline(base: [0, 0.94, 0.148], w: 1.36, d: 0.28, h: 0.12, yaw: 0, width: 0.012)
             if let e = l.entity("fireLines", Ink.line) { root.addChild(e) }
         }
         // 불: 주황빛 입자 + 깜빡이는 불빛
@@ -1145,8 +1217,35 @@ final class Scenery {
             root.addChild(fl)
             flames.append((fl, Float(k) * 1.7 + Float.random(in: 0...1, using: &g)))
         }
+        // 장작 타는 소리 (벽난로 자리에서, 이 방에 있을 때만 — setSound)
+        let snd = Entity()
+        snd.position = [0, 0.3, 0.15]
+        var sa = SpatialAudioComponent()
+        sa.gain = 0
+        sa.distanceAttenuation = .rolloff(factor: 1.4)
+        snd.components.set(sa)
+        root.addChild(snd)
+        fireSound = snd
         near.addChild(root)
-        decorCells.formUnion(frontCells(s, mid: mid, width: 1.5, depth: 1.0))
+        decorCells.formUnion(frontCells(s, mid: mid, width: 1.7, depth: 1.3))
+    }
+
+    /// 벽난로 장작 소리: 이 방(같은 세계 무리)에 있을 때만 천천히 커지고, 나가면 줄어듦
+    private var fireSound: Entity?
+    private var fireCtl: AudioPlaybackController?
+    func setSound(_ on: Bool) {
+        guard let e = fireSound, e.parent != nil else { fireCtl?.stop(); fireCtl = nil; return }
+        if on {
+            if fireCtl == nil, let u = Bundle.main.url(forResource: "fire_loop", withExtension: "wav", subdirectory: "sfx"),
+               let r = try? AudioFileResource.load(contentsOf: u, withName: nil, configuration: .init(loadingStrategy: .preload, shouldLoop: true)) {
+                let c = e.playAudio(r)
+                c.gain = -60
+                fireCtl = c
+            }
+            fireCtl?.fade(to: -6, duration: 1.5)
+        } else {
+            fireCtl?.fade(to: -60, duration: 1.0)
+        }
     }
 
     // MARK: 전시관 먼지 빛
@@ -1154,11 +1253,11 @@ final class Scenery {
         var pe = ParticleEmitterComponent()
         pe.mainEmitter.image = Tex.particle("spark_dot")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
         pe.emitterShape = .box
-        pe.emitterShapeSize = SIMD3<Float>(max(0.5, halfSize.x * 2 - 0.8), 1.4, max(0.5, halfSize.y * 2 - 0.8))
+        pe.emitterShapeSize = SIMD3<Float>(max(0.5, roomHalf.x * 2 - 0.8), 1.4, max(0.5, roomHalf.y * 2 - 0.8))
         pe.birthLocation = .volume
         pe.speed = 0.02
         pe.speedVariation = 0.02
-        pe.mainEmitter.birthRate = min(30, 2.5 * halfSize.x * halfSize.y * 4)
+        pe.mainEmitter.birthRate = min(30, 2.5 * roomHalf.x * roomHalf.y * 4)
         pe.mainEmitter.lifeSpan = 8
         pe.mainEmitter.size = 0.004
         pe.mainEmitter.noiseStrength = 0.03
@@ -1167,7 +1266,7 @@ final class Scenery {
         pe.mainEmitter.opacityCurve = .gradualFadeInOut
         let e = Entity()
         e.components.set(pe)
-        e.position = center + SIMD3<Float>(0, 1.4, 0)
+        e.position = roomCenter + SIMD3<Float>(0, 1.4, 0)
         e.orientation = simd_quatf(angle: atan2(-ex.z, ex.x), axis: [0, 1, 0])
         e.components.set(ModelSortGroupComponent(group: sortGroup, order: 19))
         near.addChild(e)

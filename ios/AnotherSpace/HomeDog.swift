@@ -131,7 +131,7 @@ final class HomeDog {
         var sm = UnlitMaterial(color: UIColor(white: 0, alpha: 1))
         if let mask = Tex.get("glow_a", raw: true) {
             var mp = MaterialParameters.Texture(mask); mp.sampler = Tex.clamp
-            sm.blending = .transparent(opacity: .init(scale: 0.3, texture: mp))
+            sm.blending = .transparent(opacity: .init(scale: 0.42, texture: mp))      // 발밑이 바닥에 닿아 보이게 조금 짙게
             sm.writesDepth = false                 // 반투명 판이 뒤의 나무·물건을 네모나게 지우지 않게
         } else {
             sm.blending = .transparent(opacity: .init(floatLiteral: 0.15))
@@ -170,12 +170,12 @@ final class HomeDog {
 
     private var shown = ""
     /// 몸 맨 아래가 기본(486줄)과 다른 장 (누운 자세) — 그만큼 판을 올리거나(+) 내려(-) 바닥에 딱 닿게 (픽셀)
-    private static let footPx: [String: Float] = ["dog_roll0": -14, "dog_roll1": -14, "dog_sleep0": -13, "dog_sleep1": -9]
+    private static let footPx: [String: Float] = ["dog_roll0": -12, "dog_roll1": -12, "dog_sleep0": -12, "dog_sleep1": -8, "dog_lie0": 6, "dog_lie1": 6]      // 그림마다 바닥 줄이 486에서 벗어난 만큼 (잰 값)
     private func show(_ n: String) {
         guard n != shown else { return }
         shown = n
         card.model?.materials = [mat(n)]
-        card.position.y = 0.008 + (Self.footPx[n] ?? 0) * Self.size / 512      // 방 바닥 판(6mm 위)보다 살짝 위
+        card.position.y = 0.003 + (Self.footPx[n] ?? 0) * Self.size / 512      // 발 끝이 방 바닥 판(6mm 위)에 3mm 닿아 묻히게 — 떠 보이지 않게 (보이는 묻힘은 1mm 남짓)
     }
 
     private func loop(_ frames: [String], fps: Float) -> String {
@@ -526,7 +526,7 @@ final class HomeDog {
         let q = simd_quatf(angle: yaw, axis: [0, 1, 0])
         // 가까이서 내려다볼 때도 잘 보이게 그림 판을 내 눈 쪽으로 젖힘 (발밑을 축으로)
         let flat = max(0.2, simd_length(SIMD2<Float>(d.x, d.z)))
-        let pitch = min(0.95, max(0, atan2(d.y - 0.3, flat))) * 0.8
+        let pitch = min(0.95, max(0, atan2(d.y - 0.3, flat))) * 0.5      // 많이 젖히면 바닥에서 일어선 판처럼 떠 보여 덜 젖힘
         let tilt = simd_quatf(angle: -pitch, axis: [1, 0, 0])
         card.orientation = q * tilt
         bubble.orientation = q * tilt

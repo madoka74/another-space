@@ -280,13 +280,140 @@ struct Geo {
         }
     }
 
+    /// 선 그림 나무 수관·덤불 등 둥근 덩어리: rock() 과 같은 짜임(9×6)이라 inkHull 외곽선을 그대로 씀.
+    /// rx·rz 가로 반지름, up·down 위·아래 높이, pointy: 위로 갈수록 뾰족(침엽수 층), lumpy: 울퉁불퉁한 정도
+    @discardableResult
+    mutating func blob<G: RandomNumberGenerator>(at c: SIMD3<Float>, rx: Float, rz: Float, up: Float, down: Float, pointy: Bool = false,
+                                                 lumpy: Float = 0.12, yaw: Float = 0, using g: inout G) -> Int {
+        let seg = 9, rings = 6
+        let base = UInt32(pos.count)
+        if Geo.inkMin > 0 { rocksMade.append((Int(base), c)) }
+        var rad: [Float] = []
+        for _ in 0...(rings * (seg + 1)) { rad.append(1 + Float.random(in: -lumpy...lumpy, using: &g)) }
+        let ca = cos(yaw), sa = sin(yaw)
+        for r in 0...rings {
+            let el = Float.pi / 2 - Float.pi * Float(r) / Float(rings)
+            let k: Float = pointy && el > 0 ? pow(max(0, 1 - sin(el)), 0.85) : cos(el)
+            let y = sin(el) * (el > 0 ? up : down)
+            for q in 0...seg {
+                let az = Float(q) / Float(seg) * 2 * .pi
+                let j = min(rad.count - 1, r * (seg + 1) + (q == seg ? 0 : q))
+                let rr = (r == 0 || r == rings) ? 1 : rad[j]
+                let lx = cos(az) * rx * k * rr, lz = sin(az) * rz * k * rr
+                pos.append(c + SIMD3<Float>(lx * ca - lz * sa, y * (r == 0 || r == rings ? 1 : (1 + (rr - 1) * 0.5)), lx * sa + lz * ca))
+                uv.append(SIMD2<Float>(Float(q) / Float(seg), Float(r) / Float(rings)))
+            }
+        }
+        for r in 0..<UInt32(rings) {
+            for q in 0..<UInt32(seg) {
+                let a = base + r * UInt32(seg + 1) + q, b = a + UInt32(seg + 1)
+                idx += [a, b, a + 1, a + 1, b, b + 1, a, a + 1, b, a + 1, b + 1, b]
+            }
+        }
+        return Int(base)
+    }
+
+    /// 한쪽 면 사각형 (앞면이 out 쪽) — 외곽선 껍데기용
+    mutating func shellQuad(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ d: SIMD3<Float>, out: SIMD3<Float>) {
+        let n = simd_cross(b - a, c - a)
+        if simd_dot(n, out) >= 0 {
+            quad(a, b, c, d, .zero, .zero, .zero, .zero, twoSided: false)
+        } else {
+            quad(a, d, c, b, .zero, .zero, .zero, .zero, twoSided: false)
+        }
+    }
+
+    /// 선 그림 외곽선 껍데기: 줄기·가지(trunk 와 같은 모양)를 굵기 w만큼 부풀린 '바깥을 향한 면' — Ink.hullMat 으로 그리면 둘레에 검은 선
+    mutating func trunkHull(from a: SIMD3<Float>, to b: SIMD3<Float>, r0: Float, r1: Float, width w: Float, sides: Int = 8, segs: Int = 4, bend: SIMD3<Float> = .zero) {
+        let ax = simd_normalize(b - a)
+        let ref = abs(ax.y) > 0.9 ? SIMD3<Float>(1, 0, 0) : SIMD3<Float>(0, 1, 0)
+        let e1 = simd_normalize(simd_cross(ax, ref)), e2 = simd_cross(ax, e1)
+        func center(_ t: Float) -> SIMD3<Float> { a + (b - a) * t + bend * (4 * t * (1 - t)) }
+        func ring(_ t: Float) -> [SIMD3<Float>] {
+            let c = center(t)
+            let r = r0 + (r1 - r0) * t + w
+            return (0...sides).map { (k: Int) -> SIMD3<Float> in
+                let ang = Float(k) / Float(sides) * 2 * .pi
+                return c + (e1 * cos(ang) + e2 * sin(ang)) * r
+            }
+        }
+        var prev = ring(0)
+        for i in 1...segs {
+            let t1 = Float(i) / Float(segs)
+            let cur = ring(t1)
+            let mid = center((Float(i) - 0.5) / Float(segs))
+            for k in 0..<sides {
+                let m = (prev[k] + prev[k + 1] + cur[k + 1] + cur[k]) / 4
+                shellQuad(prev[k], prev[k + 1], cur[k + 1], cur[k], out: m - mid)
+            }
+            prev = cur
+        }
+    }
+
+    /// 선 그림 나무: 흰 종이 줄기·수관 + 같은 펜 굵기(w)의 외곽선. 잎 판(오려 낸 그림) 대신 덩어리로 그려 윤곽선이 또렷하고 굵기가 다른 물체와 같음.
+    /// kind: "tree_pine" 침엽수, "tree_twisted" 야자, 그 밖 넓은잎나무. paper: 수관·줄기(흰), hull: 외곽선 껍데기
+    static func inkTree<G: RandomNumberGenerator>(_ kind: String, _ paper: inout Geo, _ hull: inout Geo, at p: SIMD3<Float>,
+                                                  height h: Float, width w: Float, pen: Float, using g: inout G) {
+        switch kind {
+        case "tree_pine":
+            let r0 = h * 0.03, r1 = h * 0.008
+            paper.trunk(from: p - SIMD3<Float>(0, 0.2, 0), to: p + SIMD3<Float>(0, h * 0.3, 0), r0: r0, r1: r0 * 0.8, sides: 8, segs: 1)
+            hull.trunkHull(from: p - SIMD3<Float>(0, 0.2, 0), to: p + SIMD3<Float>(0, h * 0.3, 0), r0: r0, r1: r0 * 0.8, width: pen, segs: 1)
+            _ = r1
+            // 층층이 쌓인 원뿔 (아래가 넓고 위로 갈수록 좁게) — 위층이 아래층 끝을 조금 덮음
+            let tiers = 4
+            for k in 0..<tiers {
+                let t = Float(k) / Float(tiers)
+                let y = h * (0.24 + 0.62 * t)
+                let rr = (w / 2) * (1 - t * 0.72)
+                paper.blob(at: p + SIMD3<Float>(0, y, 0), rx: rr, rz: rr * Float.random(in: 0.9...1.1, using: &g), up: h * 0.3 * (1 - t * 0.3),
+                           down: h * 0.04, pointy: true, lumpy: 0.08, yaw: Float.random(in: 0...6.28, using: &g), using: &g)
+            }
+        case "tree_twisted":
+            let a0 = Float.random(in: 0...(2 * .pi), using: &g)
+            let lean = SIMD3<Float>(cos(a0), 0, sin(a0))
+            let top = p + SIMD3<Float>(0, h, 0) + lean * h * Float.random(in: 0.12...0.25, using: &g)
+            let bend = lean * h * 0.08
+            paper.trunk(from: p - SIMD3<Float>(0, 0.2, 0), to: top, r0: h * 0.03, r1: h * 0.019, sides: 8, segs: 6, bend: bend)
+            hull.trunkHull(from: p - SIMD3<Float>(0, 0.2, 0), to: top, r0: h * 0.03, r1: h * 0.019, width: pen, segs: 6, bend: bend)
+            // 잎: 사방으로 뻗어 끝이 처지는 길쭉한 잎 덩이
+            for j in 0..<8 {
+                let a = Float(j) / 8 * 2 * .pi + Float.random(in: -0.15...0.15, using: &g)
+                let L = h * Float.random(in: 0.2...0.26, using: &g)
+                let c = top + SIMD3<Float>(cos(a) * L, -L * 0.25, sin(a) * L)
+                paper.blob(at: c, rx: L * 1.05, rz: L * 0.22, up: L * 0.12, down: L * 0.3, lumpy: 0.06, yaw: -a, using: &g)
+            }
+        default:
+            let lean = SIMD3<Float>(Float.random(in: -0.04...0.04, using: &g), 0, Float.random(in: -0.04...0.04, using: &g)) * h
+            let top = p + SIMD3<Float>(0, h * 0.6, 0) + lean
+            paper.trunk(from: p - SIMD3<Float>(0, 0.2, 0), to: top, r0: h * 0.038, r1: h * 0.022, sides: 9, segs: 3)
+            hull.trunkHull(from: p - SIMD3<Float>(0, 0.2, 0), to: top, r0: h * 0.038, r1: h * 0.022, width: pen, sides: 9, segs: 3)
+            // 둥근 수관: 큰 덩어리 하나 + 둘레에 작은 덩어리 몇 개 (뭉게뭉게한 윤곽)
+            let c = p + SIMD3<Float>(0, h * 0.68, 0) + lean
+            let rx = w * 0.6, ry = h * 0.27
+            paper.blob(at: c, rx: rx, rz: rx * Float.random(in: 0.85...1.05, using: &g), up: ry, down: ry * 0.8, lumpy: 0.1, yaw: Float.random(in: 0...6.28, using: &g), using: &g)
+            for k in 0..<4 {
+                let a = Float(k) / 4 * 2 * .pi + Float.random(in: -0.4...0.4, using: &g)
+                let q = c + SIMD3<Float>(cos(a) * rx * 0.55, Float.random(in: -0.15...0.35, using: &g) * ry, sin(a) * rx * 0.55)
+                let s = rx * Float.random(in: 0.45...0.6, using: &g)
+                paper.blob(at: q, rx: s, rz: s, up: s * 0.85, down: s * 0.7, lumpy: 0.12, yaw: a, using: &g)
+            }
+        }
+    }
+
     /// 선 그림용 가는 선 (a→b, 굵기 w): 서로 직각인 얇은 띠 두 장 — 어느 쪽에서 봐도 선으로 보임
     /// 선 그림일 때 가장 가는 선 굵기 (Tex.look 이 선 그림이면 0.6cm) — 실내 가구 테두리(1cm)와 배경·소품의 선 굵기가 너무 달라
     /// 가는 선이 묻혀 보이던 것을 비슷한 굵기로 맞춤
     static var inkMin: Float = 0
+    /// 선 그림 방을 만드는 동안 보는 눈 자리 (방 가운데 1.5m 높이). 있으면 모든 선을 '눈에서 떨어진 거리에 맞춘 같은 펜 굵기'로 —
+    /// 가까운 실내·소품과 먼 나무·집·절벽 선이 눈에 비슷한 굵기로 보이게 (예전엔 곳마다 굵기를 따로 정해 가늘거나 굵었음)
+    static var inkEye: SIMD3<Float>?
+    /// 펜 굵기: 가까이 0.7cm, 2.5m 넘으면 거리에 비례 (Ink.width 와 같은 식)
+    static func penWidth(at d: Float) -> Float { 0.007 * max(1, d / 2.5) }
 
     mutating func stroke(_ a: SIMD3<Float>, _ b: SIMD3<Float>, width w0: Float) {
-        let w = max(w0, Geo.inkMin)
+        var w = max(w0, Geo.inkMin)
+        if let e = Geo.inkEye, Geo.inkMin > 0 { w = Geo.penWidth(at: simd_distance((a + b) / 2, e)) }
         let d = b - a
         let l = simd_length(d)
         guard l > 1e-4 else { return }

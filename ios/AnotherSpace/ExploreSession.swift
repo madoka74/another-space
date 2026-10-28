@@ -190,7 +190,7 @@ final class ExploreSession {
     @ObservationIgnored private var nearDoors: Set<Int> = []        // 1m 안 (1.2m 밖으로 나가야 빠짐 — 경계에서 깜빡이지 않게)
     @ObservationIgnored private var realHits: [Int: [UUID: Set<Int>]] = [:]   // 문 → 그물 덩어리마다 막힌 칸
     @ObservationIgnored private var cover: [Int: Float] = [:]       // 문틀 안쪽이 막힌 비율
-    @ObservationIgnored private var closeSince: [Int: Float] = [:]  // 막힘이 시작된 때 (0.6초 이어지면 닫힘)
+    @ObservationIgnored private var closeSince: [Int: Float] = [:]  // 닫힘 증거가 시작된 때 (1초 이어지면 닫힘)
     @ObservationIgnored private var doorSeenAt: [Int: Float] = [:]  // 그 문 자리를 그물·평면으로 마지막에 새로 본 때
     @ObservationIgnored private var nearAt: [Int: Float] = [:]      // 그 문 1m 안에 들어온 때
     @ObservationIgnored private var openHold: [Int: Float] = [:]    // 이때까지는 다시 닫힘으로 치지 않음 (방금 문 자리를 지남)
@@ -200,8 +200,12 @@ final class ExploreSession {
     @ObservationIgnored private var grip: [Int: (Float, Float, Float, Float)] = [:]   // 문 → (손이 문짝에 가장 가까웠던 거리, 처음 닿은 때, 마지막으로 닿아 있던 때, 닿은 쪽)
     @ObservationIgnored private var coverPeak: [Int: Float] = [:]   // 닫혀 있는 동안 가장 많이 막혔던 비율
     @ObservationIgnored private var leafLookAt: [Int: Float] = [:]   // 닫힌 실제 문짝을 마지막으로 바라본 때
-    @ObservationIgnored private var leafSince: [Int: Float] = [:]   // 닫힌 실제 문이 보이기 시작한 때
-    @ObservationIgnored private var leafSeen: Set<Int> = []         // 닫힌 실제 문이 보이던 문 (그 문이 열리면 바로 열린 공간으로)
+    @ObservationIgnored private var closedAt: [Int: Float] = [:]    // 실제 문이 닫힘으로 바뀐 때
+    @ObservationIgnored private var openedAt: [Int: Float] = [:]    // 실제 문이 마지막으로 열린 때 (그 뒤 3초 넘어 온 그물만 닫힘 증거)
+    @ObservationIgnored private var justOpened: [Int: Float] = [:]  // 이번에 열린 문 → 그 전에 닫혀 있던 시간 (문 판정이 한 번 읽고 지움)
+    @ObservationIgnored private var hitsAt: [Int: [UUID: Float]] = [:]   // 문 → 그물 덩어리마다 막힌 칸을 받은 때
+    @ObservationIgnored private var coverFresh: [Int: Float] = [:]  // 열린 뒤 새로 온 그물만으로 문틀 안쪽이 막힌 비율
+    @ObservationIgnored private var planeAcrossAt: [Int: Float] = [:]   // 문 면(평면)이 문 자리를 가로막은 것을 마지막으로 본 때
     @ObservationIgnored private var solidDoors: Set<Int> = []       // 지금 막혀 보이는 문 (벽 또는 닫힌 실제 문)
     @ObservationIgnored private var leafDoor: Int?                  // 가장 가까이 보이는 닫힌 실제 문
     @ObservationIgnored private var doorUrgent = false        // 실제 닫힌 문 앞 → 문 자리 그물을 더 자주 다시 봄
@@ -262,6 +266,9 @@ final class ExploreSession {
     @ObservationIgnored private var info: SkinInfo?
     @ObservationIgnored private var worlds: [Int: RoomWorld] = [:]
     @ObservationIgnored private var neighbors: [Int: Set<Int>] = [:]
+    /// 같은 세계 무리: 방 번호 → 무리 방 번호들(작은 순, 첫째가 대표). 문(한 방 안 문 제외)으로 이어진 같은 테마 방끼리 —
+    /// 대표 방이 하늘 세계를 무리 전체 둘레에 하나만 만들고 나머지는 함께 씀 (같은 테마 옆방이 한 공간으로 이어져 보이게)
+    @ObservationIgnored private var groups: [Int: [Int]] = [:]
     @ObservationIgnored private var themeTask: Task<Void, Never>?
     @ObservationIgnored private var saved: [String: AnchorRec] = [:]
     @ObservationIgnored private var allIds: Set<String> = []
@@ -334,6 +341,7 @@ final class ExploreSession {
         layout = L
         info = SkinInfo(d, L)
         neighbors = L.neighbors()
+        groups = Self.makeGroups(d, L)
         for a in d.rec.anchors { saved[a.a] = a }
         allIds = SpaceStore.allAnchorIds()
         root.addChild(spaceRoot)
@@ -464,14 +472,72 @@ final class ExploreSession {
         }
     }
 
+    /// 같은 세계 무리 나누기 (문으로 이어진 같은 테마 방끼리)
+    static func makeGroups(_ d: SpaceData, _ L: Layout) -> [Int: [Int]] {
+        var parent: [Int: Int] = [:]
+        for r in d.rec.rooms { parent[r.id] = r.id }
+        func find(_ x: Int) -> Int {
+            var x = x
+            while let p = parent[x], p != x { x = p }
+            return x
+        }
+        for ds in L.doors where !ds.single {
+            guard let a = d.rec.room(ds.roomA), let b = d.rec.room(ds.roomB), sameTheme(a, b) else { continue }
+            let ra = find(a.id), rb = find(b.id)
+            if ra != rb { parent[max(ra, rb)] = min(ra, rb) }
+        }
+        var members: [Int: [Int]] = [:]
+        for r in d.rec.rooms { members[find(r.id), default: []].append(r.id) }
+        var out: [Int: [Int]] = [:]
+        for (_, m) in members {
+            let sorted = m.sorted()
+            for id in sorted { out[id] = sorted }
+        }
+        return out
+    }
+
+    /// 방 세계 만들기. 같은 세계 무리의 다른 방이면 대표 방 세계를 먼저 (없거나 무리가 바뀌었으면 새로) 만들고 그 세계를 함께 씀
     @discardableResult
     private func addWorld(_ d: SpaceData, _ r: RoomRec, _ L: Layout) -> RoomWorld {
-        let w = RoomWorld(d, r, layout: L, blocked: vox?.blockedCells(minH: 0.2) ?? [])
-        spaceRoot.addChild(w.world)
+        let g = groups[r.id] ?? [r.id]
+        var host: RoomWorld? = nil
+        if let lead = g.first, lead != r.id, let lr = d.rec.room(lead) {
+            if let lw = worlds[lead], lw.ownsWorld, lw.groupIds == g {
+                host = lw
+            } else {
+                removeWorld(lead)
+                let lw = addWorld(d, lr, L)
+                Task { await hangGallery(lw) }
+                host = lw
+            }
+        }
+        let w = RoomWorld(d, r, layout: L, blocked: vox?.blockedCells(minH: 0.2) ?? [], group: g, host: host)
+        if w.ownsWorld { spaceRoot.addChild(w.world) }
         spaceRoot.addChild(w.local)
         worlds[r.id] = w
         vox?.restyle()
         return w
+    }
+
+    /// 무리·테마가 지금과 어긋난 방 세계 (테마를 바꾸다 그만뒀거나, 빌려 쓰는 대표 방 세계가 새로 바뀐 방)
+    private func staleRooms() -> Set<Int> {
+        guard let d = data else { return [] }
+        var out = Set<Int>()
+        for (id, w) in worlds {
+            let g = groups[id] ?? [id]
+            if w.groupIds != g { out.insert(id); continue }
+            if let rr = d.rec.room(id), !Self.sameTheme(rr, w.room) { out.insert(id); continue }
+            if let lead = g.first, lead != id, w.host !== worlds[lead] { out.insert(id) }
+        }
+        return out
+    }
+
+    /// 방 세계 치우기 (하늘 세계는 직접 만든 방만 치움 — 무리의 다른 방은 대표 방 것을 빌려 씀)
+    private func removeWorld(_ id: Int) {
+        guard let old = worlds[id] else { return }
+        if old.ownsWorld { old.world.removeFromParent() }
+        old.local.removeFromParent()
+        worlds[id] = nil
     }
 
     // MARK: 전시관 그림
@@ -513,11 +579,19 @@ final class ExploreSession {
     }
 
     /// 비·눈·반딧불은 지금 방과 이웃 방만 (문턱을 넘을 때 이미 내리고 있게)
+    /// 지금 방이 속한 같은 세계 무리 (혼자면 지금 방)
+    private var currentGroup: Set<Int> { Set(groups[current] ?? [current]) }
+
     private func refreshActive() {
-        let on = (neighbors[current] ?? []).union([current])
+        // 같은 세계 무리는 한 공간: 무리 전체가 '지금 방'(방 안 눈·비도 함께), 무리 방들의 이웃이 '이웃 방'
+        let cur = currentGroup
+        var on = cur
+        for id in cur { on.formUnion(neighbors[id] ?? []) }
+        var skyOn = on
+        for id in on { if let lead = groups[id]?.first { skyOn.insert(lead) } }      // 하늘 세계 쪽 눈·비는 그 세계를 만든 대표 방에 있음
         for (id, w) in worlds {
-            w.setActive(sky: on.contains(id), room: id == current)
-            w.setPortalTier(id == current ? 2 : (on.contains(id) ? 1 : 0))      // 포털 면은 지금 방 → 이웃 방 → 먼 방 순으로 나중에 그림
+            w.setActive(sky: skyOn.contains(id), room: cur.contains(id))
+            w.setPortalTier(cur.contains(id) ? 2 : (on.contains(id) ? 1 : 0))      // 포털 면은 지금 방 → 이웃 방 → 먼 방 순으로 나중에 그림
         }
     }
 
@@ -670,6 +744,7 @@ final class ExploreSession {
         hudUntil = t + 4
         guard var d = data, let L = layout, current != 0 else { return }
         let id = current
+        let oldGroups = groups
         d.setTheme(id, place: place, weather: weather, time: time, look: look)       // '모든 방 같게'면 모든 방이 바뀜
         data = d
         unified = d.rec.isUnified
@@ -680,6 +755,11 @@ final class ExploreSession {
         player.enter(r, force: true)
         themeQuiet = t + 3
         let targets = d.rec.isUnified ? d.rec.rooms.map(\.id) : [id]
+        // 같은 세계 무리가 바뀜: 바뀐 방의 예전 무리·새 무리 방도 모두 다시 만듦 (대표 방 먼저 — 나머지가 그 세계를 함께 씀)
+        groups = Self.makeGroups(d, L)
+        var affected = Set(targets)
+        for tg in targets { affected.formUnion(oldGroups[tg] ?? []); affected.formUnion(groups[tg] ?? []) }
+        let affectedRooms = affected
         closeDocent()
         fire?.remove(); fire = nil                                // 테마가 바뀌면 불도 새로 (다시 앉아 있으면 그 테마에 맞게 피어남)
         seated = false; sitT = 0
@@ -690,18 +770,26 @@ final class ExploreSession {
         themeTask = Task {
             await Tex.preload(RoomWorld.textures(r), look: r.lookMode)
             themeProg = 0.45
-            let order = [id] + targets.filter({ $0 != id })
+            // 대표 방 먼저, 그다음 지금 방, 나머지 (앞서 바꾸다 그만둔 방·무리가 어긋난 방도 함께)
+            let order = affectedRooms.union(staleRooms()).sorted { a, b in
+                let la = self.groups[a]?.first == a, lb = self.groups[b]?.first == b
+                if la != lb { return la }
+                if (a == id) != (b == id) { return a == id }
+                return a < b
+            }
             defer { themeProg = nil }
+            var done = Set<Int>()
             for (k, rid) in order.enumerated() {
                 themeProg = 0.45 + 0.55 * Float(k) / Float(max(1, order.count))
                 guard !Task.isCancelled, !ended else { return }
                 let dd = data ?? snapshot
                 guard let rr = dd.rec.room(rid) else { continue }
-                if let old = worlds[rid] {
-                    old.world.removeFromParent()
-                    old.local.removeFromParent()
-                }
+                // 대표 방을 새로 만들며 함께 만든 방(addWorld가 대표 방을 먼저 만듦)은 건너뜀
+                if done.contains(rid), let w = worlds[rid], w.groupIds == (groups[rid] ?? [rid]) { continue }
+                removeWorld(rid)
                 let nw = addWorld(dd, rr, L)
+                done.insert(rid)
+                if let h = nw.host { done.insert(h.room.id) }
                 Task { await hangGallery(nw) }
                 refreshActive()
                 await Task.yield()
@@ -785,16 +873,16 @@ final class ExploreSession {
             }
             if let n = now { doorPlanes[a.id] = n; doorSeenAt[n.0] = t } else { doorPlanes[a.id] = nil }
             if let n = now, n.1 {
-                // 문 자리를 가로막은 문 면 → 닫힘 (그물을 기다리지 않음). 방금 손·그물로 열림을 알았으면 그동안은 늦게 온 평면을 믿지 않음
-                if t > (openHold[n.0] ?? 0) && !realClosed.contains(n.0) { realClosed.insert(n.0) }
-                closeSince[n.0] = nil
+                // 문 자리를 가로막은 문 면 → 닫힘 증거 (문 판정이 그물과 함께 따져 1초 이어지면 닫음 — closingEvidence)
+                planeAcrossAt[n.0] = t
             } else if let w = was, w.1, u.event == .updated {
                 // 가로막고 있던 문 면이 젖혀지거나 자리를 벗어남 → 바로 열림.
                 // (평면이 사라지는 것만으로는 열림으로 치지 않음: 비전프로가 평면을 합치거나 다시 만들 때도 사라졌다 새로 생김)
-                realClosed.remove(w.0)
+                planeAcrossAt[w.0] = nil
+                realOpen(w.0, hold: 6)
                 realHits[w.0] = [:]
-                closeSince[w.0] = nil
-                openHold[w.0] = t + 6
+                hitsAt[w.0] = [:]
+                coverFresh[w.0] = 0
             }
         }
     }
@@ -1138,7 +1226,8 @@ final class ExploreSession {
             let hs = f.toSaved(head)
             wld.avoidHead(L.plane(hs.x, hs.z))
         }
-        for (id, wld) in worlds { wld.tick(dt, active: id == current) }
+        let cg = currentGroup
+        for (id, wld) in worlds { wld.tick(dt, active: cg.contains(id)) }        // 같은 세계 무리는 대표 방(하늘 세계 쪽 구름·배·새)까지 함께 움직임
         soundTick(dt)
         placeHud(dt)
         placeDocent(dt)
@@ -1248,9 +1337,9 @@ final class ExploreSession {
         }
         let gaze = f.dirToSaved(fwd)
         // 계곡: 개울·폭포 물소리
-        waterSound.set(rm.place == "valley" && fade > 0.5, stream: wld.riverNear, fall: wld.fallSpot)
+        waterSound.set(rm.place == "valley" && fade > 0.5, stream: wld.streamSpot, fall: wld.fallSound)
         // 밤하늘 (모든 장소: 별·달, 숲은 별자리까지) — 방 세계가 만들어 둔 것. 지금 방 것만 반짝임·포커스를 계산
-        let sky = wld.stars
+        let sky = wld.skyStars
         if stars !== sky {
             if starPick != nil { closeStars() }
             stars = sky
@@ -1411,9 +1500,11 @@ final class ExploreSession {
         let hs = f.toSaved(head)
         let h: Float = hs.y - L.floorY
         // 서 있는 높이: 더 높아지면 바로, 걷는 동안엔 천천히 따라감 (앉아 있을 땐 그대로)
-        if standH == 0 || h > standH { standH = h } else if speed > 0.3 && !seated { standH += (h - standH) * min(1, dt * 0.4) }
+        // (처음부터 앉아서 시작하면 서 있는 높이를 모르므로 처음 값은 적어도 1.55m로 잡음)
+        if standH == 0 { standH = max(h, 1.55) } else if h > standH { standH = h } else if speed > 0.3 && !seated { standH += (h - standH) * min(1, dt * 0.4) }
         // 앉음: 서 있을 때보다 머리가 28cm 넘게 낮아짐 (소파·의자·바닥 어디든, 키와 상관없이 — 예전엔 '바닥에서 1.35m 아래'도 따져 키 큰 사람은 아래를 봐야만 됐음)
-        let low = h < standH - 0.28 && h > 0.3
+        // 또는 바닥에서 눈까지 1.25m 아래 — 의자·소파에 앉은 높이 (처음부터 앉아서 시작해도 알아봄)
+        let low = (h < standH - 0.28 || h < 1.25) && h > 0.3
         if !seated {
             sitT = (low && speed < 0.15) ? sitT + dt : 0
             if sitT > 0.8 {                                     // 앉고 1초쯤이면 불이 피어남 (어디를 보고 있든)
@@ -1535,15 +1626,61 @@ final class ExploreSession {
     }
 
     // MARK: 문
-    /// 기준은 모두 1m (1.2m 밖으로 나가야 멀어진 것으로 침 — 경계에서 깜빡이지 않게).
-    /// - 실제 문이 닫혀 있으면: 같은 세계든 다른 세계든 1m 안에서 닫힌 문(손잡이 문)이 보이고, 현실 창이 저절로 열림
-    /// - 실제 문이 열려 있으면: 같은 세계는 그대로 이어지고, 다른 세계는 1m 안에서 열쇠 문 → 열쇠를 누르면 열림
-    /// - 멀리서는: 같은 세계는 뚫린 통로, 다른 세계는 지금 방의 벽
+    /// 문 하나마다 상태 하나 — 매 프레임 아래 두 가지만 보고 '보이는 모양'을 하나로 정함 (예전처럼 경우마다 덧댄 깃발이 서로 엇갈려
+    /// 문이 나타났다 사라졌다 하지 않게).
+    ///
+    /// ① 실제 문 (realClosed): 닫힘은 '새 증거'로만, 천천히 / 열림은 바로.
+    ///   - 열림: 손으로 당기거나 밂, 문 면(평면)이 젖혀짐, 그물에서 막힘이 크게 줄어듦, 문 자리에 섬 → 바로 열림 (realOpen)
+    ///   - 닫힘: 열린 뒤 3초 넘어 새로 온 그물이 문틀을 55% 넘게 덮거나, 문 면(평면)이 문 자리를 가로막고 그물도 40% 넘게 덮을 때,
+    ///     그 상태가 1초 이어지고, 방금 열린 뒤 몇 초(openHold)가 지났고, 내가 문 자리에 서 있지 않을 때만.
+    ///     (예전엔 문을 연 뒤에도 늦게 오는 그물·평면이 아직 닫힌 문짝을 담고 있어 닫힘으로 되돌렸다가 다시 열림을 반복 →
+    ///      문을 연 뒤 열린 공간과 닫힌 문이 번갈아 보였고, 같은 테마에서도 문짝이 나타났다 사라졌음)
+    /// ② 열쇠 (doorOpen, 다른 세계 사이만): 열쇠를 누르거나, 문 자리에 들어서거나, 1초 넘게 보이던 닫힌 실제 문을 곁에서 열면 열림.
+    ///   건너가면(12cm 넘게) 또는 같은 쪽으로 1.2m 넘게 멀어지면 다시 잠김.
+    ///
+    /// 보이는 모양 (위에서부터 먼저 맞는 것):
+    ///   닫힌 실제 문이 1m 안 → 실제 문짝(손잡이 문) / 같은 세계 → 늘 뚫린 통로 / 여는 중 → 열쇠 움직임 /
+    ///   열쇠로 열림 → 뚫린 통로 / 1m 안(문 밖, 막 지나오지 않음) → 열쇠 문 / 그 밖 → 지금 방의 벽
     static let doorReach: Float = 1.0
 
+    private enum DoorLook { case leaf, open, opening, key, wall }
+
+    /// 같은 세계 (장소·날씨·시간·표시 방식이 모두 같음) — 같은 세계 무리로 묶이고, 사이 문은 늘 뚫린 통로
+    static func sameTheme(_ a: RoomRec, _ b: RoomRec) -> Bool {
+        a.place == b.place && a.weather == b.weather && a.time == b.time && a.lookMode == b.lookMode
+    }
+
+    /// 실제 문이 열렸다고 알게 됨. hold 초 동안은 다시 닫힘으로 치지 않음 (늦게 오는 그물·평면 무시)
+    private func realOpen(_ i: Int, hold: Float) {
+        if realClosed.contains(i) {
+            realClosed.remove(i)
+            justOpened[i] = t - (closedAt[i] ?? t)          // 얼마 동안 닫혀 있었는지 (곁에서 1초 넘게 보던 문을 열면 열쇠 없이 열린 것으로)
+        }
+        closedAt[i] = nil
+        closeSince[i] = nil
+        coverPeak[i] = nil
+        cover[i] = 0                     // 예전 막힘 비율은 버림 — 새 그물이 오기 전엔 문 면(평면)만으로 다시 닫지 않게
+        coverFresh[i] = 0
+        openedAt[i] = t
+        openHold[i] = max(openHold[i] ?? 0, t + hold)
+    }
+
+    private func realClose(_ i: Int) {
+        guard !realClosed.contains(i) else { return }
+        realClosed.insert(i)
+        closedAt[i] = t
+        closeSince[i] = nil
+    }
+
+    /// 닫힘 후보인지: 열린 뒤 새로 온 그물이 문틀을 55% 넘게 덮음, 또는 3초 안에 문 면이 가로막았고 그물도 40% 넘게 덮음(그물이 아직 없으면 평면만으로)
+    private func closingEvidence(_ i: Int) -> Bool {
+        if (coverFresh[i] ?? 0) > 0.55 { return true }
+        if let pa = planeAcrossAt[i], t - pa < 3, pa > (openedAt[i] ?? -100) + 1, (cover[i] ?? 0.5) > 0.4 { return true }
+        return false
+    }
+
     /// hs: 눈(기기) 자리 — 시선 판정용, bs: 몸(목 뒤) 자리 — 문까지 거리·문 안에 섰는지·어느 쪽인지 판정용.
-    /// (예전엔 눈 자리로 판정해, 문을 지나온 뒤 돌아서거나 고개만 숙여도 눈이 10~15cm 움직여 '문 자리 안'으로 잘못 알고
-    /// 열쇠 없이 문이 열려 버리거나, 넘어갔다 돌아왔다를 오가며 열쇠 문·벽이 번갈아 나타났음)
+    /// (눈 자리로 판정하면 돌아서거나 고개만 숙여도 눈이 10~15cm 움직여 '문 자리 안'으로 잘못 알았음)
     private func updateDoors(_ dt: Float, _ hs: SIMD3<Float>, _ bs: SIMD3<Float>, _ fs: SIMD3<Float>, _ L: Layout) {
         guard let d = data else { return }
         let p = L.plane(bs.x, bs.z)
@@ -1557,9 +1694,8 @@ final class ExploreSession {
         var anyLeaf = false
         for (i, ds) in L.doors.enumerated() {
             var same = ds.single
-            if !same, let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) {
-                same = ra.place == rb.place && ra.weather == rb.weather && ra.time == rb.time && ra.lookMode == rb.lookMode
-            }
+            if !same, let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) { same = Self.sameTheme(ra, rb) }
+            // ── 곁에 있는지 (1m 안, 1.2m 밖으로 나가야 멀어짐)
             let dist = ds.dist(p)
             if dist < Self.doorReach {
                 if !nearDoors.contains(i) { nearAt[i] = t }
@@ -1569,51 +1705,48 @@ final class ExploreSession {
             let inside = ds.inside(p)
             let side = ds.side(p)
             let here = side >= 0 ? ds.roomA : ds.roomB
-            // 문 자리 한가운데에 서 있으면 실제 문은 열려 있는 것 (닫힌 문 자리엔 설 수 없음)
-            if ds.zone(p, margin: 0.05, side: -0.1) {
-                openHold[i] = max(openHold[i] ?? 0, t + 2)
+            if !inside { lastSide[i] = side }
+
+            // ── ① 실제 문
+            let standing = ds.zone(p, margin: 0.05, side: -0.1)              // 문 자리 한가운데 = 실제 문은 열려 있음 (닫힌 문 자리엔 설 수 없음)
+            if standing { realOpen(i, hold: 2) }
+            if closingEvidence(i) && !realClosed.contains(i) {
+                if closeSince[i] == nil { closeSince[i] = t }
+                if let c0 = closeSince[i], t - c0 > 1.0, t > (openHold[i] ?? 0), !standing { realClose(i) }
+            } else {
                 closeSince[i] = nil
-                realClosed.remove(i)
-            }
-            // 막힘이 1초 넘게 이어지면 닫힘 (그물이 잠깐 흔들려 닫혔다 열렸다 하지 않게)
-            if let c0 = closeSince[i], t - c0 > 1.0 {
-                closeSince[i] = nil
-                if (cover[i] ?? 0) > 0.55 && t > (openHold[i] ?? 0) { realClosed.insert(i) }
             }
             let real = realClosed.contains(i)
-            let leafOn = real && near
-            // 문은 한 번만: 닫힌 실제 문(손잡이 문)을 보고 있다가 실제 문을 열면 그대로 열린 공간 (열쇠 문을 또 보이지 않음)
-            // (닫힌 문이 1.2초 넘게 보였을 때만 '봤다'로 침 — 그물이 잠깐 흔들려 닫힌 문으로 잘못 알았다 풀리면
-            //  예전엔 그때마다 문이 열린 것으로 처리돼, 열쇠 문이 사라지고 지나온 방 풍경이 그대로 보였음)
-            if leafOn {
-                if leafSince[i] == nil { leafSince[i] = t }
-                if t - (leafSince[i] ?? t) > 1.2 { leafSeen.insert(i) }
-            } else if leafSeen.contains(i) {
-                leafSince[i] = nil
-                leafSeen.remove(i)
-                if !real && near && !same && !doorOpen.contains(i) { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
-            }
-            if !leafOn && !leafSeen.contains(i) { leafSince[i] = nil }
-            if !same {
+
+            // ── ② 열쇠 (다른 세계 사이만)
+            if same {
+                doorOpen.remove(i)
+            } else {
+                if let dur = justOpened[i], near, dur > 1.0, !doorOpen.contains(i), openProg[i] == nil {
+                    doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side          // 곁에서 보던 닫힌 실제 문을 열었음 → 열쇠 없이 열린 공간
+                }
                 if inside {
                     if !doorOpen.contains(i) && openProg[i] == nil { doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side }
-                } else {
-                    lastSide[i] = side
-                    if doorOpen.contains(i) {
-                        let crossed = (doorSide[i] ?? side) * side < 0 && abs(side) > 0.12      // 12cm 넘게 건너가야 (문턱에서 오락가락하지 않게)
-                        if crossed {
-                            doorOpen.remove(i)
-                            doorShow[i] = 0
-                            passed.insert(i)
-                            openHold[i] = max(openHold[i] ?? 0, t + 6)          // 방금 지나온 문은 6초 동안 '닫힘'으로 바뀌지 않음 (돌아볼 때 깜빡이지 않게)
-                            realClosed.remove(i)
-                        } else if !near {
-                            doorOpen.remove(i)
-                        }
+                } else if doorOpen.contains(i) {
+                    let crossed = (doorSide[i] ?? side) * side < 0 && abs(side) > 0.12      // 12cm 넘게 건너가야 (문턱에서 오락가락하지 않게)
+                    if crossed {
+                        doorOpen.remove(i)
+                        doorShow[i] = 0
+                        passed.insert(i)
+                        openHold[i] = max(openHold[i] ?? 0, t + 6)          // 방금 지나온 문은 6초 동안 '닫힘'으로 바뀌지 않음
+                    } else if !near {
+                        doorOpen.remove(i)
                     }
                 }
             }
-            // 열쇠 움직임 (1.1초): 열쇠가 구멍으로 → 돌고 → 문짝이 양옆 벽 속으로
+            justOpened[i] = nil
+            if passed.contains(i) {
+                let to = ds.mid - p
+                let facing = simd_length(to) > 0.05 && simd_dot(simd_normalize(to), look) > 0.8
+                if !near || facing { passed.remove(i) }
+            }
+
+            // ── 열쇠 움직임 (1.1초): 열쇠가 구멍으로 → 돌고 → 문짝이 양옆 벽 속으로
             var prog = openProg[i]
             if var pr = prog {
                 let before = pr
@@ -1631,35 +1764,39 @@ final class ExploreSession {
                     prog = pr
                 }
             }
-            // 문 자리가 '이 방의 벽'으로 막혀 있는지: 다른 세계, 열쇠로 안 열었고, 닫힌 실제 문이 대신 보이지 않을 때
-            let closed = !same && !doorOpen.contains(i) && (prog ?? 0) < 0.4 && !leafOn
+
+            // ── 보이는 모양 하나로
+            // 열쇠 문은 다가온 뒤 그 문 자리를 새로 본 기록(그물·평면)이 있어야 — 닫힌 문을 아직 못 알아본 채로 열쇠가 먼저 나오지 않게
+            // (새 기록이 2.5초 안 오면 띄움. 기다리는 동안은 문 자리 그물을 자주 다시 봄)
+            let fresh = (doorSeenAt[i] ?? -100) > (nearAt[i] ?? 0) - 0.3 || t - (nearAt[i] ?? 0) > 2.5
+            let shape: DoorLook
+            if real && near { shape = .leaf }
+            else if same { shape = .open }
+            else if prog != nil { shape = .opening }
+            else if doorOpen.contains(i) { shape = .open }
+            else if near && !inside && !passed.contains(i) && fresh { shape = .key }
+            else { shape = .wall }
+            if !same && near && !inside && !real && !fresh && !doorOpen.contains(i) && prog == nil { urgent = true }
+
+            let panelsOn = shape == .wall || shape == .key || (shape == .opening && (prog ?? 1) < 0.4)
             for rid in [ds.roomA, ds.roomB] {
-                for e in worlds[rid]?.doorPanels[i] ?? [] where e.isEnabled != closed { e.isEnabled = closed }
+                for e in worlds[rid]?.doorPanels[i] ?? [] where e.isEnabled != panelsOn { e.isEnabled = panelsOn }
             }
+            let leafOn = shape == .leaf
             if let lf = worlds[ds.roomA]?.doorLeaf[i], lf.isEnabled != leafOn { lf.isEnabled = leafOn }
             if leafOn {
                 urgent = true
                 anyLeaf = true
                 // 현실 원은 그 닫힌 문을 '바라볼 때'만 — 시선(3D)이 문짝 자리(양옆 35cm 여유, 바닥 5cm~2.3m)에 닿는지로 봄.
-                // 예전엔 문 가운데 쪽 수평 방향 44° 안 + 고개를 숙이면 끔 → 문 끝 손잡이(1m 높이)를 내려다보면 꺼졌다 켜졌다 반복.
                 // 문짝을 한 번 보면 0.7초 동안은 시선이 잠깐 벗어나도 유지(깜빡이지 않게). 바닥을 보면 시선이 문보다 바닥에 먼저 닿아 켜지지 않음
                 if gazeHitsDoor(ds, pe, fs, headY: hs.y - L.floorY, L) { leafLookAt[i] = t }
                 let facing = t - (leafLookAt[i] ?? -100) < 0.7
                 if facing && (leaf == nil || dist < leaf!.1) { leaf = (i, dist) }
             }
-            if closed || leafOn { solid.insert(i) }
-            if passed.contains(i) {
-                let to = ds.mid - p
-                let facing = simd_length(to) > 0.05 && simd_dot(simd_normalize(to), look) > 0.8
-                if !near || facing { passed.remove(i) }
-            }
-            // 열쇠 문: 다른 세계 사이, 실제 문은 열려 있고, 아직 안 열었고, 문 밖 1m 안 — 서 있는 쪽 방에만
-            // 다가온 뒤에 그 문 자리를 새로 본 기록(그물·평면)이 있어야 열쇠 문을 띄움 — 닫힌 문을 아직 못 알아본 채로 열쇠가 먼저 나오지 않게.
-            // (새 기록이 오지 않으면 2.5초 뒤엔 띄움) 기다리는 동안은 문 자리 그물을 자주 다시 봄
-            let fresh = (doorSeenAt[i] ?? -100) > (nearAt[i] ?? 0) - 0.3 || t - (nearAt[i] ?? 0) > 2.5
-            let keyCase = !same && !inside && near && !real && !doorOpen.contains(i) && !passed.contains(i)
-            if keyCase && !fresh { urgent = true }
-            let want: Float = (keyCase && fresh) || prog != nil ? 1 : 0
+            if panelsOn || leafOn { solid.insert(i) }
+
+            // 열쇠 문 (서 있는 쪽 방에만, 여는 중이면 연 쪽 방)
+            let want: Float = shape == .key || shape == .opening ? 1 : 0
             var sh = doorShow[i] ?? 0
             sh += (want - sh) * min(1, dt * 4)
             if abs(sh - want) < 0.01 { sh = want }
@@ -1741,14 +1878,15 @@ final class ExploreSession {
         v.left.scale = [k, 1, 1]; v.right.scale = [k, 1, 1]
     }
 
-    /// 실제 문이 닫혔는지: 그물 덩어리마다 가장 최근에 본 '문 자리를 가로막은 칸'을 합쳐 문틀 안쪽을 덮은 비율로.
-    /// - 열림은 바로: 40% 밑이거나, 한 덩어리가 보던 막힌 칸이 크게 줄면(문이 움직임) 다른 덩어리의 예전 기록도 버리고 바로 열림
-    /// - 닫힘은 천천히: 55% 넘게 0.6초 이어질 때 (그물이 흔들려 닫힌 문이 나타났다 사라지지 않게)
+    /// 실제 문 그물: 그물 덩어리마다 가장 최근에 본 '문 자리를 가로막은 칸'(과 그 때)을 합쳐 문틀 안쪽을 덮은 비율로.
+    /// - cover: 모든 기록 — 열림 판단 (40% 밑이거나, 한 덩어리가 보던 막힌 칸이 크게 줄면 바로 열림)
+    /// - coverFresh: 마지막으로 열린 뒤 3초 넘어 새로 온 기록만 — 닫힘 판단 (늦게 오는 그물이 아직 닫힌 문짝을 담고 있어도 닫힘으로 되돌리지 않게)
     private func setDoorHits(_ id: UUID, _ hits: [Int: Set<Int>], touched seen: Set<Int>) {
         guard let L = layout else { return }
         var touched = seen.union(hits.keys)
         for (i, m) in realHits where m[id] != nil && !touched.contains(i) {
             realHits[i]?[id] = nil
+            hitsAt[i]?[id] = nil
             touched.insert(i)
         }
         for i in seen.union(hits.keys) {
@@ -1756,26 +1894,31 @@ final class ExploreSession {
             let old = realHits[i]?[id] ?? []
             if old.count >= 6 && nh.count * 10 <= old.count * 7 {
                 realHits[i] = [:]                                   // 문이 움직였음 → 다른 덩어리의 예전 기록은 믿지 않음
+                hitsAt[i] = [:]
             }
             realHits[i, default: [:]][id] = nh
+            hitsAt[i, default: [:]][id] = t
         }
         for i in touched where i < L.doors.count {
             doorSeenAt[i] = t
-            var all = Set<Int>()
-            for (_, e) in realHits[i] ?? [:] { all.formUnion(e) }
+            var all = Set<Int>(), fresh = Set<Int>()
+            let since = (openedAt[i] ?? -100) + 3
+            for (k, e) in realHits[i] ?? [:] {
+                all.formUnion(e)
+                if (hitsAt[i]?[k] ?? -100) > since { fresh.formUnion(e) }
+            }
             let cols = max(1, Int(((L.doors[i].width - 0.16) / 0.1).rounded(.up)))
             let cv = Float(all.count) / Float(cols * 16)
             cover[i] = cv
+            coverFresh[i] = Float(fresh.count) / Float(cols * 16)
             // 닫혀 있던 문의 막힌 비율이 가장 많던 때보다 15% 넘게 줄면(문짝이 움직이기 시작) 바로 열림
             if realClosed.contains(i) { coverPeak[i] = max(coverPeak[i] ?? 0, cv) }
             let dropped = realClosed.contains(i) && (coverPeak[i] ?? 0) > 0.55 && cv < (coverPeak[i] ?? 0) - 0.15
-            if cv < 0.45 || dropped {
-                if realClosed.contains(i) { openHold[i] = max(openHold[i] ?? 0, t + 3) }
-                realClosed.remove(i)
-                closeSince[i] = nil
-                coverPeak[i] = nil
-            } else if cv > 0.55 && !realClosed.contains(i) && closeSince[i] == nil {
-                closeSince[i] = t
+            if realClosed.contains(i) && (cv < 0.45 || dropped) {
+                realOpen(i, hold: 5)
+                realHits[i] = [:]
+                hitsAt[i] = [:]
+                coverFresh[i] = 0
             }
         }
     }
@@ -1848,11 +1991,10 @@ final class ExploreSession {
                 if let tc = touch, tc.1 == g.3 { g.0 = min(g.0, tc.0); g.2 = t }
                 let held = g.2 - g.1 >= 0.2
                 if held && (through || (g.0 < 0.1 && far - g.0 > 0.2 && t - g.2 < 1.5)) {
-                    realClosed.remove(i)
+                    realOpen(i, hold: 6)
                     realHits[i] = [:]
-                    closeSince[i] = nil
-                    coverPeak[i] = nil
-                    openHold[i] = max(openHold[i] ?? 0, t + 3.5)
+                    hitsAt[i] = [:]
+                    coverFresh[i] = 0
                     grip[i] = nil
                 } else if t - g.2 > 1.5 {
                     grip[i] = nil

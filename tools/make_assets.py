@@ -2511,38 +2511,11 @@ def street_shops(night=False):
     save_png('street_shops_night' if night else 'street_shops', rgb, a)
 
 
-def menu_board():
-    """카페 메뉴판 (칠판에 분필 글씨)"""
-    W, H = 600, 700
-    base = noise(beta=1.2, size=1024, seed=771)[:H, :W]
-    rgb = np.stack([28 + base * 10, 38 + base * 12, 34 + base * 10], axis=-1)
-    im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
-    d = ImageDraw.Draw(im)
-    def font(sz):
-        try:
-            return ImageFont.load_default(size=sz)
-        except Exception:
-            return ImageFont.load_default()
-    chalk = (236, 232, 220)
-    d.text((W // 2, 70), 'MENU', fill=chalk, font=font(64), anchor='mm')
-    d.line([(150, 112), (450, 112)], fill=chalk, width=3)
-    items = [('Espresso', '4.0'), ('Americano', '4.5'), ('Cafe Latte', '5.0'), ('Flat White', '5.0'),
-             ('Cappuccino', '5.0'), ('Vanilla Latte', '5.5'), ('Hot Chocolate', '5.0'), ('Black Tea', '4.5')]
-    y = 160
-    for n, pr in items:
-        d.text((70, y), n, fill=chalk, font=font(34), anchor='lm')
-        d.text((W - 70, y), pr, fill=chalk, font=font(34), anchor='rm')
-        y += 56
-    # 작은 컵 그림
-    d.arc([W // 2 - 40, H - 120, W // 2 + 40, H - 50], 0, 180, fill=chalk, width=4)
-    d.line([(W // 2 - 40, H - 85), (W // 2 + 40, H - 85)], fill=chalk, width=4)
-    d.arc([W // 2 + 30, H - 105, W // 2 + 60, H - 75], 270, 90, fill=chalk, width=4)
-    for k in range(3):
-        x = W // 2 - 20 + k * 20
-        d.arc([x - 8, H - 150, x + 8, H - 110], 90, 270, fill=chalk, width=3)
-    arr = np.asarray(im).astype(float)
-    arr += (noise(beta=0.5, size=1024, seed=773)[:H, :W, None] - 0.5) * 18     # 분필 가루
-    save_jpg('menu_board', arr)
+def _cafe_boards():
+    """카페 칠판 메뉴판·커피/디저트 포스터 (tools/cafe_art.py) — 그림 아이콘 + 읽히지 않는 흘림 글씨, 선 그림용 _ln 도"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import cafe_art
+    cafe_art.cafe_boards(os.path.join(OUT, 'tex'))
 
 
 def line_art():
@@ -2784,7 +2757,7 @@ def main():
             prop_simple('hay', [(0, (150, 120, 60)), (0.5, (196, 164, 92)), (1, (232, 206, 140))], 423, aniso=(0.3, 2.5)),
             prop_simple('concrete', [(0, (116, 114, 110)), (1, (172, 170, 164))], 425, beta=0.6),
             facade(), facade(night=True), water(), canvas(), paintings(), glow(), scan_grid(), haze(),
-            people(), menu_board(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True),
+            people(), _cafe_boards(), flame(), fire_art(), stream_art(), street_shops(), street_shops(night=True),
             jelly_art(), fish_art(), neon_art(), speaker_art(), roof_tile(),
             townhouse(), townhouse(night=True), shopfront(), shopfront(night=True),
             photo_textures()),

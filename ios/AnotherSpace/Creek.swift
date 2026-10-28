@@ -57,7 +57,11 @@ final class ValleyCreek {
     private(set) var entry: (SIMD2<Float>, SIMD2<Float>)? = nil      // 들어오는 벽 점·방 안쪽 방향 (평면)
     private(set) var exitPt: (SIMD2<Float>, SIMD2<Float>)? = nil     // 나가는 벽 점·방 안쪽 방향
     private let fed: Bool                                             // 바깥 강이 벽까지 곧장 흘러옴 (들어오는 갈래 물길이 필요 없음)
-    private var exitRun: Float = 22                                    // 나가는 벽 너머로 트인 거리 (바깥 물길 길이)
+    private var exitRun: Float = 22                                    // 나가는 벽 너머로 트인 거리
+    private let streamLen: Float                                       // 나가는 물길 길이 (방에서 지평선 쪽까지)
+    private let endInRocks: Bool                                       // 나가는 물길 끝을 바위 틈으로 (같은 세계 무리의 다른 방 — 절벽 협곡은 대표 방 물길에만 있음)
+    private(set) var exitPath: [SIMD2<Float>] = []                     // 나가는 물길 가운데 선 (저장 좌표 xz) — 절벽 협곡·바위 자리 비우기용
+    private(set) var exitPathW: [Float] = []
     private var cellDir: [SIMD2<Float>] = []                           // 칸마다 물이 흐르는 쪽 (저장 좌표, 8방향 중 하나 — 나가는 곳으로)
     private var edgeD: [Float] = []                                   // 물 칸마다 물가까지 거리 (m)
     private var maxEdge: Float = 0.1
@@ -72,7 +76,9 @@ final class ValleyCreek {
     private var rippleMat: UnlitMaterial?
 
     init(room: RoomRec, layout L: Layout, floorY: Float, blocked: Set<Int64>, riverNear: SIMD3<Float>?, entryHint: (SIMD2<Float>, SIMD2<Float>)? = nil,
-         riverWidth: Float, look: LookMode, tint: SIMD3<Float>) {
+         riverWidth: Float, look: LookMode, tint: SIMD3<Float>, streamLen: Float = 30, endInRocks: Bool = false) {
+        self.streamLen = streamLen
+        self.endInRocks = endInRocks
         self.L = L
         self.roomId = room.id
         self.floorY = floorY
@@ -418,7 +424,8 @@ final class ValleyCreek {
         }
         blocked = nb
         guard hit, compute() else { return }
-        rebuild()
+        // 탐험 중에 다시 그림: 이 방 표시 방식으로 (예전엔 기본(컬러)으로 다시 그려 선 그림·흑백 방에 컬러 자갈 바닥·돌이 나왔음)
+        Tex.with(look) { rebuild() }
         for f in fish {
             f.need = min(0.7 * f.size + 0.035, maxEdge * 0.85)
             f.path = []
@@ -549,37 +556,39 @@ final class ValleyCreek {
             let a = L.flat(x.0 - x.1 * 0.03)
             let base = L.flat(x.0 - x.1 * 4) - L.flat(x.0)
             let b0 = atan2(base.y, base.x)
-            // 바깥으로 곧게, 막히면(다른 방) 조금씩 비스듬히 — 그래도 막히면 짧게라도 꼭 흘러 나가 바위 틈으로 사라지게
-            // (예전엔 22m 물길만 찾다 못 찾으면 나가는 물길이 아예 없어, 방 안 물이 벽에서 끊겨 보였음)
+            // 바깥으로 흘러 나가 멀리(절벽 사이 협곡을 지나 지평선 가까이까지) 끊기지 않고 이어짐.
+            // 벽 가까운 12m 안이 다른 방에 걸리면 조금씩 비스듬히 (그래도 막히면 그대로 — 이 방 벽 너머로만 보이는 풍경)
             var done = false
-            let far: Float = max(2.5, min(26, exitRun - 0.8))
-            for len: Float in [far, min(far, 12)] where !done {
-                for da: Float in [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9] where !done {
-                    let dir = SIMD2<Float>(cos(b0 + da), sin(b0 + da))
-                    done = branch(from: a, to: a + dir * len, w0: 0.9, w1: len > 8 ? 1.7 : 1.1, flow: 0.13, endRocks: true, &g)
-                }
+            for da: Float in [0, 0.3, -0.3, 0.6, -0.6, 0.9, -0.9] where !done {
+                let dir = SIMD2<Float>(cos(b0 + da), sin(b0 + da))
+                done = branch(from: a, to: a + dir * streamLen, w0: 0.9, w1: endInRocks ? 2.2 : 4.5, flow: 0.13, endRocks: endInRocks, checkLen: 12, record: true, &g)
             }
-            // 벽 너머에 다른 방이 있어도 바깥 물길은 멀리(12m) 흘러 나가게 그림 (이 방의 벽 너머로만 보이는 풍경이라 다른 방에는 안 보임)
-            if !done { branch(from: a, to: a + SIMD2<Float>(cos(b0), sin(b0)) * 12, w0: 0.9, w1: 1.5, flow: 0.13, endRocks: true, check: false, &g) }
+            if !done { branch(from: a, to: a + SIMD2<Float>(cos(b0), sin(b0)) * streamLen, w0: 0.9, w1: endInRocks ? 2.2 : 4.5, flow: 0.13, endRocks: endInRocks, checkLen: 0, record: true, &g) }
         }
     }
 
     @discardableResult
     private func branch<G: RandomNumberGenerator>(from a: SIMD2<Float>, to eo: SIMD2<Float>, w0: Float, w1: Float, flow: Float,
-                                                  endRocks: Bool = false, check: Bool = true, _ g: inout G) -> Bool {
-        let n = 32
-        let side = SIMD2<Float>(-(eo - a).y, (eo - a).x) * 0.1
+                                                  endRocks: Bool = false, checkLen: Float = 1e9, record: Bool = false, _ g: inout G) -> Bool {
+        let total = simd_distance(a, eo)
+        let n = max(32, Int(total / 1.5))
+        let side = SIMD2<Float>(-(eo - a).y, (eo - a).x) / max(0.01, total)
+        let amp = min(total * 0.1, 6)
         var pts: [SIMD2<Float>] = []
         for i in 0...n {
             let k = Float(i) / Float(n)
-            let p = a + (eo - a) * k + side * sin(k * .pi)
-            // 끝 두세 점(벽 바로 앞) 말고는 집 안을 지나면 그리지 않음
-            if check && i > 2 && i < n - 2 && L.walkable(L.plane(p.x, p.y)) { return false }
+            // 굽이침: 벽 가까이는 거의 곧게, 멀어질수록 크게
+            let p = a + (eo - a) * k + side * (amp * sin(k * .pi) + min(1, k * 6) * amp * 0.5 * sin(k * 9.0))
+            // 벽 가까운 checkLen m 안에서 집 안(걸을 수 있는 곳)을 지나면 그리지 않음 (끝 두세 점은 벽 바로 앞)
+            if i > 2 && simd_distance(p, a) < checkLen && L.walkable(L.plane(p.x, p.y)) { return false }
             pts.append(p)
         }
         var wg = Geo(), bg = Geo(), rk = Geo()
         var va: Float = 0
         var pl = SIMD2<Float>(0, 0), pr = SIMD2<Float>(0, 0), pv: Float = 0
+        // 방 둘레 가까운 땅(80m)을 벗어나면 먼 땅 높이(36cm 아래)로 천천히 내려감 (먼 땅 위에 떠 보이지 않게)
+        func drop(_ q: SIMD2<Float>) -> Float { max(0, min(1, (simd_distance(q, a) - 66) / 10)) * 0.36 }
+        var pdrop: Float = 0
         for i in pts.indices {
             let p0 = pts[max(0, i - 1)], p1 = pts[min(pts.count - 1, i + 1)]
             let td = simd_normalize(p1 - p0)
@@ -591,21 +600,25 @@ final class ValleyCreek {
             if i > 0 {
                 va += simd_distance(pts[i], pts[i - 1])
                 let v1 = va / 3.5
-                let y = floorY - 0.012
-                wg.quad(SIMD3<Float>(pl.x, y, pl.y), SIMD3<Float>(pr.x, y, pr.y), SIMD3<Float>(r.x, y, r.y), SIMD3<Float>(l.x, y, l.y),
+                let cd = drop(pts[i])
+                let y = floorY - 0.012 - cd, yp = floorY - 0.012 - pdrop
+                wg.quad(SIMD3<Float>(pl.x, yp, pl.y), SIMD3<Float>(pr.x, yp, pr.y), SIMD3<Float>(r.x, y, r.y), SIMD3<Float>(l.x, y, l.y),
                         SIMD2<Float>(0, pv), SIMD2<Float>(1, pv), SIMD2<Float>(1, v1), SIMD2<Float>(0, v1))
-                let yb = floorY - 0.022
+                let yb = floorY - 0.022 - max(cd, pdrop)
                 let bl = pl + simd_normalize(pl - pr) * 0.4, br = pr + simd_normalize(pr - pl) * 0.4
                 let cl = l + simd_normalize(l - r) * 0.4, cr = r + simd_normalize(r - l) * 0.4
                 bg.quad(SIMD3<Float>(bl.x, yb, bl.y), SIMD3<Float>(br.x, yb, br.y), SIMD3<Float>(cr.x, yb, cr.y), SIMD3<Float>(cl.x, yb, cl.y),
                         SIMD2<Float>(0, pv * 2), SIMD2<Float>(1, pv * 2), SIMD2<Float>(1, v1 * 2), SIMD2<Float>(0, v1 * 2))
                 pv = v1
+                pdrop = cd
             }
             pl = l; pr = r
             if i % 3 == 1 {
+                let far = simd_distance(pts[i], a)
+                let sc: Float = 1 + far / 25                           // 멀리 있는 물가 돌은 크게 (멀리서도 보이게)
                 for s: Float in [-1, 1] {
-                    let p = pts[i] + nn * s * (w + 0.15)
-                    rk.rock(at: SIMD3<Float>(p.x, floorY - 0.04, p.y), size: Float.random(in: 0.1...0.26, using: &g), using: &g)
+                    let p = pts[i] + nn * s * (w + 0.15 * sc)
+                    rk.rock(at: SIMD3<Float>(p.x, floorY - 0.04 - drop(p), p.y), size: Float.random(in: 0.1...0.26, using: &g) * sc, using: &g)
                 }
             }
         }
@@ -643,6 +656,14 @@ final class ValleyCreek {
                 pl = l; pr = r
             }
             if let e = ln.entity("branchLines", Ink.line) { world.addChild(e) }
+        }
+        if record {
+            exitPath = pts
+            exitPathW = pts.indices.map { i in
+                let k = Float(i) / Float(n)
+                let sk = k * k * (3 - 2 * k)
+                return w0 * (1 - sk) + w1 * sk
+            }
         }
         return true
     }
