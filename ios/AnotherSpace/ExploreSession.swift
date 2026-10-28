@@ -1675,7 +1675,7 @@ final class ExploreSession {
     /// 닫힘 후보인지: 열린 뒤 새로 온 그물이 문틀을 55% 넘게 덮음, 또는 3초 안에 문 면이 가로막았고 그물도 40% 넘게 덮음(그물이 아직 없으면 평면만으로)
     private func closingEvidence(_ i: Int) -> Bool {
         if (coverFresh[i] ?? 0) > 0.55 { return true }
-        if let pa = planeAcrossAt[i], t - pa < 3, pa > (openedAt[i] ?? -100) + 1, (cover[i] ?? 0.5) > 0.4 { return true }
+        if let pa = planeAcrossAt[i], (t - pa) < 3, pa > (openedAt[i] ?? -100) + 1, (cover[i] ?? 0.5) > 0.4 { return true }
         return false
     }
 
