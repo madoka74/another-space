@@ -170,8 +170,9 @@ def ik(a, t, l1, l2, bend):
 def hind_leg(hip, foot, flex=0.0, k=1.0):
     """뒷다리: 굵은 털 허벅지 → 무릎(앞으로 굽음) → 정강이 → 뒤꿈치(뒤로 꺾임) → 발등 → 둥근 털 발.
     들어 올릴 때(flex) 뒤꿈치가 더 접혀 발이 몸 쪽으로 당겨짐"""
-    hock = (foot[0] - 15 - 12 * flex, foot[1] - 40 + 8 * flex)
-    stifle = ik(hip, hock, 62 * k, 56 * k, +1)
+    hock = (foot[0] - 9 - 16 * flex, foot[1] - 36 + 4 * flex)
+    # 딛고 서 있을 땐 거의 곧게(엉덩이→뒤꿈치 거리 ≈ 두 마디 합), 들어 올릴 때만 무릎·뒤꿈치가 접힘
+    stifle = ik(hip, hock, 50 * k, 48 * k, +1)
     paw = (foot[0] + 4 - 4 * flex, foot[1])
     return [capsule(hip, stifle, 33 * k, 25 * k), capsule(stifle, hock, 23 * k, 18 * k), fluff(stifle, 25 * k, 24 * k, 0, n=8, amp=0.07),
             capsule(hock, (paw[0] - 2, paw[1] - 8), 18 * k, 17 * k), fluff(paw, 25 * k, 15 * k, -10 * flex, n=8, amp=0.07)]
@@ -179,8 +180,8 @@ def hind_leg(hip, foot, flex=0.0, k=1.0):
 
 def front_leg(shoulder, foot, flex=0.0, k=1.0):
     """앞다리: 어깨 → 팔꿈치(뒤로 굽음) → 아래팔(곧음) → 앞발목(들 때 뒤로 접힘) → 둥근 털 발"""
-    wrist = (foot[0] - 2 + 16 * flex, foot[1] - 24 + 6 * flex)
-    elbow = ik(shoulder, wrist, 52 * k, 64 * k, -1)
+    wrist = (foot[0] - 2 + 16 * flex, foot[1] - 22 + 4 * flex)
+    elbow = ik(shoulder, wrist, 50 * k, 62 * k, -1)          # 딛을 땐 거의 곧은 앞다리, 들 때만 팔꿈치·발목이 접힘
     paw = (foot[0] + 3 - 6 * flex, foot[1])
     return [capsule(shoulder, elbow, 29 * k, 23 * k), capsule(elbow, wrist, 22 * k, 19 * k),
             capsule(wrist, (paw[0], paw[1] - 7), 19 * k, 17 * k), fluff(paw, 25 * k, 15 * k, 14 * flex, n=8, amp=0.07)]

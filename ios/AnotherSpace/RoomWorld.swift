@@ -474,14 +474,15 @@ final class RoomWorld {
             if s.inner { let q = L.flat((s.a + s.b) / 2 - s.n * 0.03); mate = L.at(x: q.x, z: q.y).room }
             let shareWall = between && mate != 0 && groupIds.contains(mate)
             if shareWall && mate < room.id { continue }
-            let off: Float = shareWall && s.inner ? -0.04 : (between ? 0.03 : 0.22)
+            // 울타리 앞면은 벽 바로 뒤(3cm)에 — 벽에 붙은 가구가 울타리와 맞닿아 보이게 (예전 22cm 뒤는 가구와 울타리 사이가 훌쩍 떠 보였음)
+            let off: Float = shareWall && s.inner ? -0.04 : 0.03
             let ext: Float = between ? 0 : 0.25
             let step: Float = 0.05
             /// t 자리에 세울 수 있는 두께 (0이면 못 세움)
             func depthAt(_ t: Float) -> Float {
                 if between { return t >= 0 && t <= len ? 0.08 : 0 }
                 let q = s.a + pd * t - s.n * off
-                if L.walkable(q) || L.walkable(q + s.n * 0.08) { return 0 }
+                if L.walkable(q) { return 0 }
                 if (t < 0 && nearDoor(s.a)) || (t > len && nearDoor(s.b)) { return 0 }
                 // 개울이 벽 너머로 드나드는 자리는 비움 (물이 바깥 물길과 이어져 보이게)
                 if waterGaps.contains(where: { simd_distance($0, s.a + pd * t) < 0.6 }) { return 0 }
@@ -568,7 +569,7 @@ final class RoomWorld {
             case "camp":
                 // 통나무 울타리: 1.8m 안팎마다 굵은 말뚝 + 가로 통나무 둘 (조금 처짐)
                 let n = max(1, Int((L2 / 1.8).rounded()))
-                let mid = out * (D * 0.5)
+                let mid = out * min(D * 0.5, 0.09)                  // 말뚝 앞면이 벽 바로 뒤에
                 var posts: [SIMD3<Float>] = []
                 for i in 0...n { posts.append(sp.a + dir * (L2 * Float(i) / Float(n)) + mid) }
                 for p in posts { pole(&solidA, p - up * 0.1, p + up * (H + Float.random(in: -0.06...0.08, using: &g)), r: 0.075) }
@@ -584,8 +585,9 @@ final class RoomWorld {
                 while x < L2 {
                     let w = Float.random(in: 0.5...0.85, using: &g)
                     let h = H * Float.random(in: 0.75...1.05, using: &g)
-                    let c = sp.a + dir * min(L2, x + w * 0.4) + out * (D * 0.5) + up * (h * 0.42)
-                    lumps.blob(at: c, rx: w * 0.62, rz: max(0.04, D * 0.55), up: h * 0.58, down: h * 0.42, lumpy: 0.16,
+                    let rz = max(0.04, min(D * 0.5, 0.3))
+                    let c = sp.a + dir * min(L2, x + w * 0.4) + out * rz + up * (h * 0.42)        // 덤불 앞면이 벽 바로 뒤에
+                    lumps.blob(at: c, rx: w * 0.62, rz: rz, up: h * 0.58, down: h * 0.42, lumpy: 0.16,
                                yaw: atan2(-dir.z, dir.x), using: &g)
                     x += w * 0.7
                 }
@@ -594,8 +596,9 @@ final class RoomWorld {
                 var x: Float = 0
                 while x < L2 {
                     let s = Float.random(in: 0.28...0.46, using: &g)
-                    let c = sp.a + dir * min(L2, x + s * 0.5) + out * (D * 0.5) + up * (s * 0.35)
-                    lumps.blob(at: c, rx: s, rz: max(0.04, min(s, D * 0.5)), up: s * 0.7, down: s * 0.35, lumpy: 0.22, yaw: Float.random(in: 0...6.28, using: &g), using: &g)
+                    let rz0 = max(0.04, min(s, D * 0.5))
+                    let c = sp.a + dir * min(L2, x + s * 0.5) + out * rz0 + up * (s * 0.35)           // 돌 앞면이 벽 바로 뒤에
+                    lumps.blob(at: c, rx: s, rz: rz0, up: s * 0.7, down: s * 0.35, lumpy: 0.22, yaw: Float.random(in: 0...6.28, using: &g), using: &g)
                     if Float.random(in: 0...1, using: &g) < 0.8 {
                         let s2 = s * Float.random(in: 0.55...0.8, using: &g)
                         let c2 = c + dir * Float.random(in: -0.1...0.2, using: &g) + up * (s * 0.55 + s2 * 0.4)
@@ -611,7 +614,7 @@ final class RoomWorld {
             case "sea":
                 // 바닷가 말뚝 밧줄 울타리: 1.6m마다 네모 말뚝(나무) + 처진 굵은 밧줄 둘 + 아래 현무암 몇 개
                 let n = max(1, Int((L2 / 1.6).rounded()))
-                let mid = out * (D * 0.45)
+                let mid = out * min(D * 0.45, 0.08)                 // 말뚝이 벽 바로 뒤에
                 var posts: [SIMD3<Float>] = []
                 for i in 0...n { posts.append(sp.a + dir * (L2 * Float(i) / Float(n)) + mid) }
                 for p in posts {
@@ -623,19 +626,20 @@ final class RoomWorld {
                     }
                     if !sp.thin && Float.random(in: 0...1, using: &g) < 0.6 {
                         let s = Float.random(in: 0.15...0.3, using: &g)
-                        let c = (posts[i] + posts[i + 1]) / 2 + dir * Float.random(in: -0.4...0.4, using: &g) + out * (D * 0.3) + up * (s * 0.3)
-                        lumps.blob(at: c, rx: s, rz: min(s, D * 0.4), up: s * 0.6, down: s * 0.3, lumpy: 0.2, using: &g)
+                        let rzb = min(s, D * 0.4)
+                        let c = (posts[i] + posts[i + 1]) / 2 + dir * Float.random(in: -0.4...0.4, using: &g) + out * (0.1 + rzb) + up * (s * 0.3)
+                        lumps.blob(at: c, rx: s, rz: rzb, up: s * 0.6, down: s * 0.3, lumpy: 0.2, using: &g)
                     }
                 }
             case "village":
                 // 돌담: 두께 있는 돌 벽(위가 살짝 좁음) + 위에 납작한 갓돌
                 let wall = min(D, 0.42)
                 let hh = H * 0.82
-                slab(&solidA, sp.a, sp.b, out, o0: (D - wall) * 0.5, o1: (D + wall) * 0.5, y0: -0.05, y1: hh, tile: 1.4)
+                slab(&solidA, sp.a, sp.b, out, o0: 0, o1: wall, y0: -0.05, y1: hh, tile: 1.4)          // 돌담 앞면이 벽 바로 뒤에
                 var x: Float = 0
                 while x < L2 {
                     let s = Float.random(in: 0.22...0.34, using: &g)
-                    let c = sp.a + dir * min(L2, x + s * 0.5) + out * (D * 0.5) + up * (hh + s * 0.15)
+                    let c = sp.a + dir * min(L2, x + s * 0.5) + out * (wall * 0.5) + up * (hh + s * 0.15)
                     lumps.blob(at: c, rx: s, rz: max(0.04, wall * 0.62), up: s * 0.4, down: s * 0.15, lumpy: 0.15, yaw: atan2(-dir.z, dir.x), using: &g)
                     x += s * 1.6
                 }
@@ -3111,17 +3115,19 @@ final class RoomWorld {
         let w = room.weather
         let wet = ["drizzle", "rain", "storm", "snow", "heavysnow"].contains(w)
         if wet && sky {
-            let e = Self.precip(w, size: SIMD3<Float>(halfSize.x * 2 + 8, 0.1, halfSize.y * 2 + 8), height: 7, look: look)
-            e.position = SIMD3<Float>(center.x, ceilY + 7, center.z)
+            // 천장 위 3m만 (집 위에서 천장 창으로 올려다볼 때) — 둘레 2m 여유, 그 밖은 아래 집 밖 둘레가 맡음
+            let e = Self.precip(w, size: SIMD3<Float>(halfSize.x * 2 + 4, 0.1, halfSize.y * 2 + 4), height: 3, look: look, density: 0.5)
+            e.position = SIMD3<Float>(center.x, ceilY + 3, center.z)
             layer(e, 20)
             e.orientation = simd_quatf(angle: -angle, axis: [0, 1, 0])
             world.addChild(e)
             emitters.append(e)
-            for r in outsideRects(L, margin: 6, cell: 1, clear: 0.4) {
+            // 집 밖 둘레: 천장 위 3m부터 땅까지 한 줄기로 (2m 칸을 묶은 큰 사각형 몇 개 — 입자 수·그리기 횟수를 적게)
+            for r in outsideRects(L, margin: 5, cell: 2, clear: 0.4) {
                 let sx = r.1.x - r.0.x, sz = r.1.y - r.0.y
                 let c = L.flat((r.0 + r.1) / 2)
-                let t = Self.precip(w, size: SIMD3<Float>(sx, 0.05, sz), height: ceilY - floorY, look: look, density: 0.35)
-                t.position = SIMD3<Float>(c.x, ceilY, c.y)
+                let t = Self.precip(w, size: SIMD3<Float>(sx, 0.05, sz), height: ceilY - floorY + 3, look: look, density: 0.3)
+                t.position = SIMD3<Float>(c.x, ceilY + 3, c.y)
                 t.orientation = simd_quatf(angle: -angle, axis: [0, 1, 0])
                 layer(t, 20)
                 world.addChild(t)
@@ -3136,9 +3142,9 @@ final class RoomWorld {
             guard sx > 0.2, sz > 0.2, sx * sz > 0.1 else { continue }
             var list: [Entity] = []
             if wet {
-                // 0.8m 안팎 칸으로 나눠 뿌리고, 머리 근처 칸만 끔 — 눈앞을 스치는 눈송이가 크게 번쩍이며 깜빡이던 것을 없앰
+                // 1m 안팎 칸으로 나눠 뿌리고, 머리 근처 칸은 끔 — 눈앞을 스치는 눈송이·빗줄기가 크게 번져 뿌옇게 가리던 것을 없앰
                 let lo = r.0 + SIMD2<Float>(0.15, 0.15)
-                let nx = max(1, Int((sx / 0.8).rounded())), nz = max(1, Int((sz / 0.8).rounded()))
+                let nx = max(1, Int((sx / 1.0).rounded())), nz = max(1, Int((sz / 1.0).rounded()))
                 let tx = sx / Float(nx), tz = sz / Float(nz)
                 for ix in 0..<nx {
                     for iz in 0..<nz {
@@ -3231,7 +3237,7 @@ final class RoomWorld {
         guard roomOn else { return }
         for (e, a, b) in precipTiles {
             let d = simd_length(simd_max(simd_max(a - p, p - b), SIMD2<Float>(0, 0)))
-            let on = d > 0.4                  // 머리 둘레 40cm 안 칸만 내리지 않음 (눈앞 깜빡임 — 예전 80cm는 둘레가 넓게 비어 일부에만 내리는 것처럼 보였음)
+            let on = d > 0.9                  // 머리 둘레 90cm 안 칸은 내리지 않음 (눈앞에 크게 번진 얼룩처럼 보여 어지러웠음)
             if var pe = e.components[ParticleEmitterComponent.self], pe.isEmitting != on {
                 pe.isEmitting = on
                 e.components.set(pe)
@@ -3245,11 +3251,14 @@ final class RoomWorld {
         scenery?.setSound(room)                       // 벽난로 장작 소리
         for (list, on) in [(emitters, sky), (roomEmitters, room)] {
             for e in list {
-                if var pe = e.components[ParticleEmitterComponent.self], pe.isEmitting != on {
-                    pe.isEmitting = on
+                let was = e.isEnabled
+                if !on { if was { e.isEnabled = false }; continue }
+                if !was { e.isEnabled = true }
+                if var pe = e.components[ParticleEmitterComponent.self], !pe.isEmitting || !was {
+                    pe.isEmitting = true
+                    if !was { pe.restart() }              // 다시 켤 때 처음부터 다 내리는 상태로 (warmUp)
                     e.components.set(pe)
                 }
-                if !on { e.isEnabled = false } else if !e.isEnabled { e.isEnabled = true }
             }
         }
     }
@@ -3320,20 +3329,27 @@ final class RoomWorld {
         pe.birthLocation = .volume
         pe.birthDirection = .world
         pe.emissionDirection = [0, -1, 0]
-        let area = max(0.5, size.x * size.z) * density
+        // 입자 수 = 공기 1m³ 안에 떠 있는 수(n)로 정함 → 내뿜는 수 = n × 넓이 × 떨어지는 빠르기 (높이와 상관없이 같은 밀도).
+        // 예전엔 넓이당 초당 수로 정해 높고 넓은 하늘 쪽이 수십만 개가 되어 화면이 버벅이고(고개를 돌리면 그리지 못한 현실이 보임) 눈앞이 뿌옜음
+        let vol = max(0.25, size.x * size.z) * density
         let speed: Float
+        let n: Float
         switch w {
-        case "drizzle": speed = 3.2; pe.mainEmitter.birthRate = 60 * area
-        case "rain": speed = 5; pe.mainEmitter.birthRate = 160 * area
-        case "storm": speed = 7; pe.mainEmitter.birthRate = 320 * area
-        case "heavysnow": speed = 0.55; pe.mainEmitter.birthRate = 45 * area; pe.mainEmitter.size = 0.022
-        default: speed = 0.75; pe.mainEmitter.birthRate = 22 * area; pe.mainEmitter.size = 0.012
+        case "drizzle": speed = 3.2; n = 5
+        case "rain": speed = 5; n = 8
+        case "storm": speed = 7; n = 13
+        case "heavysnow": speed = 0.55; n = 14; pe.mainEmitter.size = 0.018
+        default: speed = 0.75; n = 8; pe.mainEmitter.size = 0.011
         }
+        pe.mainEmitter.birthRate = n * vol * speed
         pe.speed = speed
         pe.speedVariation = speed * 0.15
         pe.mainEmitter.acceleration = [0, 0, 0]
-        pe.mainEmitter.lifeSpan = Double(max(0.4, (height - 0.05) / speed))
+        let life = Double(max(0.4, (height - 0.05) / speed))
+        pe.mainEmitter.lifeSpan = life
         pe.mainEmitter.lifeSpanVariation = 0.05
+        // 처음부터 위에서 아래까지 다 내리고 있게 (예전엔 위와 아래가 따로 내리기 시작해 한참 뒤에야 만났음)
+        pe.timing = .repeating(warmUp: life, emit: .init(duration: 1, variation: nil), idle: nil)
         if snow { pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 1 }
         if look == .line { pe.mainEmitter.size *= snow ? 2.2 : 1.4 }      // 동그라미 선이 보일 만큼
         let e = Entity()
