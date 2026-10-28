@@ -3249,23 +3249,57 @@ final class RoomWorld {
     func setActive(sky: Bool, room: Bool) {
         roomOn = room
         scenery?.setSound(room)                       // 벽난로 장작 소리
-        for (list, on) in [(emitters, sky), (roomEmitters, room)] {
-            for e in list {
-                let was = e.isEnabled
-                if !on { if was { e.isEnabled = false }; continue }
-                if !was { e.isEnabled = true }
-                if var pe = e.components[ParticleEmitterComponent.self], !pe.isEmitting || !was {
-                    pe.isEmitting = true
-                    if !was { pe.restart() }              // 다시 켤 때 처음부터 다 내리는 상태로 (warmUp)
-                    e.components.set(pe)
-                }
+        // 하늘 쪽이 이번에 막 켜지면, 방 안 눈·비는 하늘 쪽 앞머리가 천장 높이까지 내려올 때쯤 켬 —
+        // 위(하늘)와 아래(방 안)가 따로 내리기 시작해 한참 뒤에 만나던 것을, 한 장의 눈·비가 위에서부터 내려오듯 이어지게.
+        // (v0.5.24의 warmUp(미리 몇 초 돌려 두기)은 입자 계산이 한꺼번에 몰려 기기 전체가 멈췄음 — 쓰지 않음)
+        let skyStarting = sky && emitters.contains { !$0.isEnabled }
+        set(emitters, sky)
+        if room && skyStarting && !roomEmitters.isEmpty {
+            set(roomEmitters, false)
+            roomStartAt = clock + Self.skyLead(self.room.weather)
+        } else {
+            roomStartAt = nil
+            set(roomEmitters, room)
+        }
+    }
+
+    /// 입자 묶음 켜고 끄기 (끄면 그리지도 않음)
+    private func set(_ list: [Entity], _ on: Bool) {
+        for e in list {
+            if !on { if e.isEnabled { e.isEnabled = false }; continue }
+            if !e.isEnabled { e.isEnabled = true }
+            if var pe = e.components[ParticleEmitterComponent.self], !pe.isEmitting {
+                pe.isEmitting = true
+                e.components.set(pe)
             }
+        }
+    }
+
+    /// 하늘 쪽 눈·비가 천장 위 3m에서 천장까지 내려오는 시간
+    private static func skyLead(_ w: String) -> Float {
+        switch w {
+        case "drizzle": return 3 / 3.2
+        case "rain": return 3 / 5
+        case "storm": return 3 / 7
+        case "heavysnow": return 3 / 0.55
+        case "snow": return 3 / 0.75
+        default: return 0
+        }
+    }
+    private var clock: Float = 0
+    private var roomStartAt: Float?
+    private func tickWeather(_ dt: Float) {
+        clock += dt
+        if let at = roomStartAt, clock >= at, roomOn {
+            roomStartAt = nil
+            set(roomEmitters, true)               // 머리 근처 칸은 다음 프레임 avoidHead 가 다시 끔
         }
     }
 
     /// 매 프레임: 구름 흐름, 물결, 번개
     func tick(_ dt: Float, active: Bool) {
         guard active else { return }
+        tickWeather(dt)
         scenery?.tick(dt)
         tickSpeaker(dt)
         tickVillage(dt)
@@ -3348,8 +3382,6 @@ final class RoomWorld {
         let life = Double(max(0.4, (height - 0.05) / speed))
         pe.mainEmitter.lifeSpan = life
         pe.mainEmitter.lifeSpanVariation = 0.05
-        // 처음부터 위에서 아래까지 다 내리고 있게 (예전엔 위와 아래가 따로 내리기 시작해 한참 뒤에야 만났음)
-        pe.timing = .repeating(warmUp: life, emit: .init(duration: 1, variation: nil), idle: nil)
         if snow { pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 1 }
         if look == .line { pe.mainEmitter.size *= snow ? 2.2 : 1.4 }      // 동그라미 선이 보일 만큼
         let e = Entity()
