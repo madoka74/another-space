@@ -67,9 +67,23 @@ def smooth(e0, e1, x):
     return t * t * (3 - 2 * t)
 
 
+# 그림 한 장의 최대 픽셀 수 (4096×1024 = 약 420만): 앱은 모든 방 세계를 한꺼번에 만들어 두므로 방마다 테마가 다르면
+# 그림이 방 수만큼 동시에 메모리에 올라감. 4096×2048 띠(색+가림 그림 두 장이면 90MB 가까이)가 여러 방에 겹치면
+# 기기 메모리가 모자라 화면이 버벅이고(고개를 돌리면 현실이 보임) 기기가 다시 켜지기도 함 → 비율은 그대로 두고 줄임
+MAX_PX = 4096 * 1024
+
+
+def _cap(im):
+    w, h = im.size
+    if w * h <= MAX_PX:
+        return im
+    k = math.sqrt(MAX_PX / (w * h))
+    return im.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
+
+
 def save_jpg(name, rgb, folder='tex', q=88):
     os.makedirs(os.path.join(OUT, folder), exist_ok=True)
-    Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).save(os.path.join(OUT, folder, name + '.jpg'), quality=q, optimize=True)
+    _cap(Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))).save(os.path.join(OUT, folder, name + '.jpg'), quality=q, optimize=True)
 
 
 def save_png(name, rgb, alpha, folder='tex'):
@@ -94,9 +108,9 @@ def save_png(name, rgb, alpha, folder='tex'):
         cur[wgt == 0] = avg
         fill = np.where(m[..., None], rgb, cur)
     im = np.concatenate([fill, (a * 255)[..., None]], axis=-1).astype(np.uint8)
-    Image.fromarray(im, 'RGBA').save(os.path.join(OUT, folder, name + '.png'), optimize=True)
+    _cap(Image.fromarray(im, 'RGBA')).save(os.path.join(OUT, folder, name + '.png'), optimize=True)
     # 오려 내기용 가림 그림 (흰색 = 보임). 앱의 재질은 투명도를 이 그림에서 읽음
-    Image.fromarray((a * 255).astype(np.uint8), 'L').save(os.path.join(OUT, folder, name + '_a.png'), optimize=True)
+    _cap(Image.fromarray((a * 255).astype(np.uint8), 'L')).save(os.path.join(OUT, folder, name + '_a.png'), optimize=True)
 
 
 def shade(rgb, k):
