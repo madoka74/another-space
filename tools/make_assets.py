@@ -461,7 +461,8 @@ def photo_textures():
         path = fetch_env.tex_path(i)
         if not os.path.exists(path):
             continue
-        a = np.asarray(Image.open(path).convert('RGB').resize((2048, 2048), Image.LANCZOS)).astype(np.float32)
+        # 1024: 2048은 그림 하나가 메모리 20MB 넘게 차지해, 테마 그림이 쌓이면 기기가 버벅이고 다시 켜질 수 있었음
+        a = np.asarray(Image.open(path).convert("RGB").resize((1024, 1024), Image.LANCZOS)).astype(np.float32)
         k = target.get(name, 120) / max(1.0, float(_lum(a).mean()))
         save_jpg(name, np.clip(a * k, 0, 255), q=90)
         print('  실사 무늬:', name, '←', i, flush=True)

@@ -229,7 +229,7 @@ final class RoomWorld {
         let night = r.time == "night" || r.time == "dawn"
         var l: [(String, String)] = [(Worlds.skyName(time: r.time, weather: r.weather), "sky"), (st.floor, "tex"), (st.prop, "tex"), (st.ground, "tex")]
         l.append((st.open ? st.barrier : st.wall, "tex"))
-        if st.open { l += ["bark", "moss", "rock", "planks", "basalt", "house_stone", "concrete"].map { ($0, "tex") } }      // 입체 울타리
+
         for b in dc.bands { l.append(((night ? b.night : nil) ?? b.tex, "tex")) }
         for t in dc.trees { l.append((t.tex == "tree_pine" ? "pine_branch" : (t.tex == "tree_twisted" ? "palm_frond" : "leaf_clump"), "tex")) }
         if !dc.trees.isEmpty { l.append(("bark", "tex")) }
@@ -666,14 +666,14 @@ final class RoomWorld {
             case "valley":
                 lumpMat = Tex.unlit("rock", tint: Worlds.safe(tint * 0.85, min: 0.25))
             case "sea":
-                matA = Tex.unlit("planks", tint: Worlds.safe(tint * SIMD3<Float>(0.75, 0.68, 0.6), min: 0.25))
+                matA = Tex.unlit("bark", tint: Worlds.safe(tint * SIMD3<Float>(0.85, 0.78, 0.7), min: 0.25))      // 이 테마가 이미 읽어 둔 그림만 씀 (큰 그림을 더 읽지 않게)
                 matB = UnlitMaterial(color: Tex.color(SIMD3<Float>(0.78, 0.7, 0.55) * tk))
                 lumpMat = Tex.unlit("basalt", tint: Worlds.safe(tint * 0.8, min: 0.2))
             case "village":
-                matA = Tex.unlit(Tex.get("house_stone") != nil ? "house_stone" : "rock", tint: Worlds.safe(tint * 0.92, min: 0.25))
-                lumpMat = Tex.unlit("rock", tint: Worlds.safe(tint * 0.8, min: 0.25))
+                matA = Tex.unlit("house_stone", tint: Worlds.safe(tint * 0.92, min: 0.25))
+                lumpMat = Tex.unlit("house_stone", tint: Worlds.safe(tint * 0.8, min: 0.25))
             default:
-                matA = Tex.unlit("concrete", tint: Worlds.safe(tint * 0.9, min: 0.25))
+                matA = Tex.unlit(style.ground, tint: Worlds.safe(tint * 0.9, min: 0.25))
                 matB = UnlitMaterial(color: Tex.color(SIMD3<Float>(0.16, 0.17, 0.19) * Worlds.safe(tint, min: 0.5)))
             }
         } else {
@@ -3077,7 +3077,9 @@ final class RoomWorld {
         let dim: Float = room.weather == "storm" ? 0.45 : (["rain", "drizzle"].contains(room.weather) ? 0.7 : 1)
         let wind: Float = room.weather == "wind" || room.weather == "storm" ? 6 : 2
         let dir = simd_normalize(SIMD3<Float>(Float.random(in: -1...1), 0, Float.random(in: -1...1)) + SIMD3<Float>(0.01, 0, 0))
-        let lit = Worlds.haze(room.time, weather: room.weather) * 0.4 + tint * 0.6
+        // 구름 빛깔: 밝기만 하늘·시간에서 가져오고 색은 살짝 푸른 회색 (예전엔 시간 빛깔을 그대로 곱해 밤·흐린 날 먹구름이 갈색 얼룩처럼 보였음)
+        let lit0 = Worlds.haze(room.time, weather: room.weather) * 0.4 + tint * 0.6
+        let lit = SIMD3<Float>(0.9, 0.93, 1.0) * (lit0.x * 0.3 + lit0.y * 0.59 + lit0.z * 0.11)
         // 구름 모양 여섯 가지 (뭉게·층적운·새털·비구름) 중 날씨에 맞는 것을 섞어 씀 — 모양·크기·방향이 다 다르게
         let kinds: [Int]
         switch room.weather {

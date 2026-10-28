@@ -241,7 +241,22 @@ enum Tex {
     static func has(_ name: String, folder: String = "tex") -> Bool { cache[key(name, folder, look)] != nil || missing.contains(key(name, folder, look)) }
 
     /// 미리 읽어 두기: 한 장 읽고 한 프레임 쉬어서 화면이 멈추지 않게 (방에 들어갈 때 기다리지 않도록)
+    /// 테마 그림(미리 읽은 것)을 테마가 바뀐 뒤 더 쓰지 않으면 놓아 줌 — 큰 실사 그림이 테마를 바꿀 때마다 쌓여
+    /// 기기 메모리가 모자라면 화면이 버벅이고(고개를 돌리면 현실이 보임) 심하면 기기가 다시 켜질 수 있음.
+    /// keep: 지금 방들이 쓰는 그림 ("folder/name"). 다시 필요하면 그때 다시 읽음
+    private static var themeLoaded: Set<String> = []
+    static func release(keeping keep: Set<String>) {
+        for k in Array(cache.keys) {
+            let base = String(k.split(separator: "#", maxSplits: 1).first ?? Substring(k))
+            let plain = base.hasSuffix("_a") ? String(base.dropLast(2)) : (base.hasSuffix("_lna") ? String(base.dropLast(4)) : base)
+            guard themeLoaded.contains(plain), !keep.contains(plain) else { continue }
+            cache[k] = nil
+        }
+        missing.removeAll()
+    }
+
     static func preload(_ list: [(String, String)], look l: LookMode = .color) async {
+        for (name, folder) in list { themeLoaded.insert(folder + "/" + name) }
         for (name, folder) in list where !with(l, { has(name, folder: folder) }) {
             _ = with(l) { get(name, folder: folder) }
             try? await Task.sleep(for: .milliseconds(12))

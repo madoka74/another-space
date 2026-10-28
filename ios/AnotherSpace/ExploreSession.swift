@@ -590,7 +590,8 @@ final class ExploreSession {
         var skyOn = on
         for id in on { if let lead = groups[id]?.first { skyOn.insert(lead) } }      // 하늘 세계 쪽 눈·비는 그 세계를 만든 대표 방에 있음
         for (id, w) in worlds {
-            w.setActive(sky: skyOn.contains(id), room: cur.contains(id))
+            // 방 안 눈·비·바람·반딧불은 지금 방만 (같은 테마 방이 모두 켜지면 방 수만큼 입자가 늘어 크게 느려졌음)
+            w.setActive(sky: skyOn.contains(id), room: id == current)
             w.setPortalTier(cur.contains(id) ? 2 : (on.contains(id) ? 1 : 0))      // 포털 면은 지금 방 → 이웃 방 → 먼 방 순으로 나중에 그림
         }
     }
@@ -793,6 +794,12 @@ final class ExploreSession {
                 Task { await hangGallery(nw) }
                 refreshActive()
                 await Task.yield()
+            }
+            // 바뀐 뒤 어느 방도 쓰지 않는 예전 테마 그림은 놓아 줌 (메모리)
+            if let dd = data {
+                var keep = Set<String>()
+                for rr in dd.rec.rooms { for (n, f) in RoomWorld.textures(rr) { keep.insert(f + "/" + n) } }
+                Tex.release(keeping: keep)
             }
         }
     }
@@ -1226,8 +1233,9 @@ final class ExploreSession {
             let hs = f.toSaved(head)
             wld.avoidHead(L.plane(hs.x, hs.z))
         }
-        let cg = currentGroup
-        for (id, wld) in worlds { wld.tick(dt, active: cg.contains(id)) }        // 같은 세계 무리는 대표 방(하늘 세계 쪽 구름·배·새)까지 함께 움직임
+        // 움직임 계산은 지금 방과, 지금 방이 빌려 쓰는 하늘 세계의 대표 방만 (같은 테마 방 전체를 매 프레임 돌리지 않게)
+        let hostNow = worlds[current]?.hostId ?? current
+        for (id, wld) in worlds { wld.tick(dt, active: id == current || id == hostNow) }
         soundTick(dt)
         placeHud(dt)
         placeDocent(dt)
