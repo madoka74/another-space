@@ -629,14 +629,47 @@ final class VoxelWorld {
         return 0
     }
 
+    /// 가구 기둥이 속한 방 (그 방 테마의 재질·선 그림으로 칠함).
+    /// 가구 한 덩어리(서로 붙은 보이는 기둥들)는 모두 같은 방 — 덩어리 기둥들이 놓인 방 중 가장 많은 방으로 정함.
+    /// (예전엔 기둥마다 그 자리의 방을 따로 봐서, 방 경계·문 자리에 걸친 가구 일부가 옆방 테마로 칠해져
+    ///  선 그림 방에 컬러 무늬 가구가 섞여 보였음)
     private func roomAt(_ u: Int, _ v: Int) -> Int {
         let ck = Vox.chunkKey(u, v)
         if let r = colRoom[ck] { return r }
-        let p = L.flat(SIMD2<Float>((Float(u) + 0.5) * Vox.size, (Float(v) + 0.5) * Vox.size))
-        var r = L.at(x: p.x, z: p.y).room
-        if r == 0 { r = L.roomNear(x: p.x, z: p.y, radius: 0.3) }
-        if r == 0 { r = fallbackRoom }
-        colRoom[ck] = r
+        func here(_ u: Int, _ v: Int) -> Int {
+            let p = L.flat(SIMD2<Float>((Float(u) + 0.5) * Vox.size, (Float(v) + 0.5) * Vox.size))
+            var r = L.at(x: p.x, z: p.y).room
+            if r == 0 { r = L.roomNear(x: p.x, z: p.y, radius: 0.3) }
+            return r
+        }
+        var members: [Int64] = [ck]
+        var tally: [Int: Int] = [:]
+        if shownH(u, v) > 0 {
+            var seen: Set<Int64> = [ck]
+            var queue: [(Int, Int)] = [(u, v)]
+            var qi = 0
+            while qi < queue.count && queue.count < 4000 {
+                let (cu, cv) = queue[qi]; qi += 1
+                let r = here(cu, cv)
+                if r != 0 { tally[r, default: 0] += 1 }
+                for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
+                    let k = Vox.chunkKey(cu + du, cv + dv)
+                    guard !seen.contains(k), shownH(cu + du, cv + dv) > 0 else { continue }
+                    seen.insert(k)
+                    queue.append((cu + du, cv + dv))
+                    members.append(k)
+                } }
+            }
+        } else {
+            let r = here(u, v)
+            if r != 0 { tally[r] = 1 }
+        }
+        let r = tally.max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key ?? fallbackRoom
+        // 덩어리가 커지며(가구가 더 보임) 방이 바뀐 기둥은 그 조각을 다시 칠함
+        for k in members {
+            if let o = colRoom[k], o != r { dirty.insert(Self.chunkOfCol(k)) }
+            colRoom[k] = r
+        }
         return r
     }
 

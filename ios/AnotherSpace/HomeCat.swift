@@ -26,6 +26,7 @@ final class HomeCat {
         var seated: Bool
         var hands: [SIMD3<Float>]
         var free: (SIMD2<Float>) -> Bool         // 고양이가 설 수 있는 바닥 (집 방 안, 가구·문 자리 아님)
+        var pass: (SIMD2<Float>) -> Bool         // 지나갈 수 있는 바닥 (free 에 문이 쓸고 지나가는 자리까지 — 문을 지나 옆방으로 갈 때)
         var top: (SIMD2<Float>) -> Float?        // 올라앉을 수 있는 가구 윗면 높이 (바닥에서)
         var height: (SIMD2<Float>) -> Float      // 그 자리 가구 높이 (없으면 0)
         var room: (SIMD2<Float>) -> Bool         // 장난감이 날아다닐 수 있는 곳 (이 테마 방 안, 벽에서 6cm 넘게)
@@ -78,7 +79,7 @@ final class HomeCat {
         var ok = [Int8](repeating: -1, count: nx * nz)          // -1 모름, 0 막힘, 1 빈 바닥
         func free(_ i: Int, _ j: Int) -> Bool {
             let k = j * nx + i
-            if ok[k] < 0 { ok[k] = c.free(cp(i, j)) ? 1 : 0 }
+            if ok[k] < 0 { ok[k] = c.pass(cp(i, j)) ? 1 : 0 }
             return ok[k] == 1
         }
         let (si, sj) = cell(a)
@@ -110,7 +111,7 @@ final class HomeCat {
         let pts = cells.map { cp($0 % nx, $0 / nx) }
         func clear(_ p: SIMD2<Float>, _ q: SIMD2<Float>) -> Bool {
             let n = max(1, Int((simd_distance(p, q) / 0.05).rounded(.up)))
-            for i in 1...n where !c.free(p + (q - p) * (Float(i) / Float(n))) { return false }
+            for i in 1...n where !c.pass(p + (q - p) * (Float(i) / Float(n))) { return false }
             return true
         }
         var out: [SIMD2<Float>] = []
@@ -385,7 +386,7 @@ final class HomeCat {
 
     // MARK: 동작 바꾸기
     private func start(_ a: Act, _ dur: Float) {
-        if a == .chase { nav.reset() }
+        nav.reset()
         act = a
         actT = 0
         actDur = dur
@@ -881,7 +882,9 @@ final class HomeCat {
 
     /// 바닥에 있는데 그림 판이 가구·벽에 파고드는 자리면(가구가 새로 보였거나 밀려 들어감) 가장 가까운 넉넉한 빈자리로 비켜남
     private func unstick(_ c: Ctx) {
-        guard elev < 0.02, ![Act.jumpUp, .onTop, .jumpDown, .enter, .leave].contains(act), !c.free(pos) else { return }
+        // 걸어 지나가는 중(길 따라 걷기·막대/공 쫓기)엔 지나갈 수 있는 곳(문이 쓸고 지나가는 자리 포함)이면 그대로 — 문간에서 밀려나 멈추지 않게
+        let moving = goal != nil || nav.isActive
+        guard elev < 0.02, ![Act.jumpUp, .onTop, .jumpDown, .enter, .leave].contains(act), !(moving ? c.pass(pos) : c.free(pos)) else { return }
         for r in stride(from: Float(0.1), through: 1.2, by: 0.1) {
             for k in 0..<16 {
                 let a = Float(k) / 16 * 2 * .pi
@@ -917,15 +920,21 @@ final class HomeCat {
             }
             return
         }
-        let step = min(d, speed * dt)
-        let np = pos + v / d * step
-        if !c.free(np) && c.free(pos) {
-            goal = nil                                          // 길이 막힘 → 다른 일
+        // 길을 찾아 돌아서 감 (가구를 돌고 문을 지나 옆방으로도). 갈 길이 없거나 막히면 다른 일
+        // (예전엔 곧장만 걷다 가구·문이 쓸고 지나가는 자리에 막히면 그대로 앉아, 가구 뒤에 걸려 있거나 다른 방으로 따라오지 않았음)
+        switch nav.step(from: pos, to: g, reach: 0.05, speed: speed, dt, c) {
+        case .move(let np):
+            if simd_length(np - pos) > 1e-4 { moveDir = simd_normalize(np - pos) }
+            faceToward(pos + moveDir)
+            pos = np
+        case .hold:
+            break
+        case .arrived:
+            pos = c.free(g) ? g : pos
+        case .blocked:
+            goal = nil
             start(.sit, 1)
-            return
         }
-        faceToward(g)
-        pos = np
     }
 
     // MARK: 털실 공
@@ -1318,6 +1327,8 @@ struct PetNav {
     private var noPath = false                  // 마지막으로 찾은 길이 없었음 / 막혀 그만둠 (다음에 다시 찾을 때까지 '막힘')
 
     mutating func reset() { path = []; goal = nil; planT = 0; stuckT = 0; noPath = false }
+    /// 길을 따라 가는 중인지 (찾은 길이 남아 있음)
+    var isActive: Bool { !path.isEmpty }
 
     /// reach 안에 들면 arrived. 그만큼 다가갈 길이 없으면 far(있으면) 안까지라도. 길이 끝났으면(가장 가까이 갈 수 있는 곳) arrived
     mutating func step(from pos: SIMD2<Float>, to target: SIMD2<Float>, reach: Float, far: Float? = nil,
@@ -1343,8 +1354,8 @@ struct PetNav {
         let d = simd_length(v)
         guard d > 1e-4 else { path.removeFirst(); return .hold }
         let np = pos + v / d * min(d, speed * dt)
-        if c.free(np) || !c.free(pos) { stuckT = 0; return .move(np) }
-        for q in [SIMD2<Float>(np.x, pos.y), SIMD2<Float>(pos.x, np.y)] where simd_distance(q, pos) > 1e-4 && c.free(q) {
+        if c.pass(np) || !c.pass(pos) { stuckT = 0; return .move(np) }
+        for q in [SIMD2<Float>(np.x, pos.y), SIMD2<Float>(pos.x, np.y)] where simd_distance(q, pos) > 1e-4 && c.pass(q) {
             stuckT = 0
             return .move(q)
         }

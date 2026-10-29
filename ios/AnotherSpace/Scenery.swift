@@ -59,6 +59,8 @@ final class Scenery {
     private let ez: SIMD3<Float>
     private let sortGroup: ModelSortGroup
     private var blocked: Set<Int64>          // 가구 기둥이 있는 10cm 칸 (벽 꾸밈은 그 앞을 피함)
+    private var tall: Set<Int64>             // 1m 넘는 가구 기둥 칸 (눈높이 포스터는 이것만 피함 — 소파·낮은 장 위 벽엔 걸 수 있음)
+    private var posterCells: Set<Int64> = [] // 걸어 둔 포스터 앞 칸 (포스터끼리 겹치지 않게)
     /// 벽 꾸밈(벽난로·선반·메뉴판) 앞 칸 — 나중에 이곳에 가구가 생기면 다른 빈 벽으로 옮김
     private(set) var decorCells: Set<Int64> = []
     private let roomRec: RoomRec
@@ -72,11 +74,12 @@ final class Scenery {
     /// center·halfSize: 하늘 세계 쪽 둘레 기준 (같은 세계 무리 전체), roomCenter·roomHalf: 이 방 자체 (방 안 먼지 등).
     /// far: 하늘 세계 쪽 것(새·배·차·연기·낙엽)을 만들지 — 같은 세계 무리에선 대표 방만 (방마다 만들면 같은 하늘에 두 번 겹침)
     init(room: RoomRec, look: LookMode, tint: SIMD3<Float>, center: SIMD3<Float>, halfSize: SIMD2<Float>, angle: Float,
-         floorY: Float, ceilY: Float, segs: [WallSeg], layout: Layout, sortGroup: ModelSortGroup, blocked: Set<Int64> = [],
+         floorY: Float, ceilY: Float, segs: [WallSeg], layout: Layout, sortGroup: ModelSortGroup, blocked: Set<Int64> = [], tall: Set<Int64> = [],
          far farOn: Bool = true, roomCenter: SIMD3<Float>? = nil, roomHalf: SIMD2<Float>? = nil) {
         self.roomCenter = roomCenter ?? center
         self.roomHalf = roomHalf ?? halfSize
         self.blocked = blocked
+        self.tall = tall
         self.roomRec = room
         self.segsAll = segs
         self.floorY0 = floorY
@@ -129,9 +132,11 @@ final class Scenery {
 
     /// 벽 꾸밈 앞에 가구가 새로 보이면(탐험하며 알게 된 가구) 가구 없는 다른 벽으로 옮김. 옮겼으면 true
     @discardableResult
-    func relocate(blocked nb: Set<Int64>) -> Bool {
+    func relocate(blocked nb: Set<Int64>, tall nt: Set<Int64>) -> Bool {
         guard !decorCells.isEmpty, !decorCells.isDisjoint(with: nb) else { return false }
         blocked = nb
+        tall = nt
+        posterCells.removeAll()
         for c in Array(near.children) { c.removeFromParent() }
         fireCtl?.stop(); fireCtl = nil; fireSound = nil
         flames.removeAll()
@@ -951,20 +956,28 @@ final class Scenery {
                 }
             }
         }
-        // 포스터: 메뉴판·선반이 없는 벽의 빈 곳(벽 앞 35cm에 가구 없음)에 액자에 넣은 커피·디저트 포스터 — 눈높이, 벽마다 1~2장, 모두 4장까지.
-        // (그림 아이콘 + 읽히지 않는 흘림 글씨, 선 그림은 윤곽선 그림 cafe_poster_n_ln)
+        // 포스터: 큰 빈 벽에 자연스럽게 — 창·메뉴판·선반·문 끝(50cm)을 피한 벽의 빈 구간마다, 눈높이 앞(벽 앞 30cm)에
+        // 1m 넘는 가구가 없는 곳에 1.6m 남짓마다 한 장꼴 (벽 하나에 3장, 방 하나에 8장까지).
+        // 예전엔 '긴 벽 셋째부터·벽마다 가장 긴 빈 구간 하나·벽 앞 35cm 바닥에 낮은 가구도 없어야·방에 4장까지'라
+        // 모두 같은 카페 테마로 하면 소파·낮은 장이 붙은 넓은 벽이나 가장 긴 벽들이 휑하게 비었음
         var posterK = Int.random(in: 0...3, using: &g)
         var placed = 0
-        for s in walls.dropFirst(2) where placed < 4 && top > 2.0 {
-            guard let run = clearRun(s, doorEnds: doorEnds, depth: 0.35, minLen: 0.62) else { continue }
+        let posterWalls = segs.filter { !$0.window && simd_distance($0.a, $0.b) > 0.8 }.sorted { simd_distance($0.a, $0.b) > simd_distance($1.a, $1.b) }
+        for s in posterWalls where placed < 8 && top > 2.0 {
             let L0 = simd_distance(s.a, s.b), dir = (s.b - s.a) / L0
-            let runLen = run.1 - run.0
-            let n = min(2, max(1, Int(runLen / 1.0)))
-            for k in 0..<n where placed < 4 {
-                let mid = s.a + dir * (run.0 + runLen * (Float(k) + 0.5) / Float(n))
-                addPoster(s, mid: mid, idx: posterK % 4, floorY: floorY, top: top, lines: &lines)
-                posterK += 1
-                placed += 1
+            var onWall = 0
+            for run in posterRuns(s, doorEnds: doorEnds) where placed < 8 && onWall < 3 {
+                let runLen = run.1 - run.0
+                let n = min(3 - onWall, max(1, Int((runLen + 0.4) / 1.6)))
+                for k in 0..<n where placed < 8 {
+                    let mid = s.a + dir * (run.0 + runLen * (Float(k) + 0.5) / Float(n))
+                    let cells = frontCells(s, mid: mid, width: 0.52, depth: 0.3)
+                    guard cells.isDisjoint(with: decorCells), cells.isDisjoint(with: posterCells) else { continue }
+                    addPoster(s, mid: mid, idx: posterK % 4, floorY: floorY, top: top, lines: &lines)
+                    posterK += 1
+                    placed += 1
+                    onWall += 1
+                }
             }
         }
         // 펜던트 조명: 짧게(아래 끝이 천장 30cm 아래) — 머리에 닿지 않게 천장이 2.3m 넘을 때만, 벽에서 60cm 안쪽에 1.6m 간격
@@ -1035,7 +1048,38 @@ final class Scenery {
                 lines.stroke(p, r, width: 0.01)
             }
         }
-        decorCells.formUnion(frontCells(s, mid: mid, width: w + 0.1, depth: 0.35))
+        posterCells.formUnion(frontCells(s, mid: mid, width: w + 0.3, depth: 0.35))
+    }
+
+    /// 포스터 걸 수 있는 벽 구간들 (벽을 따라 a→b 거리, 0.62m 넘는 것 모두): 문 끝에서 50cm, 벽 앞 30cm 안에 1m 넘는 가구 없음
+    private func posterRuns(_ s: WallSeg, doorEnds: [SIMD2<Float>]) -> [(Float, Float)] {
+        let len = simd_distance(s.a, s.b)
+        guard len > 0.62 else { return [] }
+        let dir = (s.b - s.a) / len
+        let step: Float = 0.05
+        var out: [(Float, Float)] = []
+        var start: Float? = nil
+        var t: Float = 0.15
+        while t <= len - 0.15 + 1e-3 {
+            let q = s.a + dir * t
+            var ok = !doorEnds.contains { simd_distance($0, q) < 0.5 }
+            if ok {
+                var o: Float = 0.05
+                while o <= 0.3 + 1e-3 {
+                    if tall.contains(RoomWorld.clutterKey(q + s.n * o)) { ok = false; break }
+                    o += 0.1
+                }
+            }
+            if ok && start == nil { start = t }
+            let last = t + step > len - 0.15 + 1e-3
+            if let st = start, !ok || last {
+                let en = ok ? t : t - step
+                if en - st >= 0.62 { out.append((st, en)) }
+                start = nil
+            }
+            t += step
+        }
+        return out.sorted { $0.1 - $0.0 > $1.1 - $1.0 }
     }
 
     /// 카페 창밖 길을 지나가는 사람들 (창이 있는 벽 바깥 4~6m, 벽과 나란히 걸어감)

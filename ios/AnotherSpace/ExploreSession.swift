@@ -511,7 +511,7 @@ final class ExploreSession {
                 host = lw
             }
         }
-        let w = RoomWorld(d, r, layout: L, blocked: vox?.blockedCells(minH: 0.2) ?? [], group: g, host: host)
+        let w = RoomWorld(d, r, layout: L, blocked: vox?.blockedCells(minH: 0.2) ?? [], tall: vox?.blockedCells(minH: 1.0) ?? [], group: g, host: host)
         if w.ownsWorld { spaceRoot.addChild(w.world) }
         spaceRoot.addChild(w.local)
         spaceRoot.addChild(w.doorsRoot)
@@ -795,10 +795,12 @@ final class ExploreSession {
         var affected = Set(targets)
         for tg in targets { affected.formUnion(oldGroups[tg] ?? []); affected.formUnion(groups[tg] ?? []) }
         // 벽 하나를 사이에 둔 옆방(45cm 안): 두 방이 같은 테마인지가 이번에 바뀌었으면 그 옆방도 다시 만듦 (그 벽의 창이 생기거나 없어짐)
-        for ws in L.walls where ws.nearRoom != 0 && (targets.contains(ws.room) || targets.contains(ws.nearRoom)) {
-            guard let a0 = worlds[ws.room]?.room, let b0 = worlds[ws.nearRoom]?.room,
-                  let a1 = d.rec.room(ws.room), let b1 = d.rec.room(ws.nearRoom) else { continue }
-            if Self.sameTheme(a0, b0) != Self.sameTheme(a1, b1) { affected.insert(ws.room); affected.insert(ws.nearRoom) }
+        for ws in L.walls {
+            for other in [ws.nearRoom, ws.behind] where other > 0 && (targets.contains(ws.room) || targets.contains(other)) {
+                guard let a0 = worlds[ws.room]?.room, let b0 = worlds[other]?.room,
+                      let a1 = d.rec.room(ws.room), let b1 = d.rec.room(other) else { continue }
+                if Self.sameTheme(a0, b0) != Self.sameTheme(a1, b1) { affected.insert(ws.room); affected.insert(other) }
+            }
         }
         let affectedRooms = affected
         closeDocent()
@@ -1460,6 +1462,7 @@ final class ExploreSession {
         let cur = current
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
                               free: { [unowned self] p in self.catFree(p, L, homeRooms) },
+                              pass: { [unowned self] p in self.catFree(p, L, homeRooms, wallR: 0.2, swing: false) },
                               top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
                               height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 },
                               room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },      // 장난감은 지금 방 안에서만 (옆방 벽을 뚫고 나가지 않게)
@@ -1502,6 +1505,7 @@ final class ExploreSession {
         let cur = current
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
                               free: { [unowned self] p in self.catFree(p, L, rooms, r: 0.34) },
+                              pass: { [unowned self] p in self.catFree(p, L, rooms, r: 0.34, wallR: 0.24, swing: false) },
                               top: { p in blocked?.flatTop(L.plane(p.x, p.y)) },
                               height: { p in blocked?.heightAt(L.plane(p.x, p.y)) ?? 0 },
                               room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },      // 장난감은 지금 방 안에서만 (옆방 벽을 뚫고 나가지 않게)
@@ -1520,11 +1524,13 @@ final class ExploreSession {
 
     /// 고양이가 설 수 있는 바닥: 집 테마 방 안, 벽에서 12cm 넘게, 둘레 12cm에 가구 없음, 문이 쓸고 지나가는 자리 아님
     /// r: 그림 판이 어느 쪽을 향해도(늘 나를 봄) 가구·벽 속으로 파고들지 않을 만큼의 여유 (판 반폭 + 6cm쯤)
-    private func catFree(_ p: SIMD2<Float>, _ L: Layout, _ homeRooms: Set<Int>, r: Float = 0.27) -> Bool {
+    /// swing: 문이 쓸고 지나가는 자리도 막힌 곳으로 칠지 (머물 자리 고를 때는 막고, 지나갈 때는 열어 둠 — 문을 지나 옆방으로 따라오게)
+    /// wallR: 벽까지 띄울 거리 (없으면 r) — 지나갈 때는 좁은 문(폭 70cm 안팎)도 지나도록 작게
+    private func catFree(_ p: SIMD2<Float>, _ L: Layout, _ homeRooms: Set<Int>, r: Float = 0.27, wallR: Float? = nil, swing: Bool = true) -> Bool {
         let a = L.at(x: p.x, z: p.y)
-        guard a.room != 0, homeRooms.contains(a.room), a.wall > r else { return false }
+        guard a.room != 0, homeRooms.contains(a.room), a.wall > (wallR ?? r) else { return false }
         let pl = L.plane(p.x, p.y)
-        if Skin.inSwing(L, pl) { return false }
+        if swing && Skin.inSwing(L, pl) { return false }
         guard let v = vox else { return true }
         if v.heightAt(pl) > 0.05 { return false }
         for ring in [r * 0.55, r] {
@@ -2271,7 +2277,7 @@ final class ExploreSession {
         decorT += dt
         if decorT > 3, let w = worlds[current], let v = vox {
             decorT = 0
-            w.recheckDecor(blocked: v.blockedCells(minH: 0.2))
+            w.recheckDecor(blocked: v.blockedCells(minH: 0.2), tall: v.blockedCells(minH: 1.0))
         }
         badgeT += dt
         if badgeT > 0.4, let w = worlds[current] {

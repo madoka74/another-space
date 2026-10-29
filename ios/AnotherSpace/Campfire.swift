@@ -415,6 +415,8 @@ final class Campfire {
                            (emberE, emb, Float(0.03))] {
             e.components.set(pe)
             e.position = [0, y * k, 0]
+            // 반투명 입자도 포털(다른 세계로 열린 벽·창)보다 나중에 그림 — 순서가 없으면 그 뒤 포털이 입자를 지워 연기·불티가 사라졌다 나타났다 함
+            e.components.set(ModelSortGroupComponent(group: Sorting.group, order: 30))
             root.addChild(e)
         }
 

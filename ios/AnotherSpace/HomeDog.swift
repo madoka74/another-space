@@ -634,7 +634,9 @@ final class HomeDog {
 
     /// 바닥에 있는데 그림 판이 가구·벽에 파고드는 자리면(가구가 새로 보였거나 밀려 들어감) 가장 가까운 넉넉한 빈자리로 비켜남
     private func unstick(_ c: Ctx) {
-        guard elev < 0.02, ![Act.jumpUp, .onTop, .jumpDown, .enter, .leave].contains(act), !c.free(pos) else { return }
+        // 걸어 지나가는 중(길 따라 걷기·막대/공 쫓기)엔 지나갈 수 있는 곳(문이 쓸고 지나가는 자리 포함)이면 그대로 — 문간에서 밀려나 멈추지 않게
+        let moving = goal != nil || nav.isActive
+        guard elev < 0.02, ![Act.jumpUp, .onTop, .jumpDown, .enter, .leave].contains(act), !(moving ? c.pass(pos) : c.free(pos)) else { return }
         for r in stride(from: Float(0.1), through: 1.2, by: 0.1) {
             for k in 0..<16 {
                 let a = Float(k) / 16 * 2 * .pi
@@ -660,10 +662,21 @@ final class HomeDog {
             start(then, thenDur)
             return
         }
-        let np = pos + v / d * min(d, speed * dt)
-        if !c.free(np) && c.free(pos) { goal = nil; start(.sit, 1); return }
-        faceToward(g)
-        pos = np
+        // 길을 찾아 돌아서 감 (가구를 돌고 문을 지나 옆방으로도). 갈 길이 없거나 막히면 앉음
+        // (예전엔 곧장만 걷다 가구·문이 쓸고 지나가는 자리에 막히면 그대로 앉아, 다른 방으로 따라오지 않았음)
+        switch nav.step(from: pos, to: g, reach: 0.05, speed: speed, dt, c) {
+        case .move(let np):
+            if simd_length(np - pos) > 1e-4 { moveDir = simd_normalize(np - pos) }
+            faceToward(pos + moveDir)
+            pos = np
+        case .hold:
+            break
+        case .arrived:
+            pos = c.free(g) ? g : pos
+        case .blocked:
+            goal = nil
+            start(.sit, 1)
+        }
     }
 
     private func zoomies(_ c: Ctx) {

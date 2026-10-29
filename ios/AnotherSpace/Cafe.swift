@@ -244,6 +244,8 @@ final class CafeTables {
             if let e = lines.entity("setLines", Ink.line) { holder.addChild(e) }
             setE.addChild(holder)
         }
+        // 탁자 차림(유리잔·얼음 등 반투명 포함)도 포털보다 나중에 그림 (김은 따로 31번 — Sorting.apply는 그림 엔티티만 바꿈)
+        Sorting.apply(setE, 30)
         root.addChild(setE)
         for c in cells { used.insert(Self.key(c.0, c.1)) }
         sets += 1
@@ -625,6 +627,9 @@ final class CafeTables {
         if let puff = Tex.particle("smoke_puff") { pe.mainEmitter.image = puff }
         let se = Entity()
         se.components.set(pe)
+        // 포털(창·유리 지붕 너머 하늘 세계)보다 나중에 그림: 순서가 없으면 창을 배경으로 볼 때 그 포털이 김을 지워,
+        // 김이 배경에 걸려 안 보였다가 시선·순서가 바뀌면 다시 보였음
+        se.components.set(ModelSortGroupComponent(group: Sorting.group, order: 31))
         se.position = at
         root.addChild(se)
     }

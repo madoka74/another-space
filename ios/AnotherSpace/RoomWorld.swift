@@ -176,7 +176,9 @@ final class RoomWorld {
     /// 가구 기둥이 있는 10cm 칸 (벽난로·선반·메뉴판을 가구 없는 벽에 두려고)
     private let blocked: Set<Int64>
 
-    init(_ d: SpaceData, _ r: RoomRec, layout: Layout, blocked: Set<Int64> = [], group: [Int] = [], host: RoomWorld? = nil) {
+    private let tallCells: Set<Int64>        // 1m 넘는 가구 칸 (카페 포스터 자리)
+    init(_ d: SpaceData, _ r: RoomRec, layout: Layout, blocked: Set<Int64> = [], tall: Set<Int64> = [], group: [Int] = [], host: RoomWorld? = nil) {
+        tallCells = tall
         self.blocked = blocked
         room = r
         groupIds = group.isEmpty ? [r.id] : group
@@ -196,10 +198,10 @@ final class RoomWorld {
     }
 
     /// 벽 꾸밈 앞에 새로 가구가 보이면 다른 빈 벽으로 옮김
-    func recheckDecor(blocked: Set<Int64>) {
+    func recheckDecor(blocked: Set<Int64>, tall: Set<Int64>) {
         // 탐험 중에 다시 만드는 것은 모두 이 방 표시 방식으로 (선 그림·흑백 방에 컬러가 섞이지 않게)
         Tex.with(look) {
-            scenery?.relocate(blocked: blocked)
+            scenery?.relocate(blocked: blocked, tall: tall)
             creek?.refresh(blocked: blocked)          // 계곡 물: 새로 알게 된 가구 자리는 비우고 다시 그림
         }
     }
@@ -329,13 +331,17 @@ final class RoomWorld {
         // 실내 장소(카페·집)는 바깥벽에 창을 냄 (카페는 바닥 가까이부터 천장 밑까지 통유리, 집은 벽마다 한두 개 창)
         // 벽 너머 45cm 안 옆방이 같은 테마(같은 세계)면 그 벽엔 창을 내지 않음 (두 방이 한 공간으로 이어져 보여 창이 겹쳐 보임).
         // 옆방이 다른 테마면 보통 바깥벽처럼 창을 냄 (v0.5.23은 테마와 상관없이 막아, 다른 방에 둘러싸인 거실이 카페·집이면 창이 하나도 없었음)
+        // 벽 너머(2m 안)에 이 방 자신이 있으면(ㄱ자 방·같은 방 통로) 늘 창을 내지 않음 → -1 도 '같음'에 넣음
         var mySegs = L.walls.filter { $0.room == room.id }
-        var sameNear = Set<Int>()
-        for s in mySegs where s.nearRoom != 0 {
-            if groupIds.contains(s.nearRoom) { sameNear.insert(s.nearRoom); continue }
-            if let o = d.rec.room(s.nearRoom), o.place == room.place, o.weather == room.weather, o.time == room.time, o.lookMode == room.lookMode { sameNear.insert(s.nearRoom) }
+        var sameNear: Set<Int> = [-1]
+        for s in mySegs {
+            for id in [s.nearRoom, s.behind] where id > 0 && !sameNear.contains(id) {
+                if groupIds.contains(id) { sameNear.insert(id); continue }
+                if let o = d.rec.room(id), o.place == room.place, o.weather == room.weather, o.time == room.time, o.lookMode == room.lookMode { sameNear.insert(id) }
+            }
         }
-        for i in mySegs.indices where mySegs[i].window && sameNear.contains(mySegs[i].nearRoom) { mySegs[i].window = false }
+        func shut(_ s: WallSeg) -> Bool { sameNear.contains(s.nearRoom) || (s.behind != 0 && sameNear.contains(s.behind)) }
+        for i in mySegs.indices where mySegs[i].window && shut(mySegs[i]) { mySegs[i].window = false }
         let segs = Self.withWindows(mySegs, place: room.place, doors: L.doors, roomId: room.id, nearSame: sameNear)
         // 계곡: 바깥 강 물길과 방 안 개울을 먼저 정함 (개울이 드나드는 벽 자리는 울타리를 비워야 해서 벽보다 먼저)
         let shared = host != nil                    // 같은 세계 무리의 다른 방: 하늘 세계 쪽은 대표 방이 이미 만들어 둠
@@ -391,7 +397,7 @@ final class RoomWorld {
         addWeather(rects, L, floorY: floorY, ceilY: ceilY, sky: !shared)
         if lineMode { addOutlines(segs, L, floorY: floorY, ceilY: ceilY) }
         let sc = Scenery(room: room, look: look, tint: tint, center: center, halfSize: halfSize, angle: angle,
-                         floorY: floorY, ceilY: ceilY, segs: segs, layout: L, sortGroup: sortGroup, blocked: blocked,
+                         floorY: floorY, ceilY: ceilY, segs: segs, layout: L, sortGroup: sortGroup, blocked: blocked, tall: tallCells,
                          far: !shared, roomCenter: roomCenter, roomHalf: roomHalf)
         world.addChild(sc.far)
         local.addChild(sc.near)
@@ -649,7 +655,8 @@ final class RoomWorld {
                     x += s * 1.25
                 }
             case "sea":
-                // 바닷가 말뚝 밧줄 울타리: 1.6m마다 네모 말뚝(나무) + 처진 굵은 밧줄 둘 + 아래 현무암 몇 개
+                // 바닷가 판자 울타리: 1.6m마다 네모 말뚝(나무) 사이를 빽빽한 세로 판자(틈 2cm)로 막고, 위에 처진 굵은 밧줄 + 아래 현무암 몇 개.
+                // (예전엔 말뚝과 가는 밧줄 둘뿐이라 너머 모래밭이 훤히 보여, 벽 자리가 뚫린 빈 곳처럼 보여 걸어가게 될 수 있었음)
                 let n = max(1, Int((L2 / 1.6).rounded()))
                 let mid = out * min(D * 0.45, 0.08)
                 var posts: [SIMD3<Float>] = []
@@ -658,7 +665,17 @@ final class RoomWorld {
                     slab(&solidA, p - dir * 0.06, p + dir * 0.06, out, o0: -0.06, o1: 0.06, y0: -0.05, y1: H + 0.05, tile: 0.8)
                 }
                 for i in 0..<n {
-                    for y in [H * 0.5, H * 0.92] {
+                    // 세로 판자: 폭 11cm, 틈 2cm, 높이는 조금씩 다르게 (낡은 판자 울타리)
+                    let a = posts[i] + dir * 0.06, b = posts[i + 1] - dir * 0.06
+                    let span = simd_distance(a, b)
+                    var x: Float = 0
+                    while x < span - 0.02 {
+                        let wdt = min(0.11, span - x)
+                        let p0 = a + dir * x, p1 = a + dir * (x + wdt)
+                        slab(&solidA, p0, p1, out, o0: -0.015, o1: 0.015, y0: -0.03, y1: H * Float.random(in: 0.84...0.9, using: &g), tile: 0.8)
+                        x += wdt + 0.02
+                    }
+                    for y in [H * 0.92] {
                         pole(&solidB, posts[i] + up * y - out * 0.065, posts[i + 1] + up * y - out * 0.065, r: 0.018, bend: -up * 0.09)
                     }
                     if !sp.thin && Float.random(in: 0...1, using: &g) < 0.6 {
@@ -816,7 +833,7 @@ final class RoomWorld {
         var out: [WallSeg] = []
         for s in segs {
             let L0 = len(s)
-            if s.inner || nearSame.contains(s.nearRoom) || s.window || L0 < 1.1 || (reserve.map { simd_distance($0.a, s.a) < 1e-3 && simd_distance($0.b, s.b) < 1e-3 } ?? false) {
+            if s.inner || nearSame.contains(s.nearRoom) || (s.behind != 0 && nearSame.contains(s.behind)) || s.window || L0 < 1.1 || (reserve.map { simd_distance($0.a, s.a) < 1e-3 && simd_distance($0.b, s.b) < 1e-3 } ?? false) {
                 out.append(s); continue
             }
             let dir = (s.b - s.a) / L0
@@ -3169,11 +3186,13 @@ final class RoomWorld {
                 world.addChild(e)
                 emitters.append(e)
             }
-            // ① 집 위 (천장까지)
-            for id in groupIds { for r in L.rects(id) { sheet(r.0 - SIMD2<Float>(repeating: 0.25), r.1 + SIMD2<Float>(repeating: 0.25), bottom: ceilY, density: 0.3) } }
-            // ② 집 둘레 (땅까지)
+            // 입자 묶음(엔티티) 수를 늘 몇십 개로: 방 바닥 사각형(5cm 칸을 묶은 것 — 들쭉날쭉한 방은 방마다 수십~수백 개)마다
+            // 하나씩 만들면, 모든 방이 한 세계인 '모두 같게'에선 집 전체 사각형 수만큼 수백 개가 한 세계에 생겨 기기가 다시 켜졌음
             if let wb = L.walkBounds() {
                 let lo = wb.0, hi = wb.1
+                // ① 집 위 (천장까지): 집 전체를 덮는 한 장
+                sheet(lo - SIMD2<Float>(repeating: 0.25), hi + SIMD2<Float>(repeating: 0.25), bottom: ceilY, density: 0.3)
+                // ② 집 둘레 (땅까지)
                 for r in outsideRects(L, lo: lo, hi: hi, margin: 3, cell: 0.5, clear: 0.2) { sheet(r.0, r.1, bottom: floorY, density: 0.3) }
                 // ③ 그 바깥 띠 넷 (땅까지)
                 let i0 = lo - SIMD2<Float>(repeating: 3), i1 = hi + SIMD2<Float>(repeating: 3)
@@ -3185,15 +3204,15 @@ final class RoomWorld {
             }
         }
         guard outdoor else { return }
-        for r in rects {
+        // 방 안: 5cm 칸 사각형 대신 50cm 칸(벽에서 15cm 안쪽까지 모두 이 방인 칸)을 묶은 큰 사각형 — 방마다 입자 묶음 수가 넓이(m²) 정도로
+        for r in coarseRects(L, cell: 0.5, inset: 0.15) {
             let c = L.flat((r.0 + r.1) / 2)
-            // 벽에서 15cm 안쪽에서만 (눈송이가 흩날려도 벽 너머로 넘어가지 않게)
-            let sx = r.1.x - r.0.x - 0.3, sz = r.1.y - r.0.y - 0.3
-            guard sx > 0.2, sz > 0.2, sx * sz > 0.1 else { continue }
+            let sx = r.1.x - r.0.x, sz = r.1.y - r.0.y
+            guard sx > 0.2, sz > 0.2 else { continue }
             var list: [Entity] = []
             if wet {
-                // 0.8m 안팎 칸으로 나눠 뿌리고, 머리 근처 칸만 끔 — 눈앞을 스치는 눈송이가 크게 번쩍이며 깜빡이던 것을 없앰
-                let lo = r.0 + SIMD2<Float>(0.15, 0.15)
+                // 1m 안팎 칸으로 나눠 뿌리고, 머리 근처 칸만 끔 — 눈앞을 스치는 눈송이가 크게 번쩍이며 깜빡이던 것을 없앰
+                let lo = r.0
                 let nx = max(1, Int((sx / 1.0).rounded())), nz = max(1, Int((sz / 1.0).rounded()))
                 let tx = sx / Float(nx), tz = sz / Float(nz)
                 for ix in 0..<nx {
@@ -3228,6 +3247,54 @@ final class RoomWorld {
                 roomEmitters.append(e)
             }
         }
+    }
+
+    /// 이 방 바닥을 cell m 칸으로 나눠, 칸과 그 둘레 inset m 가 모두 이 방 바닥인 칸들을 큰 사각형으로 묶음 (평면 좌표)
+    private func coarseRects(_ L: Layout, cell: Float, inset: Float) -> [PRect] {
+        var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+        for r in L.rects(room.id) { lo = simd_min(lo, r.0); hi = simd_max(hi, r.1) }
+        guard lo.x < hi.x, lo.y < hi.y else { return [] }
+        let nx = Int(((hi.x - lo.x) / cell).rounded(.up)), nz = Int(((hi.y - lo.y) / cell).rounded(.up))
+        guard nx > 0, nz > 0, nx * nz < 40_000 else { return [] }
+        func mine(_ p: SIMD2<Float>) -> Bool { let f = L.flat(p); return L.at(x: f.x, z: f.y).room == room.id }
+        var free = [Bool](repeating: false, count: nx * nz)
+        for j in 0..<nz {
+            for i in 0..<nx {
+                let a = lo + SIMD2<Float>(Float(i), Float(j)) * cell
+                var ok = true
+                var v: Float = -inset
+                outer: while v <= cell + inset + 1e-3 {
+                    var u: Float = -inset
+                    while u <= cell + inset + 1e-3 {
+                        if !mine(a + SIMD2<Float>(u, v)) { ok = false; break outer }
+                        u += 0.1
+                    }
+                    v += 0.1
+                }
+                free[j * nx + i] = ok
+            }
+        }
+        var used = [Bool](repeating: false, count: nx * nz)
+        var out: [PRect] = []
+        for j in 0..<nz {
+            var i = 0
+            while i < nx {
+                guard free[j * nx + i] && !used[j * nx + i] else { i += 1; continue }
+                var i1 = i
+                while i1 < nx && free[j * nx + i1] && !used[j * nx + i1] { i1 += 1 }
+                var j1 = j + 1
+                while j1 < nz {
+                    var full = true
+                    for k in i..<i1 where !free[j1 * nx + k] || used[j1 * nx + k] { full = false; break }
+                    if !full { break }
+                    j1 += 1
+                }
+                for jj in j..<j1 { for k in i..<i1 { used[jj * nx + k] = true } }
+                out.append((lo + SIMD2<Float>(Float(i), Float(j)) * cell, lo + SIMD2<Float>(Float(i1), Float(j1)) * cell))
+                i = i1
+            }
+        }
+        return out
     }
 
     /// lo~hi(평면 좌표) 둘레 margin m 안에서, 걸을 수 있는 곳(어느 방이든)에서 clear m 넘게 떨어진 cell m 칸들을 직사각형으로 묶음 (평면 좌표)

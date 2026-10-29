@@ -237,6 +237,12 @@ final class ValleyCreek {
             exitPt = nil
             let ep = entry?.0 ?? cellP(start)
             var best: (SIMD2<Float>, SIMD2<Float>, Int, Float, Float)? = nil        // 벽 점, 안쪽 방향, 물 칸, 점수, 트인 거리
+            // 나가는 곳은 들어온 곳과 떨어진 다른 쪽이어야: 방의 긴 길이(span)의 45% 넘게 떨어지고, 들어온 벽과 같은 쪽(같은 방향의 벽)이면 60% 넘게.
+            // 그런 곳이 없으면 나가는 물길 없이 방 안에서 고이게 (예전엔 좁은 방에서 들어온 곳 바로 옆 1.5m만 넘으면 돼,
+            // 물이 들어온 쪽 벽으로 도로 나가는 것처럼 보였음)
+            var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
+            for r in L.rects(roomId) { lo = simd_min(lo, r.0); hi = simd_max(hi, r.1) }
+            let span = lo.x < hi.x ? max(hi.x - lo.x, hi.y - lo.y) : 0
             for s in L.walls where s.room == roomId {
                 let ab = s.b - s.a
                 let len = simd_length(ab)
@@ -247,7 +253,11 @@ final class ValleyCreek {
                     let mid: Float = 0.25 * min(k, len - k)
                     k += 0.3
                     if L.doors.contains(where: { $0.zone(q, margin: 0.6) }) { continue }
-                    if let e = entry, simd_distance(q, e.0) < 1.5 { continue }
+                    if let e = entry {
+                        let dd = simd_distance(q, e.0)
+                        if dd < max(1.5, span * 0.45) { continue }
+                        if simd_dot(s.n, e.1) > 0.7 && dd < span * 0.6 { continue }
+                    }
                     var wk = -1, wd: Float = 0.5
                     for c in waterCells where dIn[c].isFinite {
                         let d = simd_distance(cellP(c), q)
