@@ -24,6 +24,7 @@ final class Scenery {
         var phase: Float = 0
         var center = SIMD3<Float>(0, 0, 0)
         var dir: Float = 1
+        var segLeft: Float = 0          // 지금 맡긴 이동(move)이 끝나기까지 남은 시간
     }
     private var flyers: [Flyer] = []
     private struct Mover { let e: Entity; let a: SIMD3<Float>; let d: SIMD3<Float>; let len: Float; let speed: Float; var s: Float; let bob: Float }
@@ -237,6 +238,11 @@ final class Scenery {
             f.ang = Float(i) / Float(n) * 2 * .pi + Float.random(in: 0...0.6, using: &g)
             f.phase = Float.random(in: 0...6, using: &g)
             f.dir = big || i % 3 != 0 ? 1 : -1
+            // 처음 자리 (이동은 tick 이 이어서 맡김)
+            let p0 = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
+            let v0 = SIMD3<Float>(-sin(f.ang), 0, cos(f.ang)) * f.dir
+            f.root.position = SIMD3<Float>(p0.x, f.height + 1.2 * sin(f.phase), p0.z)
+            f.root.orientation = simd_quatf(angle: atan2(-v0.x, -v0.z), axis: [0, 1, 0])
             f.root.addChild(ModelEntity(mesh: body, materials: [mat]))
             for s: Float in [1, -1] {
                 let w = ModelEntity(mesh: wm, materials: [wingMat])
@@ -1322,11 +1328,23 @@ final class Scenery {
         tickPlane(dt)
         for p in plumes { p.tick(dt) }
         for f in flyers {
-            f.ang += f.dir * f.speed / max(4, f.radius) * dt
-            let p = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
-            f.root.position = SIMD3<Float>(p.x, f.height + 1.2 * sin(t * 0.35 + f.phase), p.z)
-            let v = SIMD3<Float>(-sin(f.ang), 0, cos(f.ang)) * f.dir
-            f.root.orientation = simd_quatf(angle: atan2(-v.x, -v.z), axis: [0, 1, 0])
+            // 새 위치는 매 화면 직접 옮기지 않고, 짧은 구간(원호 0.2rad, 길어야 1초) 끝 자리로의 이동(move)을 RealityKit에 맡김 —
+            // 앱의 화면 갱신(SceneEvents.Update)이 화면 주사율보다 느리면 직접 옮기는 빠른 물체는 같은 자리에 두 번 그려진 뒤 건너뛰어
+            // 눈으로 따라갈 때 두 겹으로 보였음 (멈춰 있는 나무·산은 그대로인데 빠르게 나는 새만 이중으로 보인 이유)
+            f.segLeft -= dt
+            if f.segLeft <= 0 {
+                let w = f.speed / max(4, f.radius)                    // 원을 도는 빠르기 (rad/s)
+                let dur = min(1, 0.2 / max(0.05, w))
+                f.ang += f.dir * w * dur
+                let tt = t + dur
+                let p = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
+                let v = SIMD3<Float>(-sin(f.ang), 0, cos(f.ang)) * f.dir
+                let tr = Transform(scale: f.root.scale, rotation: simd_quatf(angle: atan2(-v.x, -v.z), axis: [0, 1, 0]),
+                                   translation: SIMD3<Float>(p.x, f.height + 1.2 * sin(tt * 0.35 + f.phase), p.z))
+                if f.root.parent != nil { _ = f.root.move(to: tr, relativeTo: f.root.parent, duration: TimeInterval(dur), timingFunction: .linear) }
+                else { f.root.transform = tr }
+                f.segLeft = dur
+            }
             // 날갯짓 (가끔 미끄러지듯 쉼)
             let glide = sin(t * 0.5 + f.phase) > 0.6
             let a = glide ? 0.08 : 0.55 * sin(t * f.flap + f.phase)
@@ -1392,10 +1410,9 @@ final class SmokePlume {
 
     /// at: 연기가 나오는 곳, size: 처음 덩이 크기(m), height: 오르는 높이(m), alpha: 가장 짙을 때 불투명도
     init(at p: SIMD3<Float>, size: Float, height: Float, alpha: Float, color: SIMD3<Float>, look: LookMode,
-         sortGroup: ModelSortGroup, wind: SIMD3<Float> = [0.12, 0, 0.05], count: Int = 10) {
+         sortGroup: ModelSortGroup, wind: SIMD3<Float> = [0.12, 0, 0.05], count: Int = 10, life: Float = 7) {
         root.position = p
         size0 = size
-        let life: Float = 7
         rise = height / life
         grow = size * 3.2 / life
         self.alpha = alpha

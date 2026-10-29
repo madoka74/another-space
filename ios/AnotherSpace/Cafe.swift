@@ -103,6 +103,7 @@ final class CafeTables {
     /// cellH: 그 10cm 칸에 보이는 가구 블록 높이(10cm 단위, 없으면 0)
     func tick(_ dt: Float, head: SIMD3<Float>, L: Layout, cellH: (Int, Int) -> Int) {
         t += dt
+        for p in plumes { p.tick(dt) }
         for (e, ph) in flames where e.parent != nil {
             let k = 0.85 + 0.15 * sin(t * 13 + ph) * sin(t * 7.1 + ph * 2)
             e.scale = SIMD3<Float>(1, k, 1)
@@ -244,7 +245,7 @@ final class CafeTables {
             if let e = lines.entity("setLines", Ink.line) { holder.addChild(e) }
             setE.addChild(holder)
         }
-        // 탁자 차림(유리잔·얼음 등 반투명 포함)도 포털보다 나중에 그림 (김은 따로 31번 — Sorting.apply는 그림 엔티티만 바꿈)
+        // 탁자 차림(유리잔·얼음 등 반투명 포함)·김 그림 판도 포털보다 나중에 그림 (기준서 3)
         Sorting.apply(setE, 30)
         root.addChild(setE)
         for c in cells { used.insert(Self.key(c.0, c.1)) }
@@ -602,36 +603,15 @@ final class CafeTables {
         }
     }
 
-    /// 따뜻한 음료의 김: 가늘고 옅은 김이 잔 위에서 피어 흔들리며 사라짐 (큰 덩어리가 겹쳐 보이지 않게 작고 많이)
+    /// 따뜻한 음료의 김: 가늘고 옅은 김 몇 줄기가 잔 위로 피어올라 사라짐.
+    /// 입자로 만들면 그리는 순서를 정할 수 없어 창(포털)을 배경으로 볼 때 지워졌다 나타났다 함(기준서 3) →
+    /// 늘 나를 보는 그림 판(SmokePlume: 순서 30, 깊이 안 씀)으로
+    private var plumes: [SmokePlume] = []
     private func steam(_ at: SIMD3<Float>, _ root: Entity) {
-        var pe = ParticleEmitterComponent()
-        pe.emitterShape = .sphere
-        pe.emitterShapeSize = [0.025, 0.004, 0.025]
-        pe.birthLocation = .volume
-        pe.birthDirection = .world
-        pe.emissionDirection = [0, 1, 0]
-        pe.speed = 0.035
-        pe.speedVariation = 0.012
-        pe.mainEmitter.birthRate = 14
-        pe.mainEmitter.lifeSpan = 1.8
-        pe.mainEmitter.lifeSpanVariation = 0.5
-        pe.mainEmitter.size = 0.006
-        pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 5
-        pe.mainEmitter.noiseStrength = 0.012
-        pe.mainEmitter.noiseScale = 4
-        pe.mainEmitter.noiseAnimationSpeed = 0.6
-        pe.mainEmitter.acceleration = [0, 0.01, 0]
-        pe.mainEmitter.color = .constant(.single(look == .line ? UIColor(white: 0.45, alpha: 0.12) : UIColor(white: 1, alpha: 0.11)))
-        pe.mainEmitter.blendMode = .alpha
-        pe.mainEmitter.opacityCurve = .gradualFadeInOut
-        if let puff = Tex.particle("smoke_puff") { pe.mainEmitter.image = puff }
-        let se = Entity()
-        se.components.set(pe)
-        // 포털(창·유리 지붕 너머 하늘 세계)보다 나중에 그림: 순서가 없으면 창을 배경으로 볼 때 그 포털이 김을 지워,
-        // 김이 배경에 걸려 안 보였다가 시선·순서가 바뀌면 다시 보였음
-        se.components.set(ModelSortGroupComponent(group: Sorting.group, order: 31))
-        se.position = at
-        root.addChild(se)
+        let pl = SmokePlume(at: at, size: 0.022, height: 0.14, alpha: look == .line ? 0.22 : 0.18, color: [1, 1, 1], look: look,
+                            sortGroup: Sorting.group, wind: [0.004, 0, 0.002], count: 6, life: 2.0)
+        root.addChild(pl.root)
+        plumes.append(pl)
     }
 }
 

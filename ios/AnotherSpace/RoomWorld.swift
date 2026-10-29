@@ -510,55 +510,67 @@ final class RoomWorld {
             guard len > 0.01 else { continue }
             let n = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))           // 방 안쪽
             portal.face(a, b, toward: SIMD3<Float>(n.x, 0, n.y), y0: 0, y1: ceilY - floorY)
-            // 울타리는 '아무도 걸을 수 없는 곳'에만. 포털 너머 세계의 물건은 포털 앞(방 안)에 있어도 포털을 통해 그려지므로,
-            // 걸을 수 있는 곳(이 방·다른 방·문 자리)에 놓이면 복도 한가운데 덤불처럼 보임.
-            // 방과 방 사이 벽(벽 너머 45cm 안에 옆방이 있는 바깥벽 포함): 뒤가 옆방이라 3cm 뒤에 얇게(8cm) 바짝, 늘리지 않음.
-            // 바깥 벽: 22cm 뒤부터 걸을 수 없는 만큼(최대 55cm) 두께, 모서리 쪽으로 25cm까지
+            // 울타리 = 이 벽이 경계라는 표시. 기준서 2: 문 자리(벽 칸이 아님)와 개울이 드나드는 곳 말고는 모든 벽 칸에 빈틈없이.
+            // 예전엔 ① 벽 바로 뒤(3cm)가 걸을 수 있는 곳(문·통로 칸, 같은 방의 다른 쪽)이거나 뒤로 10cm 안에 걸을 수 있는 곳이 있으면
+            // 세우지 않았고 ② 45cm 넘지 않는 토막은 버렸고 ③ 같은 세계 옆방과 맞닿은 벽은 벽 가운데의 옆방 번호 하나로 '그 방이 세움'을
+            // 정해 통째로 건너뛰어, 두 벽이 어긋난 곳·좁은 통로·벽 옆 짧은 토막이 뚫린 빈 곳처럼 보였음.
+            // (①은 포털 앞 세계 것이 그려지던 때의 회피책 — 이제 포털 면마다 앞쪽을 잘라 내므로(clippingMode) 필요 없음)
             let pd = (s.b - s.a) / max(1e-4, simd_distance(s.a, s.b))      // 평면 좌표 방향
-            let between = s.inner || s.nearRoom != 0
-            // 같은 세계 무리의 옆방과 맞닿은 벽: 두 방이 같은 하늘 세계를 보므로 울타리는 하나만 (번호가 작은 방이), 벽 줄 한가운데에 —
-            // 두 방이 각자 세우면 서로의 울타리가 내 쪽 벽 앞에 겹쳐 보임
-            var mate = s.nearRoom
-            if s.inner { let q = L.flat((s.a + s.b) / 2 - s.n * 0.03); mate = L.at(x: q.x, z: q.y).room }
-            let shareWall = between && mate != 0 && groupIds.contains(mate)
-            if shareWall && mate < room.id { continue }
-            // 울타리 앞면은 벽 바로 뒤(3cm)에 — 벽에 붙은 가구가 울타리와 맞닿아 보이게
-            let off: Float = shareWall && s.inner ? -0.04 : 0.03
-            let ext: Float = between ? 0 : 0.25
+            /// 벽 너머 45cm 안에 처음 만나는 걸을 수 있는 곳의 방 (이 방 자신 포함, 방을 모르는 걸을 수 있는 곳 -1, 없으면 0)
+            func across(_ t: Float) -> Int {
+                for k in 0..<9 {
+                    let q = s.a + pd * t - s.n * (0.025 + Float(k) * 0.05)
+                    if L.walkable(q) { let f = L.flat(q); let r = L.roomNear(x: f.x, z: f.y, radius: 0.05); return r == 0 ? -1 : r }
+                }
+                return 0
+            }
+            // 같은 세계 무리끼리 맞닿은 0두께 벽(inner)은 번호가 작은 방이 벽 줄 한가운데(양쪽 4cm)에 하나만 — 양쪽 방 모두 뒤쪽 절반이 보임
+            let midMate = across(len / 2)
+            let innerShared = s.inner && midMate != room.id && groupIds.contains(midMate)
+            let off: Float = innerShared ? -0.04 : 0.03
             let step: Float = 0.05
-            /// t 자리에 세울 수 있는 두께 (0이면 못 세움)
-            func depthAt(_ t: Float) -> Float {
-                if between { return t >= 0 && t <= len ? 0.08 : 0 }
+            /// t 자리 울타리: (두께, 얇게) — 두께 0이면 세우지 않음
+            func depthAt(_ t: Float) -> (Float, Bool) {
+                if waterGaps.contains(where: { simd_distance($0, s.a + pd * t) < 0.6 }) { return (0, false) }
+                let m = across(t)
+                if m != 0 {
+                    if t < 0 || t > len { return (0, false) }             // 뒤가 걸을 수 있는 곳이면 모서리 밖으로 늘리지 않음
+                    // 같은 세계 무리의 옆방(번호가 작은 방)이 이 자리를 맞은편에서 이미 세움 — 한 줄만
+                    if m != room.id && groupIds.contains(m) && m < room.id { return (0, false) }
+                    return (0.08, true)                                    // 뒤가 옆방·통로: 벽 사이에 얇게
+                }
+                if (t < 0 && nearDoor(s.a)) || (t > len && nearDoor(s.b)) { return (0, false) }
                 let q = s.a + pd * t - s.n * off
-                if L.walkable(q) { return 0 }
-                if (t < 0 && nearDoor(s.a)) || (t > len && nearDoor(s.b)) { return 0 }
-                // 개울이 벽 너머로 드나드는 자리는 비움 (물이 바깥 물길과 이어져 보이게)
-                if waterGaps.contains(where: { simd_distance($0, s.a + pd * t) < 0.6 }) { return 0 }
                 var d: Float = 0
                 while d < 0.55 && !L.walkable(q - s.n * (d + 0.05)) { d += 0.05 }
-                return d >= 0.1 ? d : 0
+                return (max(d, 0.08), d < 0.1)
             }
-            var t0: Float? = nil
+            var t0: Float? = nil, thin0 = false
             var dep: Float = 1
-            var t = -ext
-            while t < len + ext + 1e-4 {
-                let t1 = min(t + step, len + ext)
-                let r = t1 - t > 1e-4 ? depthAt((t + t1) / 2) : 0
-                let ok = r > 0
-                if ok { if t0 == nil { t0 = t; dep = r } else { dep = min(dep, r) } }
-                if (!ok || t1 >= len + ext - 1e-4), let st = t0 {
-                    let en = ok ? t1 : t
-                    if en - st > 0.45 {                     // 짧은 토막(문 옆·모서리의 좁은 틈)은 세우지 않음
-                        let wa = L.flat(s.a + pd * st - s.n * off), wb = L.flat(s.a + pd * en - s.n * off)
-                        let o2 = L.flat(-s.n) - L.flat(SIMD2<Float>(0, 0))
-                        spans.append(BarrierSpan(a: SIMD3<Float>(wa.x, floorY, wa.y), b: SIMD3<Float>(wb.x, floorY, wb.y),
-                                                 out: simd_normalize(SIMD3<Float>(o2.x, 0, o2.y)), depth: dep, thin: between))
-                    }
-                    t0 = nil
+            var t: Float = -0.25
+            let tEnd = len + 0.25
+            func close(_ en: Float) {
+                guard let st = t0 else { return }
+                if en - st > 0.08 {                                        // 짧은 토막도 세움 (벽 옆 짧은 칸이 뚫려 보이지 않게)
+                    let wa = L.flat(s.a + pd * st - s.n * off), wb = L.flat(s.a + pd * en - s.n * off)
+                    let o2 = L.flat(-s.n) - L.flat(SIMD2<Float>(0, 0))
+                    spans.append(BarrierSpan(a: SIMD3<Float>(wa.x, floorY, wa.y), b: SIMD3<Float>(wb.x, floorY, wb.y),
+                                             out: simd_normalize(SIMD3<Float>(o2.x, 0, o2.y)), depth: dep, thin: thin0))
+                }
+                t0 = nil
+            }
+            while t < tEnd - 1e-4 {
+                let t1 = min(t + step, tEnd)
+                let (r, thin) = depthAt((t + t1) / 2)
+                if r > 0 {
+                    if t0 != nil && thin != thin0 { close(t) }
+                    if t0 == nil { t0 = t; thin0 = thin; dep = r } else { dep = min(dep, r) }
+                } else {
+                    close(t)
                 }
                 t = t1
-                if t1 >= len + ext - 1e-4 { break }
             }
+            close(tEnd)
         }
         addPortalPlanes(portal, name: "walls")
         addBarriers(spans)
@@ -655,8 +667,7 @@ final class RoomWorld {
                     x += s * 1.25
                 }
             case "sea":
-                // 바닷가 판자 울타리: 1.6m마다 네모 말뚝(나무) 사이를 빽빽한 세로 판자(틈 2cm)로 막고, 위에 처진 굵은 밧줄 + 아래 현무암 몇 개.
-                // (예전엔 말뚝과 가는 밧줄 둘뿐이라 너머 모래밭이 훤히 보여, 벽 자리가 뚫린 빈 곳처럼 보여 걸어가게 될 수 있었음)
+                // 바닷가 말뚝 밧줄 울타리: 1.6m마다 네모 말뚝(나무) + 처진 굵은 밧줄 둘 + 아래 현무암 몇 개
                 let n = max(1, Int((L2 / 1.6).rounded()))
                 let mid = out * min(D * 0.45, 0.08)
                 var posts: [SIMD3<Float>] = []
@@ -665,17 +676,7 @@ final class RoomWorld {
                     slab(&solidA, p - dir * 0.06, p + dir * 0.06, out, o0: -0.06, o1: 0.06, y0: -0.05, y1: H + 0.05, tile: 0.8)
                 }
                 for i in 0..<n {
-                    // 세로 판자: 폭 11cm, 틈 2cm, 높이는 조금씩 다르게 (낡은 판자 울타리)
-                    let a = posts[i] + dir * 0.06, b = posts[i + 1] - dir * 0.06
-                    let span = simd_distance(a, b)
-                    var x: Float = 0
-                    while x < span - 0.02 {
-                        let wdt = min(0.11, span - x)
-                        let p0 = a + dir * x, p1 = a + dir * (x + wdt)
-                        slab(&solidA, p0, p1, out, o0: -0.015, o1: 0.015, y0: -0.03, y1: H * Float.random(in: 0.84...0.9, using: &g), tile: 0.8)
-                        x += wdt + 0.02
-                    }
-                    for y in [H * 0.92] {
+                    for y in [H * 0.5, H * 0.92] {
                         pole(&solidB, posts[i] + up * y - out * 0.065, posts[i + 1] + up * y - out * 0.065, r: 0.018, bend: -up * 0.09)
                     }
                     if !sp.thin && Float.random(in: 0...1, using: &g) < 0.6 {
