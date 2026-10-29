@@ -25,6 +25,7 @@ final class Scenery {
         var center = SIMD3<Float>(0, 0, 0)
         var dir: Float = 1
         var segLeft: Float = 0          // 지금 맡긴 이동(move)이 끝나기까지 남은 시간
+        var gliding: Bool? = nil        // 날갯짓 상태 (바뀔 때만 날개 움직임을 새로 맡김)
     }
     private var flyers: [Flyer] = []
     private struct Mover { let e: Entity; let a: SIMD3<Float>; let d: SIMD3<Float>; let len: Float; let speed: Float; var s: Float; let bob: Float }
@@ -1345,12 +1346,25 @@ final class Scenery {
                 else { f.root.transform = tr }
                 f.segLeft = dur
             }
-            // 날갯짓 (가끔 미끄러지듯 쉼)
+            // 날갯짓 (가끔 미끄러지듯 쉼) — 날개도 매 화면 앱이 직접 돌리지 않고 되풀이 움직임(애니메이션)을 RealityKit에 맡김.
+            // 앱 갱신이 화면 주사율보다 느리면 초당 8~12번 퍼덕이는 날개가 띄엄띄엄 그려져 새가 흐릿하게(초점이 안 맞는 것처럼) 보였음.
+            // 앱은 쉼↔날갯짓이 바뀔 때만 손댐
             let glide = sin(t * 0.5 + f.phase) > 0.6
-            let a = glide ? 0.08 : 0.55 * sin(t * f.flap + f.phase)
-            if f.wings.count == 2 {
-                f.wings[0].orientation = simd_quatf(angle: a, axis: [0, 0, 1])
-                f.wings[1].orientation = simd_quatf(angle: -a, axis: [0, 0, 1])
+            if f.gliding != glide && f.wings.count == 2 {
+                f.gliding = glide
+                for (k, w) in f.wings.enumerated() {
+                    w.stopAllAnimations()
+                    let sg: Float = k == 0 ? 1 : -1
+                    if glide {
+                        w.orientation = simd_quatf(angle: 0.08 * sg, axis: [0, 0, 1])
+                    } else {
+                        let a = Transform(scale: w.scale, rotation: simd_quatf(angle: -0.55 * sg, axis: [0, 0, 1]), translation: w.position)
+                        let b = Transform(scale: w.scale, rotation: simd_quatf(angle: 0.55 * sg, axis: [0, 0, 1]), translation: w.position)
+                        let anim = FromToByAnimation<Transform>(from: a, to: b, duration: TimeInterval(Float.pi / max(1, f.flap)),
+                                                                timing: .easeInOut, bindTarget: .transform, repeatMode: .autoReverse)
+                        if let res = try? AnimationResource.generate(with: anim) { w.playAnimation(res) }
+                    }
+                }
             }
         }
         for i in movers.indices {

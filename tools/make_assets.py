@@ -569,6 +569,9 @@ def tree_line(W, H, seed, count, hmin, hmax, kind, col_dark, col_lit, ground=0.9
     for d in order:
         cx = r.random() * W
         h = r.uniform(hmin, hmax) * H * (0.8 + 0.25 * d)
+        # 잎 덩어리 수관은 꼭대기 줄(top)보다 h×0.15 남짓 위로 솟음 — 그림 맨 위를 넘으면 잘려 위가 평평한 나무가 띠를 따라 되풀이됐음
+        # → 수관 꼭대기가 그림 위 2% 아래에 들어오도록 키를 제한 (소나무는 꼭대기 줄이 끝)
+        h = min(h, (ground - 0.02) * H / (1.0 if kind == 'pine' else 1.16))
         top = ground * H - h
         w = h * (0.3 if kind == 'pine' else 0.5) * r.uniform(0.8, 1.2)
         x0 = int(cx - w * 1.1); x1 = int(cx + w * 1.1) + 1

@@ -130,7 +130,9 @@ final class RoomWorld {
     private var skyEntity: ModelEntity?
     private var skyMat: UnlitMaterial?
     private var flashMat: UnlitMaterial?
-    private var clouds: [(Entity, SIMD3<Float>)] = []
+    private var clouds: [(Entity, SIMD3<Float>)] = [] { didSet { cloudLeft = clouds.map { _ in 0 }; cloudAt = clouds.map { _ in nil } } }
+    private var cloudLeft: [Float] = []                 // 구름마다 지금 맡긴 이동이 끝나기까지 남은 시간
+    private var cloudAt: [SIMD3<Float>?] = []           // 구름마다 지금 맡긴 이동의 끝 자리
     // 계곡 개울·폭포
     private var riverPts: [SIMD3<Float>] = []
     private var riverW: [Float] = []
@@ -502,7 +504,7 @@ final class RoomWorld {
     private func openWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         var portal = PortalPlanes()
         /// 울타리 줄 위 한 점 (평면 좌표): 방향 n(방 안쪽), 줄 따라 좌표 u, 줄 자리 c(= n·점), 세울 두께, 얇게, 한가운데 공유 줄인지
-        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool }
+        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool; let outside: Bool }
         var samples: [Sample] = []
         let base = barrierProt + 0.01                                      // 울타리 앞면이 벽 평면 1cm 뒤
         let step: Float = 0.05
@@ -554,7 +556,7 @@ final class RoomWorld {
                     shared = true
                 }
                 let q = p - s.n * off
-                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared))
+                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0))
             }
         }
         addPortalPlanes(portal, name: "walls")
@@ -574,10 +576,18 @@ final class RoomWorld {
             for cl in clusters {
                 let c = shared ? cl.map(\.c).reduce(0, +) / Float(cl.count) : cl[0].c
                 func pt(_ u: Float) -> SIMD2<Float> { perp * u + n * c }
-                /// 줄을 늘려도 되는 자리: 걸을 수 있는 곳(방·문)·개울 드나드는 곳이 아님
-                func freeAt(_ u: Float) -> Bool {
-                    let q = pt(u)
-                    return !L.walkable(q) && !waterGaps.contains(where: { simd_distance($0, q) < 0.6 })
+                /// 줄 끝 u 자리 울타리 몸통(말뚝 반폭 6cm·두께)이 문·통로 자리(바깥 줄이면 걸을 수 있는 곳 모두)·개울 드나드는 곳에 걸치지 않는지 —
+                /// 걸치면 문간 쪽에서 볼 때 그 부분이 문간 바닥(방 안)에 가려 말뚝이 반쯤 잘려 보였음.
+                /// sign: 줄 바깥쪽(+1 끝은 u 증가 쪽), walk: 걸을 수 있는 곳도 피함(바깥 줄 — 방 사이 줄은 옆방 자리와 겹칠 수 있어 문 자리만)
+                func clearAt(_ u: Float, _ sign: Float, walk: Bool) -> Bool {
+                    for da: Float in [0, 0.04, 0.08] {
+                        for o: Float in [-0.06, 0, 0.06, 0.12] {
+                            let q = pt(u + sign * da) - n * o
+                            if L.doors.contains(where: { q.x > $0.lo.x - 0.03 && q.x < $0.hi.x + 0.03 && q.y > $0.lo.y - 0.03 && q.y < $0.hi.y + 0.03 }) { return false }
+                            if (walk && o >= 0 && L.walkable(q)) || waterGaps.contains(where: { simd_distance($0, q) < 0.6 }) { return false }
+                        }
+                    }
+                    return true
                 }
                 let ext = base + 0.04
                 let byU = cl.sorted { $0.u < $1.u }
@@ -585,16 +595,22 @@ final class RoomWorld {
                 while i < byU.count {
                     var j = i
                     var dep = byU[i].depth - (byU[i].c - c)
-                    while j + 1 < byU.count && byU[j + 1].u - byU[j].u <= step * 1.6 && byU[j + 1].thin == byU[i].thin {
+                    while j + 1 < byU.count && byU[j + 1].u - byU[j].u <= step * 1.6 && byU[j + 1].thin == byU[i].thin && byU[j + 1].outside == byU[i].outside {
                         j += 1
                         dep = min(dep, byU[j].depth - (byU[j].c - c))
                     }
                     var u0 = byU[i].u - step / 2, u1 = byU[j].u + step / 2
-                    var e: Float = 0
-                    while e < ext && freeAt(u0 - 0.025) { u0 -= 0.025; e += 0.025 }
-                    e = 0
-                    while e < ext && freeAt(u1 + 0.025) { u1 += 0.025; e += 0.025 }
-                    if u1 - u0 > 0.06 {
+                    // 모서리: 바깥 줄은 다른 줄과 만나도록 띄운 거리만큼 늘림 / 문간·통로: 몸통이 걸치지 않게 줄임 (모든 줄)
+                    let walk = byU[i].outside
+                    if walk {
+                        var e: Float = 0
+                        while e < ext && clearAt(u0 - 0.025, -1, walk: true) { u0 -= 0.025; e += 0.025 }
+                        e = 0
+                        while e < ext && clearAt(u1 + 0.025, 1, walk: true) { u1 += 0.025; e += 0.025 }
+                    }
+                    while u1 - u0 > 0.1 && !clearAt(u0, -1, walk: walk) { u0 += 0.025 }
+                    while u1 - u0 > 0.1 && !clearAt(u1, 1, walk: walk) { u1 -= 0.025 }
+                    if u1 - u0 > 0.06 && clearAt(u0, -1, walk: walk) && clearAt(u1, 1, walk: walk) {
                         let wa = L.flat(pt(u0)), wb = L.flat(pt(u1))
                         let o2 = L.flat(-n) - L.flat(SIMD2<Float>(0, 0))
                         spans.append(BarrierSpan(a: SIMD3<Float>(wa.x, floorY, wa.y), b: SIMD3<Float>(wb.x, floorY, wb.y),
@@ -2674,6 +2690,10 @@ final class RoomWorld {
                     let h = Float.random(in: set.h, using: &g)
                     var dd = Float.random(in: set.d, using: &g)
                     if skyOpen { dd = max(dd, (h - 1.6) * 2.9 + Float.random(in: 0...5, using: &g)) }
+                    // 머리 위(눈높이에서 55도 넘게)는 나무가 덮지 않게: 꼭대기까지 높이 × 0.7 보다 집에서 멀리.
+                    // 가까이 선 10~20m 나무의 잎 판이 머리 위를 가득 덮으면, 올려다보며 고개를 돌릴 때 가까운 만큼 크게 움직여
+                    // 그림이 조금만 늦어도 흔들리고 초점이 안 맞는 것처럼 보였고(울렁거림), 겹친 잎 판이 화면을 가득 채워 그리기도 무거웠음
+                    dd = max(dd, (h - 1.6) * 0.7)
                     let p = around((Float(i) + Float.random(in: 0...0.8, using: &g)) / Float(set.count), dd, rec, floorY - 0.1)
                     let w = h * set.aspect * Float.random(in: 0.85...1.15, using: &g)
                     let yaw = Float.random(in: 0...3.14, using: &g)
@@ -3432,11 +3452,24 @@ final class RoomWorld {
         tickVillage(dt)
         tickCafe(dt)
         for p in plumes { p.tick(dt) }
-        for (e, v) in clouds {
-            e.position += v * dt
-            let off = e.position - center
-            if abs(off.x) > 180 { e.position.x = center.x - copysign(170, off.x) }
-            if abs(off.z) > 180 { e.position.z = center.z - copysign(170, off.z) }
+        // 구름: 매 화면 앱이 옮기지 않고 20초짜리 곧은 이동(move)을 RealityKit에 맡김 — 앱 갱신이 화면 주사율보다 느리면
+        // 하늘에서 움직이는 구름이 띄엄띄엄 옮겨져 흐릿하게(초점이 안 맞는 것처럼) 보였음 (새와 같은 까닭)
+        for i in clouds.indices {
+            cloudLeft[i] -= dt
+            guard cloudLeft[i] <= 0, let par = clouds[i].0.parent else { continue }
+            let (e, v) = clouds[i]
+            var p = cloudAt[i] ?? e.position
+            let off = p - center
+            var jump = false
+            if abs(off.x) > 180 { p.x = center.x - copysign(170, off.x); jump = true }
+            if abs(off.z) > 180 { p.z = center.z - copysign(170, off.z); jump = true }
+            if jump || cloudAt[i] == nil { e.position = p }
+            let dur: Float = 20
+            var tr = e.transform
+            tr.translation = p + v * dur
+            _ = e.move(to: tr, relativeTo: par, duration: TimeInterval(dur), timingFunction: .linear)
+            cloudAt[i] = tr.translation
+            cloudLeft[i] = dur
         }
         if let w = water {
             let speed: Float = room.weather == "storm" ? 0.8 : (room.weather == "wind" ? 0.5 : 0.22)

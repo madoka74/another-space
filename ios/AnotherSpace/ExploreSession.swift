@@ -591,9 +591,20 @@ final class ExploreSession {
     /// (옆방 테마를 바꿔야 사라짐). 닫힌 문(벽·열쇠 문·실제 문짝) 너머 방은 어차피 보이지 않으므로 끔
     @ObservationIgnored private var openDoorSet: Set<Int> = []
     private func roomShown(_ id: Int) -> Bool { shownRooms().contains(id) }
+    /// 몸(목 뒤)이 있는 방·몸이 서 있는 문 자리 (방 판정은 0.5초 늦게 바뀌므로 그 사이에도 몸이 있는 곳은 그려야 함)
+    @ObservationIgnored private var bodyRoom = 0
+    @ObservationIgnored private var bodyDoors: [Int] = []
+    /// 방마다 그만 그려도 되는 때 — 조건에서 빠진 뒤 0.8초 더 켜 둠 (문턱에서 켜고 끄기를 오가며 한 프레임씩 비지 않게)
+    @ObservationIgnored private var shownUntil: [Int: Float] = [:]
     private func shownRooms() -> Set<Int> {
         var vis = currentGroup
         guard let L = layout else { return vis }
+        // 문턱을 넘는 동안: 지금 방(판정)은 아직 예전 방인데 문은 '건너감'으로 닫혀(벽) 몸이 있는 새 방이 꺼져 현실이 비쳤음 →
+        // 몸이 있는 방과 몸이 서 있는 문 양쪽 방은 늘 그림
+        if bodyRoom != 0 { vis.insert(bodyRoom); vis.formUnion(groups[bodyRoom] ?? []) }
+        for i in bodyDoors where i < L.doors.count {
+            for r in [L.doors[i].roomA, L.doors[i].roomB] { vis.insert(r); vis.formUnion(groups[r] ?? []) }
+        }
         let base = vis
         for i in openDoorSet where i < L.doors.count {
             let ds = L.doors[i]
@@ -605,7 +616,9 @@ final class ExploreSession {
         return vis
     }
     private func updateRoomVisibility() {
-        let vis = shownRooms()
+        let now = shownRooms()
+        for id in now { shownUntil[id] = t + 0.8 }
+        let vis = Set(shownUntil.filter { $0.value > t }.keys)
         for (id, w) in worlds {
             let on = vis.contains(id)
             if w.local.isEnabled != on { w.local.isEnabled = on }
@@ -1180,6 +1193,8 @@ final class ExploreSession {
             let inDoorway = current != 0 && L.doors.contains { $0.zone(pb, margin: 0.15) }
             if candidate != current && (candidateT > 0.5 || current == 0) && candidate != 0 && !inDoorway { enterRoom(candidate) }
             let atDoor = L.doors.contains { $0.zone(pb, margin: 0.3) }
+            bodyRoom = r
+            bodyDoors = L.doors.indices.filter { L.doors[$0].inside(pb) }      // 문 자리 안 (닫힌 문 앞에선 켜지 않음 — 문짝 판 너머로 옆방이 비치지 않게)
             outsideT = (r == 0 && !atDoor) ? outsideT + dt : 0          // 문 자리를 지나는 동안은 '방 밖'으로 치지 않음 (현실이 비치지 않게)
             handDoors(L, fit)
             updateDoors(dt, hs, bs, fit.dirToSaved(fwd), L)
@@ -2176,11 +2191,25 @@ final class ExploreSession {
             hudMenu = false; themeOpen = false; hudUntil = 0
             return
         }
-        guard !doorShow.values.contains(where: { $0 > 0.3 }) else { return }
+        guard !keyInView() else { return }
         hudMenu = true
         themeOpen = false
         hudUntil = t + 4
         hudShow = 0                                                 // 새 자리에 바로 나타나게
+    }
+
+    /// 열쇠 문이 떠 있고 그 열쇠가 시선 앞(55도 안)에 있는지 — 그때만 빈 곳 탭을 열쇠에 양보.
+    /// (예전엔 떠 있기만 하면 막아, 열쇠 문을 등지고 서 있으면 아무리 탭해도 메뉴판이 안 나왔음)
+    private func keyInView() -> Bool {
+        for (i, sh) in doorShow where sh > 0.3 {
+            for w in worlds.values {
+                guard let v = w.doorView[i], v.root.isEnabled else { continue }
+                let kp = v.root.convert(position: [0, DoorView.keyY, 0], to: nil)
+                let to = kp - head
+                if simd_length(to) > 0.05 && simd_dot(simd_normalize(to), fwd) > cos(Float.pi * 55 / 180) { return true }
+            }
+        }
+        return false
     }
 
     private func openKey(_ i: Int) {
