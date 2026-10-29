@@ -326,7 +326,16 @@ final class RoomWorld {
         Geo.inkEye = lineMode ? roomCenter + SIMD3<Float>(0, 1.5, 0) : nil
         let R = simd_length(halfSize)
         // 실내 장소(카페·집)는 바깥벽에 창을 냄 (카페는 바닥 가까이부터 천장 밑까지 통유리, 집은 벽마다 한두 개 창)
-        let segs = Self.withWindows(L.walls.filter { $0.room == room.id }, place: room.place, doors: L.doors, roomId: room.id)
+        // 벽 너머 45cm 안 옆방이 같은 테마(같은 세계)면 그 벽엔 창을 내지 않음 (두 방이 한 공간으로 이어져 보여 창이 겹쳐 보임).
+        // 옆방이 다른 테마면 보통 바깥벽처럼 창을 냄 (v0.5.23은 테마와 상관없이 막아, 다른 방에 둘러싸인 거실이 카페·집이면 창이 하나도 없었음)
+        var mySegs = L.walls.filter { $0.room == room.id }
+        var sameNear = Set<Int>()
+        for s in mySegs where s.nearRoom != 0 {
+            if groupIds.contains(s.nearRoom) { sameNear.insert(s.nearRoom); continue }
+            if let o = d.rec.room(s.nearRoom), o.place == r.place, o.weather == r.weather, o.time == r.time, o.lookMode == r.lookMode { sameNear.insert(s.nearRoom) }
+        }
+        for i in mySegs.indices where mySegs[i].window && sameNear.contains(mySegs[i].nearRoom) { mySegs[i].window = false }
+        let segs = Self.withWindows(mySegs, place: room.place, doors: L.doors, roomId: room.id, nearSame: sameNear)
         // 계곡: 바깥 강 물길과 방 안 개울을 먼저 정함 (개울이 드나드는 벽 자리는 울타리를 비워야 해서 벽보다 먼저)
         let shared = host != nil                    // 같은 세계 무리의 다른 방: 하늘 세계 쪽은 대표 방이 이미 만들어 둠
         if room.place == "valley" {
@@ -769,7 +778,7 @@ final class RoomWorld {
     /// 카페·집: 바깥벽(옆방과 맞닿지 않은 벽)을 [벽 | 창 | 벽] 조각으로 나눔 (창 조각 window = true).
     /// 가장 긴 벽 하나는 그대로 둠 (카페 메뉴판·바 카운터, 집 벽난로 자리). 문 끝에서는 35cm 띄움.
     /// 카페는 벽 거의 전체가 통창(모서리 기둥만 남김), 집은 벽 길이에 따라 창 하나(1.5m까지) 또는 둘
-    nonisolated static func withWindows(_ segs: [WallSeg], place: String, doors: [DoorSeg], roomId: Int) -> [WallSeg] {
+    nonisolated static func withWindows(_ segs: [WallSeg], place: String, doors: [DoorSeg], roomId: Int, nearSame: Set<Int>) -> [WallSeg] {
         guard place == "cafe" || place == "home" else { return segs }
         func len(_ s: WallSeg) -> Float { simd_distance(s.a, s.b) }
         let reserve = segs.filter { !$0.window }.max { len($0) < len($1) }
@@ -782,7 +791,7 @@ final class RoomWorld {
         var out: [WallSeg] = []
         for s in segs {
             let L0 = len(s)
-            if s.inner || s.nearRoom != 0 || s.window || L0 < 1.1 || (reserve.map { simd_distance($0.a, s.a) < 1e-3 && simd_distance($0.b, s.b) < 1e-3 } ?? false) {
+            if s.inner || nearSame.contains(s.nearRoom) || s.window || L0 < 1.1 || (reserve.map { simd_distance($0.a, s.a) < 1e-3 && simd_distance($0.b, s.b) < 1e-3 } ?? false) {
                 out.append(s); continue
             }
             let dir = (s.b - s.a) / L0
@@ -3105,24 +3114,45 @@ final class RoomWorld {
         }
     }
 
-    /// 날씨 (비·눈·바람·반딧불).
-    /// - 하늘 세계 쪽(sky, 같은 세계 무리에선 대표 방만): ① 천장 위 — 무리 전체 위에서 천장 높이까지 ② 집 밖 둘레 — 천장 높이부터 땅까지.
-    ///   벽·창 너머로 바라봐도 바깥에 계속 내리고, 천장 위에서 내리던 것이 그대로 땅까지 이어짐 (예전엔 천장 높이에서 사라져
-    ///   벽 너머 바깥엔 눈이 안 보였음). 집 밖 둘레는 걸을 수 있는 곳(어느 방이든)에서 40cm 넘게 떨어진 곳에만 —
-    ///   포털 너머 세계 것은 집 안 자리에 있어도 그려지므로 옆방·문간에 내리는 것처럼 보이지 않게
-    /// - 방 안(바깥 장소만, 하늘이 트인 곳): 천장에서 바닥까지 방 전체에. 머리 둘레 40cm 안 칸만 잠깐 멈춤 (눈앞 깜빡임)
-    ///   (실내 장소는 유리 천장·창 너머로만 보이고 방 안엔 내리지 않음)
+    /// 날씨 (비·눈·바람·반딧불). 눈·비는 하늘에서 땅까지 끊기지 않고 한 줄기로 내림:
+    /// - 하늘 세계 쪽(sky, 같은 세계 무리에선 대표 방만) — 모두 천장 위 3m에서 같이 시작
+    ///   ① 집 위: 무리 방마다 천장 위 3m → 천장 (지붕 위. 집 안으로는 내려오지 않음)
+    ///   ② 집 둘레 3m: 어느 방이든 걸을 수 있는 곳에서 20cm 넘게 떨어진 50cm 칸들 → 땅까지
+    ///   ③ 그 바깥 9m 띠 넷 → 땅까지 (멀리 있는 것은 작게 보여 덜 촘촘하게)
+    ///   포털 너머 세계 것은 포털 앞(어느 방 안이든)에 있어도 그려지므로, 집 안 자리(모든 방)는 비움
+    ///   (예전엔 ①만 있어 천장 높이에서 끊겨, 벽·창 너머 바깥은 하늘 쪽에만 내리고 땅 가까이엔 안 내리는데
+    ///    방 안 눈은 따로 내려, 가운데만 빈 채로 위·아래가 따로 내렸음)
+    /// - 방 안(바깥 장소 = 하늘이 트인 곳만): 천장에서 바닥까지 (위 ①이 천장에서 이어 받음). 머리 둘레 칸만 잠깐 멈춤
+    ///   실내 장소(카페·집·전시관)는 지붕 아래라 방 안엔 내리지 않고, 창·유리 지붕 너머 바깥에만 땅까지 내림
     private func addWeather(_ rects: [PRect], _ L: Layout, floorY: Float, ceilY: Float, sky: Bool) {
         let w = room.weather
         let wet = ["drizzle", "rain", "storm", "snow", "heavysnow"].contains(w)
         if wet && sky {
-            // 천장 위 3m만, 입자는 넓이당 0.25배 (예전 7m·1배는 수십만 개라 화면이 버벅였음)
-            let e = Self.precip(w, size: SIMD3<Float>(halfSize.x * 2 + 8, 0.1, halfSize.y * 2 + 8), height: 3, look: look, density: 0.25)
-            e.position = SIMD3<Float>(center.x, ceilY + 3, center.z)
-            layer(e, 20)
-            e.orientation = simd_quatf(angle: -angle, axis: [0, 1, 0])
-            world.addChild(e)
-            emitters.append(e)
+            let top = ceilY + 3
+            func sheet(_ lo: SIMD2<Float>, _ hi: SIMD2<Float>, bottom: Float, density: Float) {
+                let sx = hi.x - lo.x, sz = hi.y - lo.y
+                guard sx > 0.05, sz > 0.05 else { return }
+                let c = L.flat((lo + hi) / 2)
+                let e = Self.precip(w, size: SIMD3<Float>(sx, 0.05, sz), height: top - bottom, look: look, density: density)
+                e.position = SIMD3<Float>(c.x, top, c.y)
+                e.orientation = simd_quatf(angle: -angle, axis: [0, 1, 0])
+                layer(e, 20)
+                world.addChild(e)
+                emitters.append(e)
+            }
+            // ① 집 위 (천장까지)
+            for id in groupIds { for r in L.rects(id) { sheet(r.0 - SIMD2<Float>(repeating: 0.25), r.1 + SIMD2<Float>(repeating: 0.25), bottom: ceilY, density: 0.3) } }
+            // ② 집 둘레 (땅까지)
+            if let (lo, hi) = L.walkBounds() {
+                for r in outsideRects(L, lo: lo, hi: hi, margin: 3, cell: 0.5, clear: 0.2) { sheet(r.0, r.1, bottom: floorY, density: 0.3) }
+                // ③ 그 바깥 띠 넷 (땅까지)
+                let i0 = lo - SIMD2<Float>(repeating: 3), i1 = hi + SIMD2<Float>(repeating: 3)
+                let o0 = lo - SIMD2<Float>(repeating: 12), o1 = hi + SIMD2<Float>(repeating: 12)
+                sheet(SIMD2<Float>(o0.x, i1.y), o1, bottom: floorY, density: 0.06)
+                sheet(o0, SIMD2<Float>(o1.x, i0.y), bottom: floorY, density: 0.06)
+                sheet(SIMD2<Float>(o0.x, i0.y), SIMD2<Float>(i0.x, i1.y), bottom: floorY, density: 0.06)
+                sheet(SIMD2<Float>(i1.x, i0.y), SIMD2<Float>(o1.x, i1.y), bottom: floorY, density: 0.06)
+            }
         }
         guard outdoor else { return }
         for r in rects {
@@ -3141,7 +3171,7 @@ final class RoomWorld {
                         let a = lo + SIMD2<Float>(Float(ix) * tx, Float(iz) * tz)
                         let b = a + SIMD2<Float>(tx, tz)
                         let tc = L.flat((a + b) / 2)
-                        let e = Self.precip(w, size: SIMD3<Float>(tx, 0.05, tz), height: room.ceil, look: look, density: 0.5)
+                        let e = Self.precip(w, size: SIMD3<Float>(tx, 0.05, tz), height: room.ceil, look: look, density: 0.8)
                         e.position = SIMD3<Float>(tc.x, ceilY - 0.08, tc.y)
                         list.append(e)
                         precipTiles.append((e, a, b))
@@ -3170,12 +3200,10 @@ final class RoomWorld {
         }
     }
 
-    /// 무리 전체 둘레 margin m 안에서, 걸을 수 있는 곳(어느 방이든)에서 clear m 넘게 떨어진 cell m 칸들을 직사각형으로 묶음 (평면 좌표)
-    private func outsideRects(_ L: Layout, margin: Float, cell: Float, clear: Float) -> [PRect] {
-        var lo = SIMD2<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude), hi = -lo
-        for id in groupIds { for r in L.rects(id) { lo = simd_min(lo, r.0); hi = simd_max(hi, r.1) } }
-        guard lo.x < hi.x else { return [] }
-        lo -= SIMD2<Float>(repeating: margin); hi += SIMD2<Float>(repeating: margin)
+    /// lo~hi(평면 좌표) 둘레 margin m 안에서, 걸을 수 있는 곳(어느 방이든)에서 clear m 넘게 떨어진 cell m 칸들을 직사각형으로 묶음 (평면 좌표)
+    private func outsideRects(_ L: Layout, lo lo0: SIMD2<Float>, hi hi0: SIMD2<Float>, margin: Float, cell: Float, clear: Float) -> [PRect] {
+        guard lo0.x < hi0.x, lo0.y < hi0.y else { return [] }
+        let lo = lo0 - SIMD2<Float>(repeating: margin), hi = hi0 + SIMD2<Float>(repeating: margin)
         let nx = Int(((hi.x - lo.x) / cell).rounded(.up)), nz = Int(((hi.y - lo.y) / cell).rounded(.up))
         guard nx > 0, nz > 0, nx * nz < 40_000 else { return [] }
         var free = [Bool](repeating: false, count: nx * nz)
@@ -3188,9 +3216,9 @@ final class RoomWorld {
                     var u: Float = -clear
                     while u <= cell + clear + 1e-3 {
                         if L.walkable(a + SIMD2<Float>(u, v)) { ok = false; break outer }
-                        u += 0.2
+                        u += 0.1
                     }
-                    v += 0.2
+                    v += 0.1
                 }
                 free[j * nx + i] = ok
             }
@@ -3316,18 +3344,29 @@ final class RoomWorld {
         pe.birthLocation = .volume
         pe.birthDirection = .world
         pe.emissionDirection = [0, -1, 0]
-        let area = max(0.5, size.x * size.z) * density
-        let speed: Float
+        // 입자 수 = 공기 1m³ 안에 떠 있는 수(n × density)로 정함 → 내뿜는 수 = n × 넓이 × density × 떨어지는 빠르기.
+        // 높이·빠르기와 상관없이 같은 밀도라 하늘에서 땅까지 긴 줄기도 방 안과 같은 촘촘함 (예전 '넓이당 초당 수'는
+        // 느린 함박눈·높은 줄기일수록 수십만 개로 불어났음)
+        let vol = max(0.05, size.x * size.z) * density
+        let speed: Float, n: Float
         switch w {
-        case "drizzle": speed = 3.2; pe.mainEmitter.birthRate = 60 * area
-        case "rain": speed = 5; pe.mainEmitter.birthRate = 160 * area
-        case "storm": speed = 7; pe.mainEmitter.birthRate = 320 * area
-        case "heavysnow": speed = 0.55; pe.mainEmitter.birthRate = 45 * area; pe.mainEmitter.size = 0.022
-        default: speed = 0.75; pe.mainEmitter.birthRate = 22 * area; pe.mainEmitter.size = 0.012
+        case "drizzle": speed = 3.2; n = 7
+        case "rain": speed = 5; n = 12
+        case "storm": speed = 7; n = 20
+        case "heavysnow": speed = 0.55; n = 18; pe.mainEmitter.size = 0.02
+        default: speed = 0.75; n = 12; pe.mainEmitter.size = 0.012
         }
+        pe.mainEmitter.birthRate = n * vol * speed
         pe.speed = speed
-        pe.speedVariation = speed * 0.15
+        pe.speedVariation = speed * 0.08
         pe.mainEmitter.acceleration = [0, 0, 0]
+        // 일렁임 없애기: 기본 눈·비 설정에 든 흔들림(잡음)·회전·빛 받음·뒤따르는 작은 입자를 모두 끔 —
+        // 눈앞 가득한 작은 점들이 제각각 흔들리고 반짝여 아지랑이처럼 어른거리며 어지러웠음. 곧게 떨어지게
+        pe.mainEmitter.noiseStrength = 0
+        pe.mainEmitter.angularSpeed = 0
+        pe.mainEmitter.angularSpeedVariation = 0
+        pe.mainEmitter.isLightingEnabled = false
+        pe.spawnedEmitter = nil
         pe.mainEmitter.lifeSpan = Double(max(0.4, (height - 0.05) / speed))
         pe.mainEmitter.lifeSpanVariation = 0.05
         if snow { pe.mainEmitter.sizeMultiplierAtEndOfLifespan = 1 }

@@ -78,8 +78,8 @@ final class HomeDog {
     private var stickAir: (SIMD3<Float>, SIMD3<Float>)?     // 날아가는 중 (자리, 빠르기)
     private var stickSpin: Float = 0
     private var pickT: Float = 0                            // 막대 앞에서 고개 숙여 무는 중
-    private var fetchPath: [SIMD2<Float>] = []             // 막대까지 돌아가는 길
-    private var planT: Float = 0
+    private var nav = PetNav()                              // 막대·나에게 가는 길 (가구를 돌아서)
+    private var fetchRest: Float = 0                        // 이때까지는 혼자 막대 놀이를 고르지 않음 (막대가 닿지 않는 곳에 있어 포기했을 때)
     private var wantFetch = false                           // 가구 위에서 막대를 보면 내려와서 가져옴
     // 말풍선
     private var bubbleT: Float = -1
@@ -223,7 +223,8 @@ final class HomeDog {
 
     // MARK: 동작
     private func start(_ a: Act, _ dur: Float) {
-        if a == .fetch { fetchPath = []; planT = 0; pickT = 0 }
+        nav.reset()
+        if a == .fetch { pickT = 0 }
         act = a
         actT = 0
         actDur = dur
@@ -283,6 +284,7 @@ final class HomeDog {
         guard stick != nil, !stickHeld, stickAir == nil, !carrying else { return }
         yip(-3)
         emote("exclaim", 1)
+        fetchRest = 0
         if onFurniture { wantFetch = true } else { start(.fetch, 15) }
     }
 
@@ -311,6 +313,7 @@ final class HomeDog {
         if sp > 8 { v *= 8 / sp }
         stickAir = (heldAt, v)
         stickSpin = 0
+        fetchRest = 0
         if act != .leave && act != .enter {
             if onFurniture { wantFetch = true } else { bark(-4); start(.fetch, 15) }
         }
@@ -710,13 +713,25 @@ final class HomeDog {
         if onFurniture { stickAir = (SIMD3<Float>(stickPos.x, floorY + elev, stickPos.y), .zero) }    // 가구 위에서 놓으면 떨어짐
     }
 
+    /// 손에 든 장난감 자리: 방 안(벽에서 떨어진 곳), 바닥·가구 윗면 위, 천장 아래
+    static func heldSpot(_ p: SIMD3<Float>, _ c: Ctx, radius r: Float = 0.03) -> SIMD3<Float> {
+        var q = HomeCat.inside(p, c, radius: r)
+        let ground = c.floorY + c.height(SIMD2<Float>(q.x, q.z)) + r
+        q.y = min(max(q.y, ground), c.floorY + c.ceil - 0.06 - r)
+        return q
+    }
+
     private func tickStick(_ dt: Float, _ c: Ctx) {
         guard let s = stick, !carrying else { return }
         if stickHeld {
-            s.position = heldAt
-            let r = cardRight()
-            s.orientation = simd_quatf(angle: atan2(r.x, r.y), axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2 - 0.3, axis: [0, 0, 1])
-            stickPos = SIMD2<Float>(heldAt.x, heldAt.z)
+            // 손에 든 막대: 바닥 위·방 안에만 (손을 바닥 쪽으로 내려도 바닥 아래로 사라지지 않게, 벽 너머로 넘어가지 않게)
+            // 방향은 내가 바라보는 쪽과 직각으로 가로로 듦 (예전엔 강아지 그림 판 방향을 따라 손을 움직이면 엉뚱하게 돌아갔음)
+            let p = Self.heldSpot(heldAt, c)
+            heldAt = p
+            s.position = p
+            let rgt = SIMD2<Float>(-c.fwd.y, c.fwd.x)
+            s.orientation = simd_quatf(angle: atan2(-rgt.y, rgt.x), axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2 - 0.3, axis: [0, 0, 1])
+            stickPos = SIMD2<Float>(p.x, p.z)
             return
         }
         if var air = stickAir {
@@ -757,22 +772,32 @@ final class HomeDog {
         s.orientation = simd_quatf(angle: stickYaw, axis: [0, 1, 0]) * simd_quatf(angle: .pi / 2, axis: [0, 0, 1])
     }
 
-    /// 막대를 든 나를 기다림: 내 앞 80cm 쯤에 와서 놀자 자세로 들썩, 가끔 멍
+    /// 막대를 든 나를 기다림: 내 앞 80cm 쯤에 와서(가구는 돌아서) 놀자 자세로 들썩, 가끔 멍.
+    /// 더 다가갈 수 없으면 그 자리에서 놀자 자세 (예전엔 곧장만 가다 가구에 막히면 그 자리에서 발만 굴렀음)
     private func stepWait(_ dt: Float, _ c: Ctx) {
         guard stickHeld else { start(.sit, 1); return }
         let me = SIMD2<Float>(c.head.x, c.head.z)
         var target = me + c.fwd * 0.85
         if !c.free(target) { target = viewSpot(c, near: 0.9) ?? pos }
-        let v = target - pos
-        let d = simd_length(v)
+        let d = simd_distance(target, pos)
+        var walking = false
         if d > 0.15 {
             running = d > 0.8
-            moveDir = v / d
+            switch nav.step(from: pos, to: target, reach: 0.12, speed: running ? 1.6 : 0.8, dt, c) {
+            case .move(let np):
+                if simd_length(np - pos) > 1e-4 { moveDir = simd_normalize(np - pos) }
+                pos = np
+                walking = true
+            case .hold:
+                walking = true
+            case .arrived, .blocked:
+                break
+            }
+        }
+        if walking {
             show(walkFrame(moveDir))
             jingle(dt)
-            let np = pos + moveDir * min(d, (running ? 1.6 : 0.8) * dt)
-            if c.free(np) { pos = np }
-            faceToward(target)
+            faceToward(pos + moveDir)
         } else {
             faceToward(SIMD2<Float>(heldAt.x, heldAt.z))
             let k = actT.truncatingRemainder(dividingBy: 2.4)
@@ -782,19 +807,17 @@ final class HomeDog {
         }
     }
 
+    /// 막대 물어 오기: 막대까지 길을 찾아(가구를 돌아서) 달려가 고개 숙여 킁킁 → 덥석.
+    /// 막대가 가구 곁이라 몸이 더 못 다가가면 65cm 안이면 고개를 내밀어 물고, 그보다 멀면(닿지 않는 틈) 갸웃하고 포기 —
+    /// 예전엔 길 끝(막대 40cm 앞)에서 막대 쪽 한 걸음이 막혀 '길 다시 찾기 → 또 막힘'을 되풀이하며 바로 옆 막대 앞에서 발만 굴렀음
     private func stepFetch(_ dt: Float, _ c: Ctx) {
         guard stick != nil else { start(.sit, 1); return }
         if stickHeld { start(.wait, 60); return }
         running = true
         sniffing = false
         let target = stickPos
-        let v = target - pos
-        let d = simd_length(v)
-        if d > 0.001 { moveDir = v / d }
-        show(walkFrame(moveDir))
-        jingle(dt)
-        if (d < 0.46 || (d < 0.65 && pickT > 0)) && stickAir == nil {                          // 가구 곁의 막대도 입이 닿게 (몸은 가구에서 여유를 둠)
-            // 막대 앞에서 고개를 숙여 킁킁 → 덥석 물고 돌아섬 (바로 물려 있는 것처럼 보이지 않게)
+        let d = simd_distance(target, pos)
+        if stickAir == nil && (pickT > 0 || d < 0.46) {
             pickT += dt
             faceToward(target)
             show(loop(["dog_sniff0", "dog_sniff1"], fps: 6))
@@ -806,50 +829,61 @@ final class HomeDog {
             return
         }
         if actT > actDur { start(.sit, 2); return }
-        // 막대까지 길을 찾아 돌아서 감 (가구에 막힌 구석에서 멈춰 서지 않게). 길이 없으면 가까운 데까지 가서 고개를 내밀어 물음
-        planT -= dt
-        if planT <= 0 || fetchPath.isEmpty {
-            planT = 0.8
-            if let p = HomeCat.plan(from: pos, to: target, reach: 0.4, c) {
-                fetchPath = p
+        switch nav.step(from: pos, to: target, reach: 0.42, far: 0.62, speed: 1.9, dt, c) {
+        case .move(let np):
+            if simd_length(np - pos) > 1e-4 { moveDir = simd_normalize(np - pos) }
+            pos = np
+            show(walkFrame(moveDir))
+            jingle(dt)
+            faceToward(pos + moveDir)
+        case .hold:
+            show(walkFrame(moveDir))
+        case .arrived, .blocked:
+            if stickAir != nil {                                   // 아직 날아가는 중: 떨어질 때까지 지켜봄
+                faceToward(target)
+                show(loop(["dog_fhappy", "dog_fsit1"], fps: 4))
+            } else if d < 0.68 {
+                pickT = dt                                         // 고개를 내밀어 물기
             } else {
-                fetchPath = []
-                if d < 0.65 && stickAir == nil { pickT = 0.4 - dt }        // 다음 프레임에 덥석 (고개를 내밀어 물기)
-                else { start(.sit, 2); return }
+                fetchRest = t + 25
+                say("dog_whine", -6)
+                emote("question", 1.2)
+                frontal = true
+                start(.tilt, 1.6)
             }
         }
-        while let w = fetchPath.first, simd_distance(pos, w) < 0.06 { fetchPath.removeFirst() }
-        let aim = fetchPath.first ?? target
-        let av = aim - pos
-        let ad = simd_length(av)
-        if ad > 0.001 { moveDir = av / ad }
-        let np = pos + moveDir * min(ad, 1.9 * dt)
-        if c.free(np) || !c.free(pos) { pos = np } else { planT = 0 }
-        faceToward(aim)
     }
 
+    /// 물고 와서 내 앞 60cm에 놓음 (가구는 돌아서). 더 못 다가오면 그 자리에 놓고 놀자 자세
     private func stepBring(_ dt: Float, _ c: Ctx) {
         let me = SIMD2<Float>(c.head.x, c.head.z)
         var target = me + c.fwd * 0.6
         if !c.free(target) { target = viewSpot(c, near: 0.7) ?? pos }
-        let v = target - pos
-        let d = simd_length(v)
+        let d = simd_distance(target, pos)
         running = d > 1.0
-        if d > 0.001 { moveDir = v / d }
-        show(walkFrame(moveDir))
-        jingle(dt)
-        if d < 0.12 || actT > actDur {
+        var arrived = d < 0.12 || actT > actDur
+        if !arrived {
+            switch nav.step(from: pos, to: target, reach: 0.1, speed: running ? 1.6 : 0.75, dt, c) {
+            case .move(let np):
+                if simd_length(np - pos) > 1e-4 { moveDir = simd_normalize(np - pos) }
+                pos = np
+                show(walkFrame(moveDir))
+                jingle(dt)
+                faceToward(pos + moveDir)
+            case .hold:
+                show(walkFrame(moveDir))
+            case .arrived, .blocked:
+                arrived = true
+            }
+        }
+        if arrived {
             dropStick()
             frontal = true
             panting = 6
             yip(-4)
             emote("heart")
             start(.bow, 1.6)
-            return
         }
-        let np = pos + moveDir * min(d, (running ? 1.6 : 0.75) * dt)
-        if c.free(np) { pos = np } else { dropStick(); start(.sit, 2) }
-        faceToward(target)
     }
 
     // MARK: 가구 오르내리기
@@ -932,6 +966,7 @@ final class HomeDog {
         opts.append((0.9, { [unowned self] in zoomies(c); return true }))
         // 막대를 물고 와서 발치에 놓음 (놀자는 뜻)
         opts.append((stick == nil ? 2.6 : 3.2, { [unowned self] in          // 막대 놀이는 자주
+            if !carrying && stick != nil && t < fetchRest { return false }     // 닿지 않는 곳의 막대는 한동안 포기
             if stick == nil { makeStick(near: pos) }
             start(carrying ? .bring : .fetch, 10)
             return true

@@ -98,8 +98,24 @@ final class HomeCat {
         var k = goal
         while k != s0 { cells.append(k); k = Int(prev[k]) }
         cells.reverse()
+        // 경유점: 곧장 가도 막히지 않는 데까지 건너뜀 (5cm마다 c.free 확인). 예전엔 칸 셋마다 하나씩 골라 가구 모서리를 돌 때
+        // 경유점 사이 직선이 가구 모서리를 지나 '막힘' → 같은 길을 다시 찾고 또 막혀, 제자리에서 발만 구르는 일이 있었음
+        let pts = cells.map { cp($0 % nx, $0 / nx) }
+        func clear(_ p: SIMD2<Float>, _ q: SIMD2<Float>) -> Bool {
+            let n = max(1, Int((simd_distance(p, q) / 0.05).rounded(.up)))
+            for i in 1...n where !c.free(p + (q - p) * (Float(i) / Float(n))) { return false }
+            return true
+        }
         var out: [SIMD2<Float>] = []
-        for (n, k) in cells.enumerated() where n % 3 == 2 || n == cells.count - 1 { out.append(cp(k % nx, k / nx)) }
+        var anchor = a
+        var i = 0
+        while i < pts.count {
+            var j = i
+            while j + 1 < pts.count && clear(anchor, pts[j + 1]) { j += 1 }
+            out.append(pts[j])
+            anchor = pts[j]
+            i = j + 1
+        }
         return out
     }
 
@@ -212,8 +228,7 @@ final class HomeCat {
     private var hits = 0
     private var hitsMax = 4
     private var ballHeld = false                 // 내가 손으로 집고 있음
-    private var chasePath: [SIMD2<Float>] = []   // 공까지 돌아가는 길
-    private var planT: Float = 0
+    private var nav = PetNav()                    // 공까지 돌아가는 길
     private var heldAt = SIMD3<Float>(0, 0, 0)
     private var ballAir: (SIMD3<Float>, SIMD3<Float>)?    // 던져서 날아가는 중 (자리, 빠르기)
     private var wantChase = false                // 가구 위에서 공을 보면 내려와서 쫓음
@@ -362,7 +377,7 @@ final class HomeCat {
 
     // MARK: 동작 바꾸기
     private func start(_ a: Act, _ dur: Float) {
-        if a == .chase { chasePath = []; planT = 0 }
+        if a == .chase { nav.reset() }
         act = a
         actT = 0
         actDur = dur
@@ -947,6 +962,8 @@ final class HomeCat {
     private func tickBall(_ dt: Float, _ c: Ctx) {
         guard let b = ball else { return }
         if ballHeld {
+            heldAt = HomeDog.heldSpot(heldAt, c, radius: 0.047)       // 바닥 아래·벽 너머로 사라지지 않게
+            ballPos = SIMD2<Float>(heldAt.x, heldAt.z)
             b.position = heldAt
             ballSpin = simd_quatf(angle: dt * 1.5, axis: [0, 1, 0]) * ballSpin
             b.orientation = ballSpin
@@ -1031,12 +1048,12 @@ final class HomeCat {
         running = d > 0.5
         if d > 0.001 { moveDir = v / d }
         if ballHeld {
-            // 손에 든 공을 노림: 60cm까지 다가와 엉덩이 씰룩
+            // 손에 든 공을 노림: 60cm까지 다가와(가구는 돌아서) 엉덩이 씰룩. 더 못 다가가면 그 자리에서 씰룩
             actT = 0
-            if d > 0.6 {
+            if d > 0.6, case .move(let np) = nav.step(from: pos, to: ballPos, reach: 0.58, speed: 1.3, dt, c) {
+                moveDir = simd_length(np - pos) > 1e-4 ? simd_normalize(np - pos) : moveDir
                 show(walkFrame(moveDir))
-                let np = pos + moveDir * min(d - 0.55, 1.3 * dt)
-                if c.free(np) { pos = np }
+                pos = np
             } else {
                 show(loop(["cat_pounce0", "cat_pounce1"], fps: 6))
             }
@@ -1044,9 +1061,14 @@ final class HomeCat {
             return
         }
         if ballAir != nil {
-            show(walkFrame(moveDir))
-            let np = pos + moveDir * min(max(0, d - 0.2), 1.5 * dt)
-            if c.free(np) { pos = np }
+            // 날아가는 공: 떨어질 쪽으로 따라감 (못 가면 그 자리에서 지켜봄)
+            if case .move(let np) = nav.step(from: pos, to: ballPos, reach: 0.25, speed: 1.5, dt, c) {
+                moveDir = simd_length(np - pos) > 1e-4 ? simd_normalize(np - pos) : moveDir
+                show(walkFrame(moveDir))
+                pos = np
+            } else {
+                show("cat_sit0")
+            }
             faceToward(ballPos)
             return
         }
@@ -1057,30 +1079,20 @@ final class HomeCat {
             return
         }
         if actT > actDur { start(.sit, 2); return }
-        // 공까지 길을 찾아 돌아서 감 (0.8초마다·길이 끝나면 다시 찾음). 공이 굴러가도 따라감
-        planT -= dt
-        if planT <= 0 || chasePath.isEmpty {
-            planT = 0.8
-            if let p = Self.plan(from: pos, to: ballPos, reach: 0.3, c) {
-                chasePath = p
-            } else {
-                // 갈 수 있는 길이 없음(공이 가구 틈에 낌): 가까우면 앞발을 길게 뻗어 쳐 냄, 아니면 포기하고 앉음
-                chasePath = []
-                if d < 0.55 { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else { start(.sit, 2) }
-                return
-            }
-        }
-        while let w = chasePath.first, simd_distance(pos, w) < 0.06 { chasePath.removeFirst() }
-        let aim = chasePath.first ?? ballPos
-        let av = aim - pos
-        let ad = simd_length(av)
-        if ad > 0.001 { moveDir = av / ad }
-        show(walkFrame(moveDir))
-        jingle(dt)
+        // 공까지 길을 찾아 돌아서 감 (공이 굴러가도 따라감). 더 다가갈 수 없으면: 가까우면 앞발을 길게 뻗어 쳐 내고, 멀면 포기하고 앉음
         let speed: Float = running ? 1.5 : 0.6
-        let np = pos + moveDir * min(ad, speed * dt)
-        if c.free(np) || !c.free(pos) { pos = np } else { planT = 0 }
-        faceToward(aim)
+        switch nav.step(from: pos, to: ballPos, reach: 0.3, far: 0.5, speed: speed, dt, c) {
+        case .move(let np):
+            moveDir = simd_length(np - pos) > 1e-4 ? simd_normalize(np - pos) : moveDir
+            show(walkFrame(moveDir))
+            jingle(dt)
+            pos = np
+            faceToward(np + moveDir)
+        case .hold:
+            show(walkFrame(moveDir))
+        case .arrived, .blocked:
+            if d < 0.55 { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else { emote("question", 1); start(.sit, 2) }
+        }
     }
 
     // MARK: 무엇을 할지
@@ -1275,5 +1287,55 @@ final class HomeCat {
         scratchDir = pick.1
         go(pick.0, then: .scratch, Float.random(in: 2...3.5))
         return true
+    }
+}
+
+
+/// 강아지·고양이 길 따라 걷기 (가구를 돌아서) — 한 프레임에 한 걸음.
+/// 막히면 축 방향으로 미끄러져 보고, 0.6초 넘게 못 움직이면 '막힘'으로 알려 줌 (부르는 쪽이 물기·포기·놀자 자세 등으로 넘어감).
+/// (예전엔 막힌 걸음을 그대로 버리고 같은 길을 다시 찾기만 해, 막대·공이 바로 옆에 있어도 제자리에서 발만 굴렀음)
+struct PetNav {
+    enum Step { case move(SIMD2<Float>), hold, arrived, blocked }
+    private var path: [SIMD2<Float>] = []
+    private var goal: SIMD2<Float>? = nil
+    private var planT: Float = 0
+    private var stuckT: Float = 0
+    private var noPath = false                  // 마지막으로 찾은 길이 없었음 / 막혀 그만둠 (다음에 다시 찾을 때까지 '막힘')
+
+    mutating func reset() { path = []; goal = nil; planT = 0; stuckT = 0; noPath = false }
+
+    /// reach 안에 들면 arrived. 그만큼 다가갈 길이 없으면 far(있으면) 안까지라도. 길이 끝났으면(가장 가까이 갈 수 있는 곳) arrived
+    mutating func step(from pos: SIMD2<Float>, to target: SIMD2<Float>, reach: Float, far: Float? = nil,
+                       speed: Float, _ dt: Float, _ c: HomeCat.Ctx) -> Step {
+        if simd_distance(pos, target) <= reach { path = []; stuckT = 0; return .arrived }
+        planT -= dt
+        let moved = goal.map { simd_distance($0, target) > 0.15 } ?? true
+        if goal == nil || planT <= 0 || (moved && planT < 0.55) {
+            planT = 0.8
+            goal = target
+            if let p = HomeCat.plan(from: pos, to: target, reach: reach, c) {
+                path = p; noPath = false
+            } else if let f = far, let p = HomeCat.plan(from: pos, to: target, reach: f, c) {
+                path = p; noPath = false
+            } else {
+                path = []; noPath = true
+            }
+        }
+        if noPath { return .blocked }
+        while let w = path.first, simd_distance(pos, w) < 0.04 { path.removeFirst() }
+        guard let aim = path.first else { stuckT = 0; return .arrived }
+        let v = aim - pos
+        let d = simd_length(v)
+        guard d > 1e-4 else { path.removeFirst(); return .hold }
+        let np = pos + v / d * min(d, speed * dt)
+        if c.free(np) || !c.free(pos) { stuckT = 0; return .move(np) }
+        for q in [SIMD2<Float>(np.x, pos.y), SIMD2<Float>(pos.x, np.y)] where simd_distance(q, pos) > 1e-4 && c.free(q) {
+            stuckT = 0
+            return .move(q)
+        }
+        stuckT += dt
+        planT = 0                                   // 가구가 새로 보였을 수 있음 → 다음 프레임에 다시 찾음
+        if stuckT > 0.6 { stuckT = 0; path = []; noPath = true; planT = 0.8; return .blocked }
+        return .hold
     }
 }

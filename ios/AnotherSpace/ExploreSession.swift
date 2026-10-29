@@ -760,6 +760,12 @@ final class ExploreSession {
         groups = Self.makeGroups(d, L)
         var affected = Set(targets)
         for tg in targets { affected.formUnion(oldGroups[tg] ?? []); affected.formUnion(groups[tg] ?? []) }
+        // 벽 하나를 사이에 둔 옆방(45cm 안): 두 방이 같은 테마인지가 이번에 바뀌었으면 그 옆방도 다시 만듦 (그 벽의 창이 생기거나 없어짐)
+        for ws in L.walls where ws.nearRoom != 0 && (targets.contains(ws.room) || targets.contains(ws.nearRoom)) {
+            guard let a0 = worlds[ws.room]?.room, let b0 = worlds[ws.nearRoom]?.room,
+                  let a1 = d.rec.room(ws.room), let b1 = d.rec.room(ws.nearRoom) else { continue }
+            if Self.sameTheme(a0, b0) != Self.sameTheme(a1, b1) { affected.insert(ws.room); affected.insert(ws.nearRoom) }
+        }
         let affectedRooms = affected
         closeDocent()
         fire?.remove(); fire = nil                                // 테마가 바뀌면 불도 새로 (다시 앉아 있으면 그 테마에 맞게 피어남)

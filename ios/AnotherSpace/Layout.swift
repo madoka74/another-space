@@ -10,7 +10,8 @@ struct WallSeg: Sendable {
     var window: Bool
     var inner = false          // 방과 방 사이 벽 (양쪽 방이 각자 1cm씩 안쪽에 하나씩 세움)
     /// 바깥벽인데 벽 너머 45cm 안에 다른 방이 있음 (실제 벽 두께만큼 떨어진 옆방) → 그 방 번호, 없으면 0.
-    /// 이런 벽엔 창을 내지 않음 (창 너머가 바로 옆방이라 두 방이 서로 창을 그려 겹쳐 보이고, 옆방 물건이 창으로 비쳤음)
+    /// 그 옆방이 같은 테마(같은 세계)일 때만 이 벽에 창을 내지 않음 — 방 세계(RoomWorld)가 테마를 보고 정함.
+    /// (같은 세계면 두 방이 한 공간으로 이어져 보여 창이 서로 겹쳐 보였음. 다른 테마면 창을 그대로 냄)
     var nearRoom = 0
 }
 
@@ -262,7 +263,7 @@ struct Layout: Sendable {
                         let n = SIMD2<Float>(0, up != 0 ? -1 : 1)
                         let rm = Int(ow[up != 0 ? iu : id])
                         let nr = across((a + b) / 2, -n, rm)
-                        let seg = WallSeg(a: a, b: b, n: n, room: rm, window: nr == 0 && isWin((a + b) / 2, -n), nearRoom: nr)
+                        let seg = WallSeg(a: a, b: b, n: n, room: rm, window: isWin((a + b) / 2, -n), nearRoom: nr)
                         lanes[up != 0 ? 0 : 1] = seg
                     } else if iu >= 0 && id >= 0 && split(iu, id) {
                         lanes[0] = WallSeg(a: a, b: b, n: SIMD2<Float>(0, -1), room: Int(ow[iu]), window: false, inner: true)
@@ -287,7 +288,7 @@ struct Layout: Sendable {
                         let n = SIMD2<Float>(lf != 0 ? -1 : 1, 0)
                         let rm = Int(ow[lf != 0 ? il : ir])
                         let nr = across((a + b) / 2, -n, rm)
-                        let seg = WallSeg(a: a, b: b, n: n, room: rm, window: nr == 0 && isWin((a + b) / 2, -n), nearRoom: nr)
+                        let seg = WallSeg(a: a, b: b, n: n, room: rm, window: isWin((a + b) / 2, -n), nearRoom: nr)
                         lanes[lf != 0 ? 0 : 1] = seg
                     } else if il >= 0 && ir >= 0 && split(il, ir) {
                         lanes[0] = WallSeg(a: a, b: b, n: SIMD2<Float>(-1, 0), room: Int(ow[il]), window: false, inner: true)
@@ -348,6 +349,19 @@ struct Layout: Sendable {
     private func index(_ p: SIMD2<Float>) -> Int? {
         let u = Int(((p.x - u0) / Layout.res).rounded(.down)), v = Int(((p.y - v0) / Layout.res).rounded(.down))
         return (u >= 0 && v >= 0 && u < W && v < H) ? v * W + u : nil
+    }
+
+    /// 걸을 수 있는 칸 전체(모든 방·문 자리)를 감싸는 사각형 (평면 좌표)
+    func walkBounds() -> (SIMD2<Float>, SIMD2<Float>)? {
+        var lu = Int.max, lv = Int.max, hu = Int.min, hv = Int.min
+        for v in 0..<H {
+            for u in 0..<W where walk[v * W + u] != 0 {
+                lu = min(lu, u); hu = max(hu, u); lv = min(lv, v); hv = max(hv, v)
+            }
+        }
+        guard lu <= hu else { return nil }
+        return (SIMD2<Float>(u0 + Float(lu) * Layout.res, v0 + Float(lv) * Layout.res),
+                SIMD2<Float>(u0 + Float(hu + 1) * Layout.res, v0 + Float(hv + 1) * Layout.res))
     }
 
     /// 평면 좌표의 그 자리가 걸을 수 있는 곳(어느 방이든)인지
