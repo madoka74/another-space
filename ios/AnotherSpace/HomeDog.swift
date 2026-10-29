@@ -29,7 +29,8 @@ final class HomeDog {
 
     private enum Act {
         case sit, walk, lie, sleep, sniff, dig, roll, bow, jump, bark, howl, pant, tilt, paw, love, fetch, bring, wait,
-             jumpUp, onTop, jumpDown, enter, leave
+             jumpUp, onTop, jumpDown, enter, leave,
+             spin                                        // 제 꼬리를 쫓아 빙글빙글
     }
     private var act: Act = .enter
     private var actT: Float = 0
@@ -82,6 +83,12 @@ final class HomeDog {
     private var nav = PetNav()                              // 막대·나에게 가는 길 (가구를 돌아서)
     private var fetchRest: Float = 0                        // 이때까지는 혼자 막대 놀이를 고르지 않음 (막대가 닿지 않는 곳에 있어 포기했을 때)
     private var wantFetch = false                           // 가구 위에서 막대를 보면 내려와서 가져옴
+    private var seekAt: Float = 0                           // 이때까지는 '시야 밖 → 보이는 자리로'를 다시 고르지 않음 (갈 곳이 없거나 막혔을 때)
+    private var route: [SIMD2<Float>] = []                  // 이어서 들를 자리 (내 둘레를 빙 도는 우다다)
+    private var spinT: Float = 0
+    private var landT: Float = -10
+    private var reachCache: PetReach?
+    private var reachT: Float = -10
     // 말풍선
     private var bubbleT: Float = -1
     private var bubbleDur: Float = 1.4
@@ -193,7 +200,7 @@ final class HomeDog {
     // MARK: 소리
     private func say(_ name: String, _ gain: Double = -3) {
         voiceCool = Float.random(in: 7...14)         // 스스로 내는 소리 사이 (탭엔 늘 바로 대답)
-        Sfx.play(name, in: root, at: [0.15 * face, 0.35, 0], gain: min(0, gain), rolloff: 0.6)      // 실제 강아지 녹음, 거리에 따라 덜 줄게
+        Sfx.play(name, in: root, at: [0.15 * face, 0.35, 0], gain: min(0, gain), rolloff: 0.6, speed: Double.random(in: 0.95...1.1))      // 실제 강아지 녹음, 거리에 따라 덜 줄게 (빠르기를 조금씩 달리 — 매번 다른 높이)
     }
     private func bark(_ gain: Double = -3) { say("dog_bark\(Int.random(in: 1...3))", gain) }
     private func yip(_ gain: Double = -4) { say("dog_yip\(Int.random(in: 1...2))", gain) }
@@ -233,6 +240,7 @@ final class HomeDog {
     }
 
     private func go(_ to: SIMD2<Float>, then a: Act, _ dur: Float, run: Bool = false, sniff: Bool = false) {
+        route = []
         goal = to
         then = a
         thenDur = dur
@@ -382,7 +390,7 @@ final class HomeDog {
         // 혼자 시작한 막대 가지러 가기(fetch)는 시야 밖으로 벗어나면 그만두고 내가 보는 쪽으로 옴 (예전엔 막대 곁에만 머물렀음).
         // 내가 놀아 줄 때(톡·집기·던지기 12초 안)와 물고 오는 중(bring — 내 앞으로 옴)·기다리는 중(wait)은 그대로
         let busy = act == .leave || act == .enter || act == .jump || (act == .fetch && t < playUntil) || act == .bring || act == .wait
-            || act == .jumpUp || act == .jumpDown
+            || act == .jumpUp || act == .jumpDown || act == .spin
         if !busy {
             if let h = handNear {
                 faceToward(SIMD2<Float>(h.x, h.z))
@@ -395,8 +403,12 @@ final class HomeDog {
                     emote("heart")
                     start(.love, 2.5)
                 }
-            } else if hidden > 1.3 && (act != .walk || (hidden > 2.2 && !running)) {
-                if onFurniture { jumpDownNear(c, prefer: me + c.fwd * 1.3) } else if let s = viewSpot(c, near: 1.4) { go(s, then: .sit, 2.5, run: true) }
+            } else if hidden > 1.3 && t >= seekAt && (act != .walk || (hidden > 2.2 && !running)) {
+                // 시야 밖 → 보이는 자리로 (걸어서 갈 수 있는 곳만 — PetReach). 갈 곳이 없으면 그 자리에서 짖어 부르고 2초 뒤 다시 봄
+                if onFurniture { jumpDownNear(c, prefer: me + c.fwd * 1.3) } else if let s = viewSpot(c, near: 1.4), simd_distance(s, pos) > 0.3 { go(s, then: .sit, 2.5, run: true) } else {
+                    seekAt = t + 2
+                    if act != .bark { bark(-5); start(.bark, 1.2) }
+                }
             } else if c.userSpeed > 0.3 && act != .walk && !onFurniture {
                 followT -= dt
                 if followT <= 0, let s = viewSpot(c, near: 1.1) { followT = 0.5; go(s, then: .sit, 2) }
@@ -479,6 +491,12 @@ final class HomeDog {
         case .paw:
             show("dog_paw")
             if actT > actDur { start(.sit, 1.5) }
+        case .spin:
+            // 제 꼬리를 쫓아 빙글빙글: 좌우로 재빨리 돌아서며 뜀, 끝나면 헥헥
+            spinT -= dt
+            if spinT <= 0 { spinT = 0.22; turnFrom = face; face = -face; turnT = 0 }
+            show(loop(Self.runFrames, fps: 12))
+            if actT > actDur { panting = 5; frontal = true; start(.pant, 2) }
         case .wait:
             stepWait(dt, c)
         case .fetch:
@@ -493,6 +511,7 @@ final class HomeDog {
             show(k < 0.2 ? "dog_jump0" : (k < 0.85 ? "dog_jump1" : "dog_jump0"))
             if k >= 1 {
                 elev = jumpTo.y
+                landT = t
                 say("dog_tag\(Int.random(in: 1...2))", -12)
                 if act == .jumpUp {
                     start(.onTop, Float.random(in: 5...10))
@@ -547,7 +566,16 @@ final class HomeDog {
             sx = (k < 0.5 ? turnFrom : face) * w
             if k >= 1 { turnT = -1 }
         }
-        card.scale = SIMD3<Float>(sx, 1, 1)
+        // 숨쉬기: 가만히 앉거나 누워 있을 땐 몸이 아주 조금 오르내림 (헥헥일 땐 빠르게) / 뛰어내려 앉을 땐 잠깐 살짝 눌렸다 펴짐
+        var sy: Float = 1
+        switch act {
+        case .sit, .lie, .onTop, .tilt, .pant, .love, .wait: sy = 1 + (panting > 0 ? 0.014 * sin(t * 9) : 0.01 * sin(t * 2.2))
+        case .sleep: sy = 1 + 0.016 * sin(t * 1.3)
+        default: break
+        }
+        let lk = (t - landT) / 0.18
+        if lk >= 0 && lk < 1 { let q = sin(lk * .pi) * 0.07; sy -= q; sx *= 1 + q * 0.6 }
+        card.scale = SIMD3<Float>(sx, sy, 1)
         if act == .jumpUp || act == .jumpDown {
             shadow?.position = [0, min(0, min(jumpTo.y, jumpFrom.y) - elev), 0]
         } else {
@@ -580,6 +608,22 @@ final class HomeDog {
         if k > bubbleDur { bubble.isEnabled = false; bubbleT = -1 }
     }
 
+    /// 그 자리를 보려면 어느 쪽 옆모습이어야 하는지 (faceToward 와 같은 기준)
+    private func sideFor(_ b: SIMD2<Float>) -> Float {
+        let v = b - pos
+        guard simd_length(v) > 0.02 else { return face }
+        let side = simd_dot(simd_normalize(v), cardRight())
+        return abs(side) > 0.25 ? (side >= 0 ? 1 : -1) : face
+    }
+    /// 입이 막대에 닿는지: 옆모습 그림에서 입은 몸 가운데에서 보는 쪽으로 22cm 앞
+    private func mouthTouch(_ b: SIMD2<Float>, reach: Float = 0.14) -> Bool {
+        simd_distance(pos + cardRight() * sideFor(b) * 0.22, b) < reach
+    }
+    /// 입이 그 자리에 닿도록 몸이 설 자리
+    private func mouthSpot(_ b: SIMD2<Float>) -> SIMD2<Float> {
+        b - cardRight() * sideFor(b) * 0.22
+    }
+
     private func cardRight() -> SIMD2<Float> {
         let d = SIMD2<Float>(lastHead.x - pos.x, lastHead.z - pos.y)
         let y = atan2(d.x, d.y)
@@ -589,7 +633,10 @@ final class HomeDog {
     private func faceToward(_ p: SIMD2<Float>) {
         let v = p - pos
         guard simd_length(v) > 0.02 else { return }
-        let nf: Float = simd_dot(v, cardRight()) >= 0 ? 1 : -1
+        // 나를 향해·등지고 거의 곧게 움직일 땐(옆 성분 25% 안) 지금 방향 그대로 (좌우가 매 프레임 바뀌며 돌아서는 그림이 끼어들지 않게)
+        let side = simd_dot(simd_normalize(v), cardRight())
+        guard abs(side) > 0.25 else { return }
+        let nf: Float = side >= 0 ? 1 : -1
         if nf != face { turnFrom = face; face = nf; turnT = 0 }
     }
 
@@ -654,6 +701,11 @@ final class HomeDog {
         if d > 0.001 { moveDir = v / d }
         show(walkFrame(moveDir))
         jingle(dt)
+        if d < 0.06 && !route.isEmpty {
+            goal = route.removeFirst()                        // 다음 자리로 이어서 (멈추지 않고)
+            nav.reset()
+            return
+        }
         if d < 0.06 {
             goal = nil
             if running { panting = 5 }
@@ -674,12 +726,42 @@ final class HomeDog {
         case .arrived:
             pos = c.free(g) ? g : pos
         case .blocked:
+            // 길이 막힘: 1.5초 동안은 '보이는 자리로'를 다시 고르지 않음 (앉기 ↔ 걷기 그림이 매 프레임 번갈아 겹쳐 보이지 않게)
             goal = nil
-            start(.sit, 1)
+            seekAt = t + 1.5
+            start(.sit, 1.5)
         }
     }
 
+    /// 걸어갈 수 있는 바닥 (0.7초 또는 20cm 움직이면 새로 셈)
+    private func reachNow(_ c: Ctx) -> PetReach {
+        if let r = reachCache, t - reachT < 0.7, simd_distance(r.from, pos) < 0.2 { return r }
+        let r = PetReach(from: pos, c)
+        reachCache = r
+        reachT = t
+        return r
+    }
+
     private func zoomies(_ c: Ctx) {
+        // 절반은 내 둘레를 한 바퀴 넘게 신나게 빙 돎 (갈 수 있는 자리만 이어서), 아니면 보이는 먼 곳까지 우다다
+        if Bool.random() {
+            let me = SIMD2<Float>(c.head.x, c.head.z)
+            let a0 = atan2(pos.y - me.y, pos.x - me.x)
+            let dir: Float = Bool.random() ? 1 : -1
+            let R = reachNow(c)
+            var pts: [SIMD2<Float>] = []
+            for k in 1...9 {
+                let a = a0 + dir * Float(k) * 0.8
+                let p = me + SIMD2<Float>(cos(a), sin(a)) * Float.random(in: 1.0...1.3)
+                if c.free(p) && R.reach(p) { pts.append(p) }
+            }
+            if pts.count >= 5 {
+                yip(-4)
+                go(pts[0], then: .bow, 1.2, run: true)
+                route = Array(pts.dropFirst())
+                return
+            }
+        }
         if let s = roamSpot(c, far: true) {
             go(s, then: .bow, 1.2, run: true)
         } else {
@@ -835,8 +917,7 @@ final class HomeDog {
         running = true
         sniffing = false
         let target = stickPos
-        let d = simd_distance(target, pos)
-        if stickAir == nil && (pickT > 0 || d < 0.46) {
+        if stickAir == nil && (pickT > 0 || mouthTouch(target)) {
             pickT += dt
             faceToward(target)
             show(loop(["dog_sniff0", "dog_sniff1"], fps: 6))
@@ -848,7 +929,8 @@ final class HomeDog {
             return
         }
         if actT > actDur { start(.sit, 2); return }
-        switch nav.step(from: pos, to: target, reach: 0.42, far: 0.62, speed: 1.9, dt, c) {
+        // 몸 가운데가 아니라 입이 막대에 닿는 자리(막대 옆 22cm, 나에게 보이는 옆모습 기준)로 감
+        switch nav.step(from: pos, to: mouthSpot(target), reach: 0.05, far: 0.22, speed: 1.9, dt, c) {
         case .move(let np):
             if simd_length(np - pos) > 1e-4 { moveDir = simd_normalize(np - pos) }
             pos = np
@@ -861,8 +943,8 @@ final class HomeDog {
             if stickAir != nil {                                   // 아직 날아가는 중: 떨어질 때까지 지켜봄
                 faceToward(target)
                 show(loop(["dog_fhappy", "dog_fsit1"], fps: 4))
-            } else if d < 0.68 {
-                pickT = dt                                         // 고개를 내밀어 물기
+            } else if mouthTouch(target, reach: 0.2) {
+                pickT = dt                                         // 고개를 내밀어 물기 (입이 20cm 안일 때만 — 닿지 않는데 물지 않게)
             } else {
                 fetchRest = t + 25
                 say("dog_whine", -6)
@@ -983,6 +1065,7 @@ final class HomeDog {
         opts.append((0.5, { [unowned self] in bark(-7); start(.bark, 1.4); return true }))
         opts.append((0.25, { [unowned self] in say("dog_howl", -8); emote("note", 2.4); start(.howl, 2.6); return true }))
         opts.append((0.9, { [unowned self] in zoomies(c); return true }))
+        opts.append((0.5, { [unowned self] in yip(-5); emote("exclaim", 1); start(.spin, 1.8); return true }))      // 꼬리 쫓기
         // 막대를 물고 와서 발치에 놓음 (놀자는 뜻)
         opts.append((stick == nil ? 2.6 : 3.2, { [unowned self] in          // 막대 놀이는 자주
             if !carrying && stick != nil && t < fetchRest { return false }     // 닿지 않는 곳의 막대는 한동안 포기
@@ -1029,19 +1112,7 @@ final class HomeDog {
     }
 
     private func viewSpot(_ c: Ctx, near: Float) -> SIMD2<Float>? {
-        let me = SIMD2<Float>(c.head.x, c.head.z)
-        var best: (SIMD2<Float>, Float)? = nil
-        for dd in stride(from: Float(0.7), through: Float(2.8), by: 0.2) {
-            for a in stride(from: Float(-0.6), through: Float(0.6), by: 0.125) {
-                let v = SIMD2<Float>(c.fwd.x * cos(a) - c.fwd.y * sin(a), c.fwd.x * sin(a) + c.fwd.y * cos(a))
-                let p = me + v * dd
-                guard c.free(p) else { continue }
-                var score = abs(dd - near) + abs(abs(a) - 0.3) * 0.6 + simd_distance(p, pos) * 0.15
-                if !pathOK(pos, p, c) { score += 2.5 }
-                if best == nil || score < best!.1 { best = (p, score) }
-            }
-        }
-        return best?.0
+        reachNow(c).seek(c, near: near, spread: 0.6, dmin: 0.7, dmax: 2.8, pos: pos)
     }
 
     private func sideSpot(_ c: Ctx, _ r: Float) -> SIMD2<Float>? {

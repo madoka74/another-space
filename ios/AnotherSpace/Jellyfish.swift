@@ -35,6 +35,7 @@ final class JellySea {
         var period: Float = 3
         var inside = true
         var up = SIMD3<Float>(0, 1, 0)
+        var startle: Float = 0           // 손에 닿아 놀란 뒤 남은 시간 (그동안은 다시 놀라지 않음)
     }
 
     private var jellies: [Jelly] = []
@@ -50,6 +51,8 @@ final class JellySea {
     private let look: LookMode
     private let glowK: Float
     var head: SIMD3<Float>?
+    /// 손 자리 (저장 좌표) — 방 안 해파리를 손으로 톡 건드리면 갓을 확 오므리며 반대쪽으로 밀려 헤엄쳐 감
+    var hands: [SIMD3<Float>] = []
 
     private static let palette: [SIMD3<Float>] = [[0.55, 0.85, 1.0], [0.78, 0.62, 1.0], [1.0, 0.62, 0.86], [0.5, 1.0, 0.9],
                                                   [1.0, 0.78, 0.62], [0.72, 0.8, 1.0]]
@@ -329,7 +332,8 @@ final class JellySea {
         for j in jellies {
             // 숨쉬기: 오므라드는 동안(주기의 앞 30%) 갓이 좁아지고 길어지며 위로 밀려 오름
             let ph = (t / j.period + j.phase).truncatingRemainder(dividingBy: 1)
-            let squeeze: Float = ph < 0.3 ? sin(ph / 0.3 * .pi) : 0
+            var squeeze: Float = ph < 0.3 ? sin(ph / 0.3 * .pi) : 0
+            if j.startle > 0.6 { squeeze = max(squeeze, sin((1.2 - j.startle) / 0.6 * .pi)) }      // 손에 닿은 뒤 0.6초: 갓을 확 오므림
             let relax: Float = ph >= 0.3 ? sin((ph - 0.3) / 0.7 * .pi) * 0.25 : 0
             j.bell?.scale = SIMD3<Float>(1 - 0.16 * squeeze + 0.04 * relax, 1 + 0.12 * squeeze, 1 - 0.16 * squeeze + 0.04 * relax)
             j.core?.scale = SIMD3<Float>(1 - 0.1 * squeeze, 0.7 + 0.08 * squeeze, 1 - 0.1 * squeeze)
@@ -358,6 +362,20 @@ final class JellySea {
             // 위아래: 목표 높이 쪽으로 + 숨쉬기(오므릴 때 위로 밀림, 쉬면 가라앉음) — 늘 조금씩 오르내림
             want.y = max(-0.06, min(0.06, to.y * 0.12)) * (j.inside ? 1 : 2.2)
             want.y += (squeeze * 0.16 - 0.035) * (j.inside ? 1 : 2.4)
+            // 손에 닿음: 갓을 확 오므리며(숨쉬기를 처음부터) 손 반대쪽·조금 위로 밀려 나가고, 그쪽으로 한동안 헤엄침
+            j.startle -= dt
+            if j.inside && j.startle <= 0 {
+                for hp in hands where simd_distance(hp, j.pos) < j.size * 0.9 + 0.1 {
+                    var away = j.pos - hp
+                    away.y = max(away.y, 0) + 0.15
+                    away = simd_length(away) > 0.001 ? simd_normalize(away) : SIMD3<Float>(0, 1, 0)
+                    j.vel += away * 0.45
+                    j.target = j.pos + SIMD3<Float>(away.x, away.y * 0.4, away.z) * 1.1
+                    j.retarget = 6
+                    j.startle = 1.2
+                    break
+                }
+            }
             if j.inside, let h = head {
                 let away = j.pos - h
                 let d = simd_length(away)

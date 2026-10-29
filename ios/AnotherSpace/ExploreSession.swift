@@ -22,12 +22,14 @@ struct ExploreView: View {
             if let card = attachments.entity(for: "docent") { s.attachDocent(card) }
             if let tp = attachments.entity(for: "theme") { s.attachTheme(tp) }
             if let sc = attachments.entity(for: "stars") { s.attachStars(sc) }
+            if let fp = attachments.entity(for: "furn") { s.attachFurn(fp) }
             s.updateSub = content.subscribe(to: SceneEvents.Update.self) { e in s.tick(Float(e.deltaTime)) }
         } attachments: {
             Attachment(id: "hud") { ExploreHud(s: s) }
             Attachment(id: "docent") { DocentCard(s: s) }
             Attachment(id: "theme") { ThemePanel(s: s) }
             Attachment(id: "stars") { StarCard(s: s) }
+            Attachment(id: "furn") { FurnPanel(s: s) }
         }
         // 탭은 한 번씩만 받고, 싱글·더블은 앱이 시간으로 가름 (두 번째 탭이 0.4초 안에 오면 더블탭).
         // 보는 곳 어디든 받도록 머리 둘레에 보이지 않는 '탭 받는 상자'를 둠. 열쇠·그림 버튼은 바로 처리
@@ -43,6 +45,17 @@ struct ExploreView: View {
             s.dragToy(v.entity, to: v.convert(v.location3D, from: .local, to: .scene))
         }.onEnded { v in
             s.dropToy(v.entity)
+        })
+        // 가구 맞추기: 상자를 집어 끌면 옮김, 두 손으로 집어 벌리거나 좁히면 크기를 바꿈
+        .simultaneousGesture(DragGesture(minimumDistance: 0.01).targetedToEntity(where: .has(FurnTag.self)).onChanged { v in
+            s.dragFurn(v.entity, to: v.convert(v.location3D, from: .local, to: .scene))
+        }.onEnded { _ in
+            s.dropFurn()
+        })
+        .simultaneousGesture(MagnifyGesture().targetedToEntity(where: .has(FurnTag.self)).onChanged { v in
+            s.scaleFurn(v.entity, Float(v.gestureValue.magnification))
+        }.onEnded { _ in
+            s.scaleFurnEnd()
         })
         .task { await s.start() }
         .onDisappear { s.stop() }
@@ -86,6 +99,11 @@ private struct ExploreHud: View {
                         }
                     }
                     Button {
+                        s.startFurn()
+                    } label: {
+                        Label("가구 맞추기", systemImage: "cube.transparent")
+                    }
+                    Button {
                         s.exit()
                     } label: {
                         Label("현실로 돌아가기", systemImage: "arrow.uturn.backward")
@@ -124,6 +142,57 @@ private struct LoadBar: View {
 struct GrabTag: Component { var panel: String = "" }
 /// 집어서 던질 수 있는 장난감 (고양이 털실 공·강아지 막대)
 struct ToyTag: Component {}
+/// 가구 맞추기의 상자 (넣은 가구 번호)
+struct FurnTag: Component { var index: Int = 0 }
+
+/// 가구 맞추기 판: 하는 법 · 고른 상자의 폭·깊이·높이 조절 · 돌리기 · 지우기 · 되돌리기 · 완료
+private struct FurnPanel: View {
+    let s: ExploreSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Label("가구 맞추기", systemImage: "cube.transparent").font(.title3.weight(.semibold))
+                Spacer(minLength: 8)
+                Button { s.undoFurn() } label: { Image(systemName: "arrow.uturn.backward") }
+                    .disabled(!s.furnCanUndo)
+                Button("완료") { s.endFurn() }.buttonStyle(.borderedProminent)
+            }
+            if let b = s.furnSelBox {
+                Text("끌어서 옮기기 · 두 손으로 집어 벌리거나 좁혀 크기 바꾸기").font(.callout).foregroundStyle(.secondary)
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                    row("폭", b.w, { s.resizeFurn(dw: $0) })
+                    row("깊이", b.d, { s.resizeFurn(dd: $0) })
+                    row("높이", b.h, { s.resizeFurn(dh: $0) })
+                }
+                HStack(spacing: 10) {
+                    Button { s.rotateFurn() } label: { Label("돌리기", systemImage: "rotate.right") }
+                    Button(role: .destructive) { s.deleteFurn() } label: { Label("지우기", systemImage: "trash") }
+                    Spacer(minLength: 0)
+                    Button { s.selectFurn(nil) } label: { Text("고르기 끝") }
+                }
+            } else {
+                Text("가구를 탭하면 크기를 바꿀 수 있는 상자가 돼요.\n빈 바닥을 탭하면 새 가구를 놓아요.").font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        .glassBackgroundEffect()
+        .transaction { $0.animation = nil }
+        .simultaneousGesture(TapGesture().onEnded { s.uiTouched() })
+    }
+
+    @ViewBuilder
+    private func row(_ name: String, _ v: Float, _ change: @escaping (Float) -> Void) -> some View {
+        GridRow {
+            Text(name).frame(width: 44, alignment: .leading)
+            Button { change(-0.1) } label: { Image(systemName: "minus") }.buttonBorderShape(.circle)
+            Text("\(Int((v * 100).rounded()))cm").monospacedDigit().frame(width: 70)
+            Button { change(0.1) } label: { Image(systemName: "plus") }.buttonBorderShape(.circle)
+        }
+    }
+}
 
 /// 테마 판: 크기가 늘 같은 판 (칩 9개가 딱 들어가는 폭, 좌우 여백 같게)
 private struct ThemePanel: View {
@@ -250,6 +319,20 @@ final class ExploreSession {
     @ObservationIgnored private var lastSysTap: Float = -9
     @ObservationIgnored private var lastHandTap: Float = -9
     @ObservationIgnored private var hudPinned = false
+    // 가구 맞추기 (세계를 걷고 현실 위에 가구 블록을 반투명하게 보이며, 탭·끌기·두 손 집기·판 버튼으로 넣고 빼고 줄이고 키움)
+    var furnMode = false
+    var furnSel: Int?                                   // 고른 상자 (furnEdits.adds 번호)
+    var furnEdits = FurnEdits()
+    var furnCanUndo = false
+    var furnSelBox: FurnBox? { furnSel.flatMap { $0 >= 0 && $0 < furnEdits.adds.count ? furnEdits.adds[$0] : nil } }
+    @ObservationIgnored private var furnUndo: [FurnEdits] = []
+    @ObservationIgnored private var furnPanel: Entity?
+    @ObservationIgnored private let furnRoot = Entity()              // 저장 좌표 (공간 뿌리와 같은 자리 — 세계를 가린 동안에도 보임)
+    @ObservationIgnored private var furnPreview: ModelEntity?
+    @ObservationIgnored private var furnBoxes: [ModelEntity] = []
+    @ObservationIgnored private var furnGrab: SIMD2<Float>?           // 끌기 시작할 때 상자 가운데 - 손 자리 (평면 좌표)
+    @ObservationIgnored private var furnScale0: FurnBox?
+    @ObservationIgnored private var furnApplyAt: Float?               // 끄는 동안 블록·미리보기 다시 그릴 때 (0.15초마다)
     @ObservationIgnored private var tip: String?                     // 잠깐 알려 줄 사용법 (처음 한 번)
     @ObservationIgnored private var tipUntil: Float = 0
     @ObservationIgnored private var seenRooms: Set<Int> = []
@@ -356,6 +439,8 @@ final class ExploreSession {
         v.fallbackRoom = d.rec.rooms.first?.id ?? 1
         spaceRoot.addChild(v.root)
         vox = v
+        furnEdits = FurnStore.load(spaceId)                // 손으로 맞춘 가구 (처음부터 적용)
+        v.setEdits(furnEdits)
         Sfx.preload()
         // 현실 창: 가려 주는 재질(OcclusionMaterial)은 그 뒤의 가상 물체를 지워 현실이 보이게 함
         peek.model = ModelComponent(mesh: .generateCylinder(height: 0.002, radius: 1), materials: [OcclusionMaterial()])
@@ -656,6 +741,7 @@ final class ExploreSession {
         ar.stop()
         player.stopAll()
         saveVox()
+        if furnMode { FurnStore.save(spaceId, furnEdits) }
         if !ended { ended = true; AppModel.shared.disappeared() }
     }
 
@@ -725,6 +811,7 @@ final class ExploreSession {
         case "theme": return themePanel
         case "docent": return docentCard
         case "stars": return starCard
+        case "furn": return furnPanel
         default: return nil
         }
     }
@@ -1230,7 +1317,7 @@ final class ExploreSession {
         // 안전: 공간을 아직 못 찾았거나, 구성한 방 밖이거나, 너무 빠르면 현실이 보이게
         var target: Float = 1
         var why: String?
-        if fit == nil || !ready || !floorOK { target = 0 }
+        if fit == nil || !ready || !floorOK || furnMode { target = 0 }      // 가구 맞추기: 현실 위에 가구 블록만
         else if outsideT > 1.0 { target = 0; why = "방 밖이에요" }
         else if fastT > 0.4 { target = 0; why = "천천히 걸어 주세요" }
         let rate: Float = target < fade ? 3 : 1.1
@@ -1297,6 +1384,7 @@ final class ExploreSession {
         soundTick(dt)
         placeHud(dt)
         placeDocent(dt)
+        furnTick()
         syncBars()
         if let h = handTapAt, t - h > 0.18 {
             handTapAt = nil
@@ -1413,6 +1501,7 @@ final class ExploreSession {
         stars?.tick(dt, gaze: gaze)
         // 바다 해파리: 머리 자리(가까이 오면 비켜 감) · 계곡 물고기: 손(물에 대면 흩어짐)
         wld.jelly?.head = f.toSaved(head)
+        wld.jelly?.hands = handPts                                   // 손 (저장 좌표) — 톡 건드리면 놀라 밀려 감
         if wld.jelly?.furnitureH == nil, let v = vox { wld.jelly?.furnitureH = { p in v.heightAt(L.plane(p.x, p.y)) } }
         wld.creek?.tick(dt, hands: handPts, feet: f.toSaved(head - fwd * 0.09 - headUp * 0.07))      // 몸(목 뒤) 자리 — 고개만 돌려도 걸은 걸로 치지 않게
         // 같은 세계 무리의 다른 방 개울도 물이 흐르게 (벽 너머로 그 방 물길·나가는 물길이 보임 — 지금 방 것만 흘러 나머지는 그림처럼 멈춰 있었음)
@@ -1624,24 +1713,25 @@ final class ExploreSession {
             }
             return true
         }
-        // 모닥불 크기는 앞 빈 바닥에 맞춰 여러 단계 (돌 둘레 반지름 55cm ~ 18cm): 넓으면 크게, 좁으면 작게.
-        // 큰 불일수록 조금 더 떨어진 곳(앉은 자리에서 불 반지름 + 45cm 넘게)
+        // 모닥불 크기는 앞 빈 바닥에 맞춰 여러 단계 (돌 둘레 반지름 75cm ~ 18cm): 넓으면 크게, 좁으면 작게.
+        // 큰 불일수록 조금 더 떨어진 곳(앉은 자리에서 불 반지름 + 45cm 넘게, 2.3m 안)
+        // (예전엔 가장 커도 55cm에 둘레 여유 22cm·1.9m 안만 봐서, 넓은 공간에서도 작은 불만 피었음)
         var cands: [(SIMD2<Float>, Float, Float)] = []         // 자리, 점수, 반지름
-        for r in stride(from: Float(0.55), through: Float(0.18), by: -0.0925) {
+        for r: Float in [0.75, 0.65, 0.55, 0.46, 0.37, 0.28, 0.18] {
             var dd: Float = max(0.55, r + 0.45)
-            while dd <= 1.9 {
+            while dd <= 2.3 {
                 for a in [Float(0), 0.2, -0.2, 0.4, -0.4, 0.65, -0.65, 1.0, -1.0, 1.4, -1.4, 1.9, -1.9, 2.5, -2.5, 3.14] {   // 앞이 막혔으면 옆·뒤에라도
                     let v = SIMD2<Float>(dir.x * cos(a) - dir.y * sin(a), dir.x * sin(a) + dir.y * cos(a))
                     let p = me + v * dd
-                    cands.append((p, abs(dd - (r + 0.75)) + abs(a) * 0.8 + (0.55 - r) * 3, r))
+                    cands.append((p, abs(dd - (r + 0.75)) + abs(a) * 0.8 + (0.75 - r) * 3, r))
                 }
                 dd += 0.1
             }
         }
         cands.sort { $0.1 < $1.1 }
-        // 불 자리 = 모래 바닥 원(돌 둘레의 1.1배, 눈 오면 1.45배) + 연기·불꽃 여유 22cm 안에 가구·벽·문이 없어야 (사물과 겹치지 않게)
+        // 불 자리 = 모래 바닥 원(돌 둘레의 1.1배, 눈 오면 1.45배) + 연기·불꽃 여유 14cm 안에 가구·벽·문이 없어야 (사물과 겹치지 않게)
         let snowy = ["snow", "heavysnow"].contains(rm.weather)
-        guard let pick = cands.first(where: { free($0.0, $0.2 * (snowy ? 1.45 : 1.1) + 0.22) }) else { return }      // 들어갈 자리가 없으면 피우지 않음
+        guard let pick = cands.first(where: { free($0.0, $0.2 * (snowy ? 1.45 : 1.1) + 0.14) }) else { return }      // 들어갈 자리가 없으면 피우지 않음
         let wd = simd_quatf(angle: -w.angle, axis: [0, 1, 0]).act(SIMD3<Float>(1, 0, 0.35))
         let cf = Tex.with(rm.lookMode) { Campfire(at: SIMD3<Float>(pick.0.x, L.floorY, pick.0.y), room: rm, look: rm.lookMode, windDir: wd, ceilH: rm.ceil, sky: w.world,
                           scale: pick.2 / 0.55) }
@@ -2101,6 +2191,266 @@ final class ExploreSession {
         return false
     }
 
+    // MARK: 가구 맞추기
+    func attachFurn(_ e: Entity) {
+        furnPanel = e
+        e.isEnabled = false
+        root.addChild(e)
+        makeBar("furn")
+    }
+
+    func startFurn() {
+        lastUITap = t
+        guard ready, vox != nil, layout != nil, !furnMode else { return }
+        FurnTag.registerComponent()
+        hudMenu = false; themeOpen = false; hudUntil = 0
+        closeDocent()
+        if starPick != nil { closeStars() }
+        furnMode = true
+        furnSel = nil
+        furnUndo = []
+        furnCanUndo = false
+        if furnRoot.parent == nil { root.addChild(furnRoot) }
+        furnRoot.isEnabled = true
+        furnRoot.transform = spaceRoot.transform
+        rebuildFurnView(preview: true)
+        if let p = furnPanel {
+            var fw = fwd; fw.y = 0
+            fw = simd_length(fw) > 0.01 ? simd_normalize(fw) : SIMD3<Float>(0, 0, -1)
+            p.position = head + fw * 0.7 - SIMD3<Float>(0, 0.28, 0)
+            faceDocent(p)
+            p.isEnabled = true
+        }
+    }
+
+    func endFurn() {
+        lastUITap = t
+        guard furnMode else { return }
+        applyFurn()
+        furnMode = false
+        furnSel = nil
+        furnPanel?.isEnabled = false
+        furnRoot.isEnabled = false
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    /// 매 프레임: 상자·미리보기를 공간 자리에 맞추고, 끄는 동안 모아 둔 바뀜을 0.15초마다 블록에 적용
+    private func furnTick() {
+        guard furnMode else { return }
+        furnRoot.transform = spaceRoot.transform
+        if let at = furnApplyAt, t >= at { furnApplyAt = nil; vox?.setEdits(furnEdits) }
+    }
+
+    private func pushFurnUndo() {
+        furnUndo.append(furnEdits)
+        if furnUndo.count > 40 { furnUndo.removeFirst() }
+        furnCanUndo = true
+    }
+
+    /// 바뀐 가구를 블록(세계 쪽)에 적용하고 상자·미리보기를 다시 그림
+    private func applyFurn(preview: Bool = true) {
+        vox?.setEdits(furnEdits)
+        rebuildFurnView(preview: preview)
+        furnCanUndo = !furnUndo.isEmpty
+    }
+
+    private static func furnMat(_ c: UIColor, _ a: Float) -> UnlitMaterial {
+        var m = UnlitMaterial(color: c)
+        m.blending = .transparent(opacity: .init(floatLiteral: a))
+        m.writesDepth = false
+        return m
+    }
+
+    /// 상자 자리 (저장 좌표 가운데·방향): 평면 좌표의 가로축(ex)에 폭, 세로축에 깊이
+    private func furnTransform(_ b: FurnBox, _ L: Layout) -> Transform {
+        let c = L.flat(SIMD2<Float>(b.cx, b.cz))
+        let ex3 = simd_normalize(SIMD3<Float>(L.ex.x, 0, L.ex.y))
+        return Transform(scale: .one, rotation: simd_quatf(from: SIMD3<Float>(1, 0, 0), to: ex3), translation: SIMD3<Float>(c.x, L.floorY + b.h / 2, c.y))
+    }
+
+    private func rebuildFurnView(preview: Bool) {
+        guard let L = layout else { return }
+        if preview {
+            furnPreview?.removeFromParent()
+            furnPreview = nil
+            if let m = vox?.previewMesh() {
+                let e = ModelEntity(mesh: m, materials: [Self.furnMat(UIColor(red: 0.35, green: 0.85, blue: 1, alpha: 1), 0.3)])
+                furnRoot.addChild(e)
+                furnPreview = e
+            }
+        }
+        for e in furnBoxes { e.removeFromParent() }
+        furnBoxes = []
+        for (i, b) in furnEdits.adds.enumerated() {
+            let sel = i == furnSel
+            let e = ModelEntity(mesh: .generateBox(width: b.w, height: b.h, depth: b.d, cornerRadius: 0.01),
+                                materials: [Self.furnMat(sel ? UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1) : UIColor(red: 1, green: 0.55, blue: 0.2, alpha: 1), sel ? 0.55 : 0.38)])
+            e.transform = furnTransform(b, L)
+            e.name = "furn-\(i)"
+            e.components.set(FurnTag(index: i))
+            e.components.set(InputTargetComponent())
+            e.components.set(CollisionComponent(shapes: [.generateBox(width: b.w, height: max(0.05, b.h), depth: b.d)]))
+            e.components.set(HoverEffectComponent())
+            furnRoot.addChild(e)
+            furnBoxes.append(e)
+        }
+    }
+
+    func selectFurn(_ i: Int?) {
+        lastUITap = t
+        furnSel = i
+        rebuildFurnView(preview: false)
+    }
+
+    /// 가구 맞추기 중 탭: 상자 → 고름 / 가구 블록 → 그 덩어리를 크기를 바꿀 수 있는 상자로 / 빈 바닥 → (고른 게 있으면 고르기 끝) 새 가구.
+    /// 탭한 곳은 머리에서 탭한 방향으로 5cm씩 나아가며 처음 만나는 가구 블록 윗면·옆면 또는 바닥
+    private func furnTap(_ e: Entity, _ point: SIMD3<Float>?) {
+        if t - lastUITap < 0.25 { return }
+        var cur: Entity? = e
+        while let c = cur {
+            if let tag = c.components[FurnTag.self] { selectFurn(tag.index); return }
+            if c === furnPanel || c === hud || c.components[GrabTag.self] != nil { return }      // 판·막대를 누른 탭
+            cur = c.parent
+        }
+        guard e === tapCatcher else { return }      // 빈 곳(머리 둘레 탭 받는 상자)을 탭했을 때만 그 방향의 가구·바닥을 고름
+        guard let p = point, let f = fit, let L = layout, let v = vox, simd_distance(p, head) > 0.05 else { return }
+        let o = f.toSaved(head), d = f.dirToSaved(simd_normalize(p - head))
+        var s: Float = 0.15
+        while s < 6 {
+            let q = o + d * s
+            let pl = L.plane(q.x, q.z)
+            let h = v.heightAt(pl)
+            if h > 0 && q.y - L.floorY <= h + 0.02 {
+                if let i = furnEdits.adds.firstIndex(where: { abs(pl.x - $0.cx) <= $0.w / 2 + 0.05 && abs(pl.y - $0.cz) <= $0.d / 2 + 0.05 }) {
+                    selectFurn(i)
+                } else {
+                    pieceToBox(pl)
+                }
+                return
+            }
+            if q.y <= L.floorY + 0.01 {
+                if furnSel != nil { selectFurn(nil) } else if L.walkable(pl) { addFurn(at: pl) }
+                return
+            }
+            s += 0.025
+        }
+        if furnSel != nil { selectFurn(nil) }
+    }
+
+    /// 알아낸 가구 한 덩어리 → 같은 자리·크기의 상자 (원래 블록 자리는 비움 — 상자를 줄이거나 옮기면 그만큼 빈 곳이 됨)
+    private func pieceToBox(_ pl: SIMD2<Float>) {
+        guard let v = vox, let pc = v.pieceAt(pl) else { return }
+        pushFurnUndo()
+        let (lo, hi, h) = pc
+        furnEdits.erases.append(FurnRect(x0: lo.x - 0.05, z0: lo.y - 0.05, x1: hi.x + 0.05, z1: hi.y + 0.05))
+        furnEdits.adds.append(FurnBox(cx: (lo.x + hi.x) / 2, cz: (lo.y + hi.y) / 2, w: max(0.1, hi.x - lo.x), d: max(0.1, hi.y - lo.y), h: max(0.1, h)))
+        furnSel = furnEdits.adds.count - 1
+        applyFurn()
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    /// 빈 바닥에 새 가구 (50×50cm, 높이 45cm)
+    private func addFurn(at pl: SIMD2<Float>) {
+        pushFurnUndo()
+        furnEdits.adds.append(FurnBox(cx: pl.x, cz: pl.y, w: 0.5, d: 0.5, h: 0.45))
+        furnSel = furnEdits.adds.count - 1
+        applyFurn()
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    func dragFurn(_ e: Entity, to p: SIMD3<Float>) {
+        lastUITap = t
+        guard furnMode, let tag = e.components[FurnTag.self], tag.index < furnEdits.adds.count, let f = fit, let L = layout else { return }
+        let q = f.toSaved(p)
+        let pl = L.plane(q.x, q.z)
+        if furnGrab == nil {
+            pushFurnUndo()
+            let b = furnEdits.adds[tag.index]
+            furnGrab = SIMD2<Float>(b.cx, b.cz) - pl
+            if furnSel != tag.index { furnSel = tag.index; rebuildFurnView(preview: false) }
+        }
+        guard let g = furnGrab else { return }
+        furnEdits.adds[tag.index].cx = pl.x + g.x
+        furnEdits.adds[tag.index].cz = pl.y + g.y
+        if tag.index < furnBoxes.count { furnBoxes[tag.index].transform = furnTransform(furnEdits.adds[tag.index], L) }
+        if furnApplyAt == nil { furnApplyAt = t + 0.15 }
+    }
+
+    func dropFurn() {
+        guard furnGrab != nil else { return }
+        furnGrab = nil
+        applyFurn(preview: false)
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    func scaleFurn(_ e: Entity, _ mag: Float) {
+        lastUITap = t
+        guard furnMode, let tag = e.components[FurnTag.self], tag.index < furnEdits.adds.count, let L = layout else { return }
+        if furnScale0 == nil {
+            pushFurnUndo()
+            furnScale0 = furnEdits.adds[tag.index]
+            furnSel = tag.index
+        }
+        guard let b0 = furnScale0 else { return }
+        let k = max(0.2, min(5, mag))
+        furnEdits.adds[tag.index].w = max(0.1, min(4, b0.w * k))
+        furnEdits.adds[tag.index].d = max(0.1, min(4, b0.d * k))
+        if tag.index < furnBoxes.count {
+            let b = furnEdits.adds[tag.index]
+            furnBoxes[tag.index].transform = furnTransform(b, L)
+            furnBoxes[tag.index].scale = SIMD3<Float>(b.w / b0.w, 1, b.d / b0.d)
+        }
+        if furnApplyAt == nil { furnApplyAt = t + 0.15 }
+    }
+
+    func scaleFurnEnd() {
+        guard furnScale0 != nil else { return }
+        furnScale0 = nil
+        applyFurn(preview: false)
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    func resizeFurn(dw: Float = 0, dd: Float = 0, dh: Float = 0) {
+        lastUITap = t
+        guard let i = furnSel, i < furnEdits.adds.count else { return }
+        pushFurnUndo()
+        furnEdits.adds[i].w = max(0.1, min(4, furnEdits.adds[i].w + dw))
+        furnEdits.adds[i].d = max(0.1, min(4, furnEdits.adds[i].d + dd))
+        furnEdits.adds[i].h = max(0.1, min(2.1, furnEdits.adds[i].h + dh))
+        applyFurn(preview: false)
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    func rotateFurn() {
+        lastUITap = t
+        guard let i = furnSel, i < furnEdits.adds.count else { return }
+        pushFurnUndo()
+        let b = furnEdits.adds[i]
+        furnEdits.adds[i].w = b.d
+        furnEdits.adds[i].d = b.w
+        applyFurn(preview: false)
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    func deleteFurn() {
+        lastUITap = t
+        guard let i = furnSel, i < furnEdits.adds.count else { return }
+        pushFurnUndo()
+        furnEdits.adds.remove(at: i)
+        furnSel = nil
+        applyFurn(preview: false)
+        FurnStore.save(spaceId, furnEdits)
+    }
+
+    func undoFurn() {
+        lastUITap = t
+        guard let last = furnUndo.popLast() else { return }
+        furnEdits = last
+        if let i = furnSel, i >= furnEdits.adds.count { furnSel = nil }
+        applyFurn()
+        FurnStore.save(spaceId, furnEdits)
+    }
+
     // MARK: 탭
     /// 탭 하나: 열쇠·그림 버튼이면 바로 처리, 그 밖(탭 받는 상자)이면 0.4초 안에 또 오는지 기다림
     func tapped(_ e: Entity, at point: SIMD3<Float>? = nil, system: Bool = true) {
@@ -2108,6 +2458,7 @@ final class ExploreSession {
             if t - lastHandTap < 0.5 { return }                    // 손 추적으로 이미 받은 같은 손짓
             lastSysTap = t
         }
+        if furnMode { furnTap(e, point); return }
         var cur: Entity? = e
         while let c = cur {
             if c.name.hasPrefix("door-"), let i = Int(c.name.dropFirst(5)) {

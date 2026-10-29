@@ -614,6 +614,7 @@ enum SpaceStore {
         data.append(contentsOf: m.c.prefix(n))
         try? data.write(to: f.appendingPathComponent("mesh.bin"), options: .atomic)
         VoxStore.clear(id)            // 다시 스캔하면 탐험하며 알아 둔 가구 블록은 새 스캔으로 다시 시작
+        FurnStore.clear(id)           // 손으로 맞춘 가구도 (새 스캔과 자리가 맞지 않을 수 있음)
     }
 
     /// (삼각형 꼭짓점들 [a,b,c,…], 분류) — 없으면 nil (예전에 스캔한 공간)

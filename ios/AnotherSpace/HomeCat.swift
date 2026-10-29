@@ -69,20 +69,24 @@ final class HomeCat {
 
     /// 길 찾기: 10cm 칸 위에서 설 수 있는 바닥(c.free)만 지나 a → (b에서 reach 안의 아무 칸)까지 가는 길 (경유점, 30cm 간격).
     /// 가구가 가로막아 곧장 못 가는 장난감도 돌아서 감 (예전엔 앞만 보고 비켜 가다 막힌 구석에서 멈춰 섰음). 못 가면 nil
+    /// 찾는 칸 범위: 두 점을 감싼 사각형 + 둘레 2.5m (가구를 크게 돌아가는 길도), 칸이 160×160을 넘으면 칸을 키움.
+    /// (예전엔 둘레 2m·90×90칸(9m)까지만 봐서, 5m 넘게 떨어졌거나 크게 돌아가야 하는 곳은 길이 없다고 보고 먼 곳에 멈춰 있었음)
+    /// 지금 자리가 가구·벽에 조금 걸쳐 있으면(지나갈 수 없는 칸) 둘레 20cm 안은 지나갈 수 있는 것으로 쳐서 빠져나오게
     static func plan(from a: SIMD2<Float>, to b: SIMD2<Float>, reach: Float, _ c: Ctx) -> [SIMD2<Float>]? {
-        let cs: Float = 0.1
-        let lo = simd_min(a, b) - SIMD2<Float>(repeating: 2), hi = simd_max(a, b) + SIMD2<Float>(repeating: 2)
-        let nx = min(90, Int(((hi.x - lo.x) / cs).rounded(.up))), nz = min(90, Int(((hi.y - lo.y) / cs).rounded(.up)))
+        let lo = simd_min(a, b) - SIMD2<Float>(repeating: 2.5), hi = simd_max(a, b) + SIMD2<Float>(repeating: 2.5)
+        let cs: Float = max(0.1, max(hi.x - lo.x, hi.y - lo.y) / 160)
+        let nx = min(160, Int(((hi.x - lo.x) / cs).rounded(.up))), nz = min(160, Int(((hi.y - lo.y) / cs).rounded(.up)))
         guard nx > 1, nz > 1 else { return nil }
         func cp(_ i: Int, _ j: Int) -> SIMD2<Float> { lo + SIMD2<Float>((Float(i) + 0.5) * cs, (Float(j) + 0.5) * cs) }
         func cell(_ p: SIMD2<Float>) -> (Int, Int) { (min(nx - 1, max(0, Int((p.x - lo.x) / cs))), min(nz - 1, max(0, Int((p.y - lo.y) / cs)))) }
         var ok = [Int8](repeating: -1, count: nx * nz)          // -1 모름, 0 막힘, 1 빈 바닥
+        let (si, sj) = cell(a)
+        let esc = c.pass(a) ? -1 : Int((0.2 / cs).rounded(.up))      // 지금 자리가 막힌 칸일 때만 둘레 20cm를 빠져나갈 길로 침
         func free(_ i: Int, _ j: Int) -> Bool {
             let k = j * nx + i
-            if ok[k] < 0 { ok[k] = c.pass(cp(i, j)) ? 1 : 0 }
+            if ok[k] < 0 { ok[k] = (c.pass(cp(i, j)) || (abs(i - si) <= esc && abs(j - sj) <= esc)) ? 1 : 0 }
             return ok[k] == 1
         }
-        let (si, sj) = cell(a)
         var prev = [Int32](repeating: -1, count: nx * nz)
         let s0 = sj * nx + si
         prev[s0] = Int32(s0)
@@ -188,7 +192,9 @@ final class HomeCat {
 
     private enum Act {
         case sit, walk, jumpUp, onTop, jumpDown, groom, stretch, loaf, sleep, flop, scratch, roll, swat, rub, meow, look,
-             tilt, love, knead, yawn, pounce, puff, chase, hop, enter, leave
+             tilt, love, knead, yawn, pounce, puff, chase, hop, enter, leave,
+             weave,                                      // 내 발치를 빙 돌며 다리에 몸을 비빔
+             spin                                        // 제 꼬리를 쫓아 빙글빙글
     }
     private var act: Act = .enter
     private var actT: Float = 0
@@ -241,6 +247,15 @@ final class HomeCat {
     private var heldAt = SIMD3<Float>(0, 0, 0)
     private var ballAir: (SIMD3<Float>, SIMD3<Float>)?    // 던져서 날아가는 중 (자리, 빠르기)
     private var wantChase = false                // 가구 위에서 공을 보면 내려와서 쫓음
+    private var seekAt: Float = 0                // 이때까지는 '시야 밖 → 보이는 자리로'를 다시 고르지 않음 (갈 곳이 없거나 막혔을 때)
+    private var weaveA: Float = 0                // 발치 돌기: 나를 중심으로 한 각도
+    private var weaveDir: Float = 1
+    private var weaveLeft: Float = 0             // 남은 각도
+    private var spinT: Float = 0                 // 꼬리 쫓기: 다음에 돌아서는 때까지
+    private var inviteMe = false                 // 공을 내 쪽으로 쳐서 보냄 (같이 놀자)
+    private var landT: Float = -10               // 뛰어내려 앉은 때 (내려앉으며 살짝 눌리는 모습)
+    private var reachCache: PetReach?
+    private var reachT: Float = -10
     // 말풍선
     private var bubbleT: Float = -1
     private var bubbleDur: Float = 1.4
@@ -349,15 +364,23 @@ final class HomeCat {
     }
 
     // MARK: 소리
+    /// 소리마다 재생 빠르기를 조금씩 달리 (0.96~1.12배 — 같은 녹음도 매번 조금 다른 높이로, 살짝 높게 해서 귀엽게)
     private func say(_ name: String, _ gain: Double = -3) {
         meowCool = Float.random(in: 7...14)          // 스스로 내는 소리 사이 (탭엔 늘 바로 대답)
-        Sfx.play(name, in: root, at: [0, 0.3, 0], gain: min(0, gain), rolloff: 0.6)      // 실제 고양이 녹음, 거리에 따라 덜 줄게
+        Sfx.play(name, in: root, at: [0, 0.3, 0], gain: min(0, gain), rolloff: 0.6, speed: Double.random(in: 0.96...1.12))      // 실제 고양이 녹음, 거리에 따라 덜 줄게
     }
-    private func meow(_ gain: Double = -3) { say("cat_meow\(Int.random(in: 1...9))", gain) }
-    private func mrrp(_ gain: Double = -4) { say(Bool.random() ? "cat_mrrp\(Int.random(in: 1...3))" : "cat_trill", gain) }
+    /// 야옹: 아기 고양이 미야(7가지)·짧은 냥(11가지)을 자주, 어른 고양이 야옹(14가지)은 가끔 — 실제 녹음 중 앱에 들어 있는 것에서 고름
+    private func meow(_ gain: Double = -3) {
+        let r = Float.random(in: 0...1)
+        let pool: [String] = r < 0.4 ? (1...7).map { "cat_kitten\($0)" } : (r < 0.75 ? (1...11).map { "cat_mew\($0)" } : (1...14).map { "cat_meow\($0)" })
+        say(Sfx.pick(pool) ?? "cat_meow\(Int.random(in: 1...9))", gain)
+    }
+    /// 므릅·인사: 짧은 냥·트릴
+    private func mrrp(_ gain: Double = -4) {
+        say(Sfx.pick((1...11).map { "cat_mew\($0)" } + ["cat_mrrp1", "cat_mrrp2", "cat_mrrp3", "cat_trill"]) ?? "cat_trill", gain)
+    }
     private func chirp(_ gain: Double = -4) {
-        let n = Int.random(in: 1...3)
-        say(n == 1 ? "cat_chirp" : "cat_chirp\(n)", gain)
+        say(Sfx.pick(["cat_chirp", "cat_chirp2", "cat_chirp3"] + (7...11).map { "cat_mew\($0)" }) ?? "cat_chirp", gain)
     }
 
     private func setPurr(_ on: Bool) {
@@ -391,8 +414,9 @@ final class HomeCat {
         actT = 0
         actDur = dur
         frameT = 0
+        if a != .chase && a != .swat { inviteMe = false }
         switch a {
-        case .rub, .loaf, .sleep, .flop, .knead, .love: break
+        case .rub, .loaf, .sleep, .flop, .knead, .love, .weave: break
         default: setPurr(false)
         }
     }
@@ -600,7 +624,7 @@ final class HomeCat {
         }
         lastHands = c.hands
 
-        let busy = act == .jumpUp || act == .jumpDown || act == .leave || act == .enter || act == .puff || act == .hop
+        let busy = act == .jumpUp || act == .jumpDown || act == .leave || act == .enter || act == .puff || act == .hop || act == .weave || act == .spin
         if !busy {
             if let h = handNear, act != .roll && act != .chase {
                 faceToward(SIMD2<Float>(h.x, h.z))
@@ -613,10 +637,13 @@ final class HomeCat {
                     emote("heart")
                     if meowCool <= 0 { say("cat_trill", -3) }
                 }
-            } else if hidden > 1.4 && (act != .chase || t > playUntil) && (act != .walk || (hidden > 2.4 && !running)) {
+            } else if hidden > 1.4 && t >= seekAt && (act != .chase || t > playUntil) && (act != .walk || (hidden > 2.4 && !running)) {
                 // (혼자 공놀이하다 시야 밖으로 벗어났으면 공은 두고 내가 보는 쪽으로 — 예전엔 공 곁에만 머물렀음)
-                // 시야 밖 → 보이는 자리로
-                if elev > 0.05 { jumpDownNear(c, prefer: me + c.fwd * 1.4) } else if let s = viewSpot(c, near: 1.5) { go(s, then: .sit, 4, run: true) }
+                // 시야 밖 → 보이는 자리로 (걸어서 갈 수 있는 곳만 — PetReach). 갈 곳이 없으면 그 자리에서 나를 부르고 2초 뒤 다시 봄
+                if elev > 0.05 { jumpDownNear(c, prefer: me + c.fwd * 1.4) } else if let s = viewSpot(c, near: 1.5), simd_distance(s, pos) > 0.3 { go(s, then: .sit, 4, run: true) } else {
+                    seekAt = t + 2
+                    if act != .meow { meow(-4); frontal = true; start(.meow, 1.4) }
+                }
             } else if c.userSpeed > 0.35 && act != .walk && act != .chase && elev < 0.05 {
                 // 내가 걸으면 앞쪽 옆을 따라옴
                 followT -= dt
@@ -664,6 +691,7 @@ final class HomeCat {
             show(k < 0.18 ? "cat_jump0" : (k < 0.85 ? "cat_jump1" : "cat_jump0"))
             if k >= 1 {
                 elev = jumpTo.y
+                landT = t
                 if act == .jumpUp {
                     start(.onTop, Float.random(in: 5...11))
                 } else if wantChase && ball != nil {
@@ -718,8 +746,47 @@ final class HomeCat {
         case .swat:
             show(loop(["cat_swat0", "cat_swat1"], fps: 6))
             if actT > actDur {
-                if ball != nil && hits > 0 && hits < hitsMax { start(.chase, 10) } else { start(.sit, 1.5) }
+                if inviteMe {
+                    // 공을 내 쪽으로 보냈음: 나를 올려다보며 야옹 (다시 던져 달라는 듯)
+                    inviteMe = false
+                    frontal = true
+                    meow(-3)
+                    emote("note", 1.4)
+                    start(.meow, 1.6)
+                } else if ball != nil && hits > 0 && hits < hitsMax { start(.chase, 10) } else { start(.sit, 1.5) }
             }
+        case .weave:
+            // 내 발치를 한 바퀴 빙 돌며 다리에 몸을 비빔: 내 앞을 지날 땐 부비 그림, 옆·뒤는 걷는 그림, 그르릉
+            if actT <= lastDt + 1e-4 { weaveA = atan2(pos.y - me.y, pos.x - me.x); weaveLeft = 2 * .pi }
+            let rr: Float = 0.36
+            let da = 0.3 * dt / rr
+            weaveA += weaveDir * da
+            weaveLeft -= da
+            let p = me + SIMD2<Float>(cos(weaveA), sin(weaveA)) * rr
+            if c.pass(p) && simd_distance(p, pos) < 0.2 {
+                let v = p - pos
+                if simd_length(v) > 1e-4 { moveDir = simd_normalize(v) }
+                pos = p
+            } else {
+                weaveLeft = 0                                         // 가구·벽에 막히면 그만
+            }
+            let toCat = simd_length(pos - me) > 0.01 ? simd_normalize(pos - me) : c.fwd
+            faceToward(pos + moveDir)
+            show(simd_dot(toCat, c.fwd) > 0.55 ? loop(["cat_rub0", "cat_rub1"], fps: 2.2) : walkFrame(moveDir))
+            setPurr(true)
+            if weaveLeft <= 0 || c.userSpeed > 0.35 {
+                setPurr(false)
+                frontal = true
+                say("cat_trill", -4)
+                emote("heart", 1.2)
+                start(.sit, 2.5)
+            }
+        case .spin:
+            // 제 꼬리를 쫓아 빙글빙글: 좌우로 재빨리 돌아서며 종종걸음, 끝나면 어지러운 듯 갸웃
+            spinT -= dt
+            if spinT <= 0 { spinT = 0.24; turnFrom = face; face = -face; turnT = 0 }
+            show(loop(Self.runFrames, fps: 12))
+            if actT > actDur { frontal = true; emote("question", 1.2); start(.tilt, 1.4) }
         case .rub:
             show(loop(["cat_rub0", "cat_rub1"], fps: 2.2))
             if actT > actDur || (handNear == nil && c.userSpeed > 0.3) {
@@ -743,7 +810,7 @@ final class HomeCat {
             let k = min(1, actT / actDur)
             elev = 4 * k * (1 - k) * 0.16
             show("cat_jump0")
-            if k >= 1 { elev = 0; start(.sit, 1.5) }
+            if k >= 1 { elev = 0; landT = t; start(.sit, 1.5) }
         case .puff:
             show("cat_puff")
             if actT > actDur {
@@ -753,6 +820,13 @@ final class HomeCat {
         case .pounce:
             // 엉덩이 씰룩 → 휙 덮침
             if actT < actDur * 0.65 {
+                // 노려보며 몸을 낮추고 살금살금 다가감 (덮칠 자리에서 35cm 앞까지), 그 자리에서 휙
+                let v = pounceTo - pos
+                if simd_length(v) > 0.35 {
+                    let np = pos + simd_normalize(v) * min(simd_length(v) - 0.35, 0.16 * lastDt)
+                    if c.free(np) { pos = np }
+                }
+                pounceFrom = pos
                 show(loop(["cat_pounce0", "cat_pounce1"], fps: 7))
             } else {
                 let k = min(1, (actT - actDur * 0.65) / (actDur * 0.35))
@@ -763,7 +837,7 @@ final class HomeCat {
             }
             if actT > actDur {
                 elev = 0
-                if ball != nil && simd_distance(pos, ballPos) < 0.3 { hitBall(); start(.swat, 0.5) } else { start(.roll, 1.6) }
+                if ball != nil && pawTouch(ballPos) { faceToward(ballPos); hitBall(); start(.swat, 0.5) } else { start(.roll, 1.6) }
             }
         case .chase:
             stepChase(dt, c)
@@ -805,7 +879,16 @@ final class HomeCat {
             sx = (k < 0.5 ? turnFrom : face) * w
             if k >= 1 { turnT = -1 }
         }
-        card.scale = SIMD3<Float>(sx, 1, 1)
+        // 숨쉬기: 가만히 앉거나 누워 있을 땐 몸이 아주 조금 오르내림 / 뛰어내려 앉을 땐 잠깐 살짝 눌렸다 펴짐
+        var sy: Float = 1
+        switch act {
+        case .sit, .loaf, .onTop, .knead, .look, .love, .tilt: sy = 1 + 0.012 * sin(t * 2.4)
+        case .sleep, .flop: sy = 1 + 0.018 * sin(t * 1.4)
+        default: break
+        }
+        let lk = (t - landT) / 0.18
+        if lk >= 0 && lk < 1 { let q = sin(lk * .pi) * 0.07; sy -= q; sx *= 1 + q * 0.6 }
+        card.scale = SIMD3<Float>(sx, sy, 1)
         if let sh = shadow {
             if act == .jumpUp || act == .jumpDown {
                 sh.position = [0, min(0, min(jumpTo.y, jumpFrom.y) - elev), 0]       // 뛰는 동안 그림자는 바닥(또는 가구 위)에 남음
@@ -841,7 +924,11 @@ final class HomeCat {
     private func faceToward(_ p: SIMD2<Float>) {
         let v = p - pos
         guard simd_length(v) > 0.02 else { return }
-        let nf: Float = simd_dot(v, cardRight()) >= 0 ? 1 : -1
+        // 나를 향해·등지고 거의 곧게 움직일 땐(옆 성분 25% 안) 지금 방향 그대로 — 좌우가 매 프레임 바뀌며 돌아서는 그림(정면)이
+        // 끼어들어 여러 자세가 겹쳐 보이지 않게
+        let side = simd_dot(simd_normalize(v), cardRight())
+        guard abs(side) > 0.25 else { return }
+        let nf: Float = side >= 0 ? 1 : -1
         if nf != face {
             turnFrom = face
             face = nf
@@ -932,9 +1019,21 @@ final class HomeCat {
         case .arrived:
             pos = c.free(g) ? g : pos
         case .blocked:
+            // 길이 막힘: 1.5초 동안은 '보이는 자리로'를 다시 고르지 않음 (예전엔 앉기 → 다시 고르기 → 막힘을 매 프레임 되풀이해
+            // 걷기·앉기 그림이 번갈아 겹쳐 보였음)
             goal = nil
-            start(.sit, 1)
+            seekAt = t + 1.5
+            start(.sit, 1.5)
         }
+    }
+
+    /// 걸어갈 수 있는 바닥 (0.7초 또는 20cm 움직이면 새로 셈)
+    private func reachNow(_ c: Ctx) -> PetReach {
+        if let r = reachCache, t - reachT < 0.7, simd_distance(r.from, pos) < 0.2 { return r }
+        let r = PetReach(from: pos, c)
+        reachCache = r
+        reachT = t
+        return r
     }
 
     // MARK: 털실 공
@@ -1048,6 +1147,22 @@ final class HomeCat {
         b.orientation = ballSpin
     }
 
+    /// 그 자리를 보려면 어느 쪽 옆모습이어야 하는지 (faceToward 와 같은 기준 — 옆 성분 25% 안이면 지금 방향 그대로)
+    private func sideFor(_ b: SIMD2<Float>) -> Float {
+        let v = b - pos
+        guard simd_length(v) > 0.02 else { return face }
+        let side = simd_dot(simd_normalize(v), cardRight())
+        return abs(side) > 0.25 ? (side >= 0 ? 1 : -1) : face
+    }
+    /// 앞발이 공에 닿는지: 옆모습 그림에서 앞발은 몸 가운데에서 보는 쪽으로 17cm 앞 (공 반지름 4.5cm + 발 크기 안)
+    private func pawTouch(_ b: SIMD2<Float>) -> Bool {
+        simd_distance(pos + cardRight() * sideFor(b) * 0.17, b) < 0.12
+    }
+    /// 앞발이 그 자리에 닿도록 몸이 설 자리
+    private func pawSpot(_ b: SIMD2<Float>) -> SIMD2<Float> {
+        b - cardRight() * sideFor(b) * 0.17
+    }
+
     private func hitBall() {
         guard ball != nil else { return }
         hits += 1
@@ -1059,6 +1174,12 @@ final class HomeCat {
         var v = simd_normalize(d + side)
         if simd_distance(ballPos + v * 1.0, me) > 3.0 { v = simd_normalize(me - ballPos + side) }
         ballVel = v * Float.random(in: 0.8...1.5)
+        if inviteMe {
+            // 같이 놀자: 내 발치(50cm 앞)에서 멈출 만큼 내 쪽으로 (바닥 마찰로 굴러가는 거리 ≈ 빠르기 ÷ 1.4)
+            let to = me - ballPos
+            let dd = simd_length(to)
+            if dd > 0.6 { ballVel = simd_normalize(to) * min(2.4, max(0.5, (dd - 0.5) * 1.4)) }
+        }
         if Int.random(in: 0...2) == 0 { chirp(-6) }
     }
 
@@ -1093,7 +1214,7 @@ final class HomeCat {
             faceToward(ballPos)
             return
         }
-        if d < 0.34 && simd_length(ballVel) < 0.6 {                // 가구 곁의 공도 앞발이 닿게 (몸은 가구에서 여유를 둠)
+        if simd_length(ballVel) < 0.6 && pawTouch(ballPos) {       // 앞발(그림의 앞발 자리)이 공에 닿을 때만 침
             faceToward(ballPos)
             hitBall()
             start(.swat, 0.45)
@@ -1102,7 +1223,8 @@ final class HomeCat {
         if actT > actDur { start(.sit, 2); return }
         // 공까지 길을 찾아 돌아서 감 (공이 굴러가도 따라감). 더 다가갈 수 없으면: 가까우면 앞발을 길게 뻗어 쳐 내고, 멀면 포기하고 앉음
         let speed: Float = running ? 1.5 : 0.6
-        switch nav.step(from: pos, to: ballPos, reach: 0.3, far: 0.5, speed: speed, dt, c) {
+        // 몸 가운데가 아니라 앞발이 공에 닿는 자리(공 옆 17cm, 나에게 보이는 옆모습 기준)로 감
+        switch nav.step(from: pos, to: pawSpot(ballPos), reach: 0.05, far: 0.2, speed: speed, dt, c) {
         case .move(let np):
             moveDir = simd_length(np - pos) > 1e-4 ? simd_normalize(np - pos) : moveDir
             show(walkFrame(moveDir))
@@ -1112,7 +1234,8 @@ final class HomeCat {
         case .hold:
             show(walkFrame(moveDir))
         case .arrived, .blocked:
-            if d < 0.55 { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else { emote("question", 1); start(.sit, 2) }
+            // 더 다가갈 수 없음: 앞발이 닿으면 치고, 닿지 않으면(가구 틈 등) 갸웃하고 포기 — 닿지 않는데 공이 튀지 않게
+            if pawTouch(ballPos) { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else { emote("question", 1); start(.sit, 2) }
         }
     }
 
@@ -1160,10 +1283,9 @@ final class HomeCat {
             guard makeBall(near: pos, c) else { return false }
             // 혼자 하는 공놀이는 공이 내 시야(앞 4m 안) 안에 있을 때만 — 내가 다른 쪽을 보는데 뒤쪽 공에만 붙어 있지 않게
             guard t < playUntil || Self.inView(SIMD2<Float>(ballPos.x, ballPos.y), c) else { return false }
-            if simd_distance(ballPos, pos) > 0.9 || !pathOK(pos, ballPos, c) { hits = 0; hitsMax = Int.random(in: 2...5); start(.chase, 10); return true }
+            if simd_distance(pawSpot(ballPos), pos) > 0.9 || !pathOK(pos, pawSpot(ballPos), c) { hits = 0; hitsMax = Int.random(in: 2...5); start(.chase, 10); return true }
             pounceFrom = pos
-            let dv = ballPos - pos
-            pounceTo = pos + (simd_length(dv) > 0.01 ? simd_normalize(dv) : moveDir) * max(0.1, simd_length(dv) - 0.12)
+            pounceTo = pawSpot(ballPos)                                // 덮쳐 내려앉는 자리 = 앞발이 공에 닿는 자리
             faceToward(ballPos)
             hits = 0
             hitsMax = Int.random(in: 2...5)
@@ -1171,6 +1293,24 @@ final class HomeCat {
             start(.pounce, 1.8)
             return true
         }))
+        // 발치를 빙 돌며 부비부비 (가만히 서 있는 나에게)
+        if !sulking && c.still > 2.5 && dist < 2.4 {
+            opts.append((1.4, { [unowned self] in
+                let d0 = simd_length(pos - me) > 0.05 ? simd_normalize(pos - me) : -c.fwd
+                let s = me + d0 * 0.36
+                guard c.pass(s), reachNow(c).reach(s) else { return false }
+                weaveDir = Bool.random() ? 1 : -1
+                say("cat_trill", -5)
+                go(s, then: .weave, 30)
+                return true
+            }))
+        }
+        // 제 꼬리 쫓기
+        opts.append((0.45, { [unowned self] in say("cat_chatter", -6); start(.spin, 1.8); return true }))
+        // 공을 내 쪽으로 쳐서 보내고 올려다봄 (같이 놀자)
+        if !sulking, ball != nil, c.still > 1.5, simd_distance(ballPos, me) > 1.0, simd_distance(ballPos, me) < 4, Self.inView(ballPos, c) {
+            opts.append((1.6, { [unowned self] in inviteMe = true; hits = 0; hitsMax = 1; start(.chase, 10); return true }))
+        }
         // 우다다: 보이는 곳 이곳저곳을 신나게 뜀
         opts.append((0.5, { [unowned self] in
             guard let s = viewSpot(c, near: Float.random(in: 1.4...2.5)) else { return false }
@@ -1205,19 +1345,7 @@ final class HomeCat {
 
     /// 내 시야 안의 빈 바닥 (near m쯤 앞, 조금 옆으로). 고양이가 걸어갈 수 있는 곳
     private func viewSpot(_ c: Ctx, near: Float) -> SIMD2<Float>? {
-        let me = SIMD2<Float>(c.head.x, c.head.z)
-        var best: (SIMD2<Float>, Float)? = nil
-        for dd in stride(from: Float(0.8), through: Float(2.6), by: 0.2) {
-            for a in stride(from: Float(-0.5), through: Float(0.5), by: 0.125) {
-                let v = SIMD2<Float>(c.fwd.x * cos(a) - c.fwd.y * sin(a), c.fwd.x * sin(a) + c.fwd.y * cos(a))
-                let p = me + v * dd
-                guard c.free(p) else { continue }
-                var score = abs(dd - near) + abs(abs(a) - 0.25) * 0.6 + simd_distance(p, pos) * 0.15
-                if !pathOK(pos, p, c) { score += 2.5 }               // 바로 못 가는 곳은 되도록 피함
-                if best == nil || score < best!.1 { best = (p, score) }
-            }
-        }
-        return best?.0
+        reachNow(c).seek(c, near: near, spread: 0.5, dmin: 0.8, dmax: 2.6, pos: pos)
     }
 
     /// 돌아다닐 곳: 내 앞쪽 넓게(양옆 75도, 0.8~3.2m) 빈 바닥 중 지금 자리에서 50cm 넘게 떨어지고 바로 갈 수 있는 곳 아무 데나
@@ -1363,5 +1491,104 @@ struct PetNav {
         planT = 0                                   // 가구가 새로 보였을 수 있음 → 다음 프레임에 다시 찾음
         if stuckT > 0.6 { stuckT = 0; path = []; noPath = true; planT = 0.8; return .blocked }
         return .hold
+    }
+}
+
+
+/// 강아지·고양이가 지금 자리에서 걸어서(가구를 돌고 문을 지나) 갈 수 있는 바닥 — 15cm 칸, 둘레 6m.
+/// 시야 밖에서 내 쪽으로 올 자리를 고를 때 '실제로 갈 수 있는 곳'만 고르려고 씀
+/// (예전엔 곧은 줄로 막히지 않는지만 보고 골라, 가구 너머 갈 수 없는 자리를 고르면 길 찾기가 실패 → 앉음 → 다시 고름을 매 프레임
+///  되풀이해 걷기·앉기 그림이 번갈아 겹쳐 보였고(글리치), 먼 곳에서 사물에 막혀 오지 못했음)
+@MainActor
+struct PetReach {
+    let lo: SIMD2<Float>
+    let cs: Float = 0.15
+    let n: Int
+    private(set) var ok: [Bool]
+    let from: SIMD2<Float>
+
+    init(from a: SIMD2<Float>, radius: Float = 6, _ c: HomeCat.Ctx) {
+        from = a
+        lo = a - SIMD2<Float>(repeating: radius)
+        let cnt = Int((2 * radius / 0.15).rounded(.up))
+        n = cnt
+        ok = [Bool](repeating: false, count: cnt * cnt)
+        var known = [Int8](repeating: -1, count: cnt * cnt)
+        let s = Self.cellOf(a, lo, 0.15, cnt)
+        let lo0 = lo, n0 = cnt
+        let esc = c.pass(a) ? -1 : 1                         // 지금 자리가 막힌 칸이면 둘레 한 칸(15cm)은 빠져나갈 길로 침
+        func cp(_ i: Int, _ j: Int) -> SIMD2<Float> { lo0 + SIMD2<Float>((Float(i) + 0.5) * 0.15, (Float(j) + 0.5) * 0.15) }
+        func pass(_ i: Int, _ j: Int) -> Bool {
+            let k = j * n0 + i
+            if known[k] < 0 { known[k] = (c.pass(cp(i, j)) || (abs(i - s.0) <= esc && abs(j - s.1) <= esc)) ? 1 : 0 }
+            return known[k] == 1
+        }
+        var q = [s.1 * cnt + s.0]
+        ok[q[0]] = true
+        var qi = 0
+        while qi < q.count {
+            let k = q[qi]; qi += 1
+            let i = k % cnt, j = k / cnt
+            for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let x = i + di, y = j + dj
+                guard x >= 0, y >= 0, x < cnt, y < cnt else { continue }
+                let m = y * cnt + x
+                guard !ok[m], pass(x, y) else { continue }
+                ok[m] = true
+                q.append(m)
+            }
+        }
+    }
+
+    private static func cellOf(_ p: SIMD2<Float>, _ lo: SIMD2<Float>, _ cs: Float, _ n: Int) -> (Int, Int) {
+        (min(n - 1, max(0, Int((p.x - lo.x) / cs))), min(n - 1, max(0, Int((p.y - lo.y) / cs))))
+    }
+
+    /// 그 자리까지 걸어갈 수 있는지
+    func reach(_ p: SIMD2<Float>) -> Bool {
+        let x = (p.x - lo.x) / cs, y = (p.y - lo.y) / cs
+        guard x >= 0, y >= 0, x < Float(n), y < Float(n) else { return false }
+        return ok[Int(y) * n + Int(x)]
+    }
+
+    /// 갈 수 있는 칸 가운데들
+    var cells: [SIMD2<Float>] {
+        var out: [SIMD2<Float>] = []
+        for k in ok.indices where ok[k] { out.append(lo + SIMD2<Float>((Float(k % n) + 0.5) * cs, (Float(k / n) + 0.5) * cs)) }
+        return out
+    }
+
+    /// 내 시야 안(near m쯤 앞, 조금 옆)의 설 수 있고 걸어갈 수 있는 바닥. 시야 안에 그런 곳이 없으면
+    /// 갈 수 있는 곳 중 시야에 가장 가까운 곳(나를 향해 오다 막히는 곳 말고, 내가 보는 쪽에서 가장 덜 벗어난 곳)
+    func seek(_ c: HomeCat.Ctx, near: Float, spread: Float = 0.5, dmin: Float = 0.8, dmax: Float = 2.6, pos: SIMD2<Float>) -> SIMD2<Float>? {
+        let me = SIMD2<Float>(c.head.x, c.head.z)
+        var best: (SIMD2<Float>, Float)? = nil
+        var dd = dmin
+        while dd <= dmax + 1e-3 {
+            var a = -spread
+            while a <= spread + 1e-3 {
+                let v = SIMD2<Float>(c.fwd.x * cos(a) - c.fwd.y * sin(a), c.fwd.x * sin(a) + c.fwd.y * cos(a))
+                let p = me + v * dd
+                if reach(p) && c.free(p) {
+                    let score = abs(dd - near) + abs(abs(a) - spread * 0.5) * 0.6 + simd_distance(p, pos) * 0.15
+                    if best == nil || score < best!.1 { best = (p, score) }
+                }
+                a += 0.125
+            }
+            dd += 0.2
+        }
+        if let b = best { return b.0 }
+        // 시야 안에 갈 곳이 없음: 갈 수 있는 곳 중 내 시야 쪽에 가장 가까운 곳
+        var list: [(SIMD2<Float>, Float)] = []
+        for p in cells {
+            let v = p - me
+            let d = simd_length(v)
+            guard d > 0.5, d < 4.5 else { continue }
+            let off = acos(max(-1, min(1, simd_dot(v / d, c.fwd))))
+            list.append((p, off * 1.6 + abs(d - near) * 0.5))
+        }
+        list.sort { $0.1 < $1.1 }
+        for (p, _) in list.prefix(60) where c.free(p) { return p }
+        return nil
     }
 }

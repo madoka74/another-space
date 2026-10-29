@@ -17,13 +17,25 @@ enum Sfx {
         return r
     }
 
+    private static var hasCache: [String: Bool] = [:]
+    /// 앱 안에 그 소리가 있는지 (실제 녹음을 받지 못한 판에선 없는 이름이 있을 수 있음)
+    static func has(_ name: String) -> Bool {
+        if let h = hasCache[name] { return h }
+        let h = Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "sfx") != nil
+        hasCache[name] = h
+        return h
+    }
+    /// 이름들 중 앱 안에 있는 것 하나 (없으면 nil)
+    static func pick(_ names: [String]) -> String? { names.filter { has($0) }.randomElement() }
+
     /// 미리 읽어 둠 (처음 울릴 때 늦지 않게)
     static func preload() { for n in ["key_appear", "key_turn", "door_open", "scan", "fire_out", "cat_trill", "cat_chirp", "cat_meow1", "cat_meow2", "cat_meow3", "cat_mrrp1", "cat_mrrp2", "cat_mrrp3", "bell1", "bell2", "bell3", "star_chime", "fire_pop1", "dog_bark1", "dog_yip1", "dog_yip2", "dog_tag1", "dog_tag2", "dog_sniff"] { _ = res(n) } }
 
     /// 그 자리에서 나는 소리 (parent 기준 위치)
     /// life: 소리 길이보다 넉넉히 (그 뒤 소리 자리를 치움), rolloff: 거리에 따라 줄어드는 정도 (작을수록 멀리까지 들림)
+    /// speed: 재생 빠르기(1 = 그대로, 높을수록 높고 짧은 소리) — 같은 녹음도 조금씩 다르게 들리게
     @discardableResult
-    static func play(_ name: String, in parent: Entity, at p: SIMD3<Float>, gain: Double, life: Double = 5, rolloff: Double? = nil) -> Entity? {
+    static func play(_ name: String, in parent: Entity, at p: SIMD3<Float>, gain: Double, life: Double = 5, rolloff: Double? = nil, speed: Double = 1) -> Entity? {
         guard let r = res(name) else { return nil }
         let e = Entity()
         var sa = SpatialAudioComponent()
@@ -32,7 +44,8 @@ enum Sfx {
         e.components.set(sa)
         e.position = p
         parent.addChild(e)
-        e.playAudio(r)
+        let c = e.playAudio(r)
+        if speed != 1 { c.speed = min(4, max(0.25, speed)) }
         Task { try? await Task.sleep(for: .seconds(life)); e.removeFromParent() }
         return e
     }

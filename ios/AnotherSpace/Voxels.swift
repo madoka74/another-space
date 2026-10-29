@@ -257,6 +257,28 @@ enum VoxStore {
     }
 }
 
+/// 손으로 고친 가구 (탐험 중 '가구 맞추기'): 스캔·그물로 알아낸 기둥보다 늘 먼저 따름.
+/// - erases: 비운 곳 (그 안의 알아낸 기둥은 없는 것으로) / adds: 넣은 상자 (그 안은 그 높이의 가구). 평면 좌표(m), 벽과 나란함
+/// furni.json 에 저장 (다시 스캔하면 지움)
+struct FurnBox: Codable, Equatable { var cx: Float; var cz: Float; var w: Float; var d: Float; var h: Float }
+struct FurnRect: Codable, Equatable { var x0: Float; var z0: Float; var x1: Float; var z1: Float }
+struct FurnEdits: Codable, Equatable {
+    var adds: [FurnBox] = []
+    var erases: [FurnRect] = []
+}
+
+enum FurnStore {
+    static func url(_ id: String) -> URL { SpaceStore.folder(id).appendingPathComponent("furni.json") }
+    static func load(_ id: String) -> FurnEdits {
+        guard let d = try? Data(contentsOf: url(id)), let e = try? JSONDecoder().decode(FurnEdits.self, from: d) else { return FurnEdits() }
+        return e
+    }
+    static func save(_ id: String, _ e: FurnEdits) {
+        if let d = try? JSONEncoder().encode(e) { try? d.write(to: url(id), options: .atomic) }
+    }
+    static func clear(_ id: String) { try? FileManager.default.removeItem(at: url(id)) }
+}
+
 /// 가구 = 바닥에서 솟은 10cm 기둥들 (마인크래프트처럼 반듯한 덩어리).
 /// - 기둥마다 점수: 그물에 가구로 보이면 +2, 바닥이 보이면(그 위가 비었음) -1. 충분히 확인되어야 보이고,
 ///   한 번 보이면 이번 탐험이 끝날 때까지 그대로(높이도) — 생겼다 사라졌다 하지 않음. 잘못 생긴 기둥은 다음 탐험 저장에서 빠짐
@@ -287,6 +309,9 @@ final class VoxelWorld {
     private var ents: [Int64: ModelEntity] = [:]
     private var lineEnts: [Int64: ModelEntity] = [:]
     private var colRoom: [Int64: Int] = [:]
+    /// 손으로 고친 칸 → 높이(10cm 단위, 0 = 비움). 알아낸 기둥보다 먼저 (shownH 한 곳에서 따름)
+    private var editH: [Int64: UInt8] = [:]
+    private var editByChunk: [Int64: Set<Int64>] = [:]
     private(set) var changed = false
     var material: (Int, Int) -> RealityKit.Material = { _, _ in UnlitMaterial(color: .gray) }
     var sun: (Int) -> SIMD3<Float> = { _ in SIMD3<Float>(0, 1, 0) }
@@ -300,6 +325,96 @@ final class VoxelWorld {
     private static let mask: Int64 = (1 << 21) - 1
     private static func uv(_ k: Int64) -> (Int, Int) { (Int(((k >> 21) & mask) - off), Int((k & mask) - off)) }
     private static func chunkOfCol(_ k: Int64) -> Int64 { let (u, v) = uv(k); return Vox.chunkKey(Vox.fdiv(u), Vox.fdiv(v)) }
+
+    // MARK: 손으로 고친 가구
+    /// 칸 가운데가 사각형 안인 10cm 칸들
+    private static func cells(_ x0: Float, _ z0: Float, _ x1: Float, _ z1: Float) -> [Int64] {
+        let u0 = Int((min(x0, x1) / Vox.size - 0.5).rounded(.up)), u1 = Int((max(x0, x1) / Vox.size - 0.5).rounded(.down))
+        let v0 = Int((min(z0, z1) / Vox.size - 0.5).rounded(.up)), v1 = Int((max(z0, z1) / Vox.size - 0.5).rounded(.down))
+        guard u0 <= u1, v0 <= v1, (u1 - u0) * (v1 - v0) < 200_000 else { return [] }
+        var out: [Int64] = []
+        for u in u0...u1 { for v in v0...v1 { out.append(Vox.chunkKey(u, v)) } }
+        return out
+    }
+
+    /// 손으로 고친 가구를 적용 (바뀐 칸만 다시 그림)
+    func setEdits(_ e: FurnEdits) {
+        var nh: [Int64: UInt8] = [:]
+        for r in e.erases { for k in Self.cells(r.x0, r.z0, r.x1, r.z1) { nh[k] = 0 } }
+        for b in e.adds {
+            let h = UInt8(min(21, max(1, Int((b.h / Vox.size).rounded()))))
+            for k in Self.cells(b.cx - b.w / 2, b.cz - b.d / 2, b.cx + b.w / 2, b.cz + b.d / 2) { nh[k] = h }
+        }
+        var diff = Set<Int64>()
+        for (k, h) in nh where editH[k] != h { diff.insert(k) }
+        for k in editH.keys where nh[k] == nil { diff.insert(k) }
+        guard !diff.isEmpty else { return }
+        editH = nh
+        editByChunk = [:]
+        for k in nh.keys where nh[k] ?? 0 > 0 { editByChunk[Self.chunkOfCol(k), default: []].insert(k) }
+        colRoom.removeAll()                                 // 덩어리가 바뀜 → 칠할 방을 다시 정함
+        for k in diff { markDirty(k) }
+    }
+
+    /// 그 자리(평면 좌표)를 포함한 가구 한 덩어리 (붙은 보이는 기둥들): 둘레 사각형(평면 좌표 m)과 가장 많은 높이(m)
+    func pieceAt(_ p: SIMD2<Float>) -> (SIMD2<Float>, SIMD2<Float>, Float)? {
+        /// 알아낸 기둥만 (손으로 고친 칸 — 넣은 상자·비운 곳 — 은 빼고: 옆에 놓은 상자와 한 덩어리로 묶이지 않게)
+        func pieceH(_ u: Int, _ v: Int) -> Int { editH[Vox.chunkKey(u, v)] != nil ? 0 : shownH(u, v) }
+        let u = Int((p.x / Vox.size).rounded(.down)), v = Int((p.y / Vox.size).rounded(.down))
+        var start: (Int, Int)? = pieceH(u, v) > 0 ? (u, v) : nil
+        if start == nil {
+            outer: for du in -1...1 { for dv in -1...1 where pieceH(u + du, v + dv) > 0 { start = (u + du, v + dv); break outer } }
+        }
+        guard let s0 = start else { return nil }
+        var seen: Set<Int64> = [Vox.chunkKey(s0.0, s0.1)]
+        var q = [s0], qi = 0
+        var lo = SIMD2<Int>(s0.0, s0.1), hi = lo
+        var hist: [Int: Int] = [:]
+        while qi < q.count && q.count < 6000 {
+            let (cu, cv) = q[qi]; qi += 1
+            hist[pieceH(cu, cv), default: 0] += 1
+            lo = SIMD2<Int>(min(lo.x, cu), min(lo.y, cv)); hi = SIMD2<Int>(max(hi.x, cu), max(hi.y, cv))
+            for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
+                let k = Vox.chunkKey(cu + du, cv + dv)
+                guard !seen.contains(k), pieceH(cu + du, cv + dv) > 0 else { continue }
+                seen.insert(k)
+                q.append((cu + du, cv + dv))
+            } }
+        }
+        let h = hist.max { $0.value != $1.value ? $0.value < $1.value : $0.key < $1.key }?.key ?? 4
+        return (SIMD2<Float>(Float(lo.x), Float(lo.y)) * Vox.size, SIMD2<Float>(Float(hi.x + 1), Float(hi.y + 1)) * Vox.size, Float(h) * Vox.size)
+    }
+
+    /// 가구 맞추기 화면용: 알아낸 가구 기둥(손으로 넣은 상자 칸은 빼고)의 윗면·옆면 그물 (저장 좌표)
+    func previewMesh() -> MeshResource? {
+        var g = Geo()
+        let floorY = L.floorY
+        func w(_ u: Float, _ v: Float, _ h: Float) -> SIMD3<Float> {
+            let f = L.flat(SIMD2<Float>(u * Vox.size, v * Vox.size))
+            return SIMD3<Float>(f.x, floorY + h * Vox.size, f.y)
+        }
+        for k in cols.keys where (editH[k] ?? 0) == 0 {
+            let (u, v) = Self.uv(k)
+            let h = shownH(u, v)
+            guard h > 0 else { continue }
+            let fu = Float(u), fv = Float(v), fh = Float(h)
+            g.quad(w(fu, fv, fh), w(fu + 1, fv, fh), w(fu + 1, fv + 1, fh), w(fu, fv + 1, fh), .zero, .zero, .zero, .zero)
+            for (nu, nv, d) in [(u + 1, v, 0), (u - 1, v, 1), (u, v + 1, 2), (u, v - 1, 3)] {
+                let nh = Float(shownH(nu, nv))
+                guard nh < fh else { continue }
+                let p: [SIMD3<Float>]
+                switch d {
+                case 0: p = [w(fu + 1, fv, nh), w(fu + 1, fv + 1, nh), w(fu + 1, fv + 1, fh), w(fu + 1, fv, fh)]
+                case 1: p = [w(fu, fv + 1, nh), w(fu, fv, nh), w(fu, fv, fh), w(fu, fv + 1, fh)]
+                case 2: p = [w(fu + 1, fv + 1, nh), w(fu, fv + 1, nh), w(fu, fv + 1, fh), w(fu + 1, fv + 1, fh)]
+                default: p = [w(fu, fv, nh), w(fu + 1, fv, nh), w(fu + 1, fv, fh), w(fu, fv, fh)]
+                }
+                g.quad(p[0], p[1], p[2], p[3], .zero, .zero, .zero, .zero)
+                g.quad(p[3], p[2], p[1], p[0], .zero, .zero, .zero, .zero)       // 양면 (어느 쪽에서 봐도)
+            }
+        }
+        return g.mesh("furnPreview")
+    }
 
     // MARK: 기둥 넣고 빼기
     /// 지난 탐험에서 확인한 기둥(또는 스캔 그물에서 만든 기둥) — 처음부터 보임
@@ -563,6 +678,7 @@ final class VoxelWorld {
 
     func restyle() {
         dirty.formUnion(byChunk.keys)
+        dirty.formUnion(editByChunk.keys)
         dirty.formUnion(ents.keys)
     }
 
@@ -588,9 +704,9 @@ final class VoxelWorld {
     /// 높이가 minH(m) 넘는 보이는 기둥의 10cm 칸 (그림·벽 꾸밈 자리 고르기)
     func blockedCells(minH: Float) -> Set<Int64> {
         var out = Set<Int64>()
-        for (k, c) in cols where c.shown && Float(c.h) * Vox.size >= minH {
+        for k in Set(cols.keys).union(editH.keys) {
             let (u, v) = Self.uv(k)
-            out.insert(Vox.planeCell(u, v))
+            if Float(shownH(u, v)) * Vox.size >= minH { out.insert(Vox.planeCell(u, v)) }
         }
         return out
     }
@@ -620,11 +736,16 @@ final class VoxelWorld {
 
     // MARK: 그물 만들기
     /// 그려지는 높이 (외톨이 기둥은 0)
+    /// 그려지는 높이 — 가구 높이를 정하는 한 곳: 손으로 고친 칸(가구 맞추기)이면 그 높이(비운 곳은 0),
+    /// 아니면 알아낸 기둥 (외톨이 기둥은 0)
     private func shownH(_ u: Int, _ v: Int) -> Int {
-        guard let c = cols[Vox.chunkKey(u, v)], c.shown else { return 0 }
+        let k = Vox.chunkKey(u, v)
+        if let e = editH[k] { return Int(e) }
+        guard let c = cols[k], c.shown else { return 0 }
         var n = 0
         for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
-            if let o = cols[Vox.chunkKey(u + du, v + dv)], o.shown { n += 1; if n >= 3 { return Int(c.h) } }
+            let nk = Vox.chunkKey(u + du, v + dv)
+            if let o = cols[nk], o.shown, editH[nk] != 0 { n += 1; if n >= 3 { return Int(c.h) } }
         } }
         return 0
     }
@@ -675,8 +796,8 @@ final class VoxelWorld {
 
     private func rebuild(_ c: Int64) {
         dirty.remove(c)
-        let keys = byChunk[c] ?? []
-        if keys.isEmpty { byChunk[c] = nil }
+        let keys = (byChunk[c] ?? []).union(editByChunk[c] ?? [])
+        if (byChunk[c] ?? []).isEmpty { byChunk[c] = nil }
         let floorY = L.floorY
         func world(_ u: Float, _ v: Float, _ h: Float) -> SIMD3<Float> {
             let f = L.flat(SIMD2<Float>(u * Vox.size, v * Vox.size))

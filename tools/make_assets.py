@@ -2570,7 +2570,12 @@ def line_folder(folder, sky=False):
 # (이름, 번호, 방식, 고를 소리 순서, 최대 길이 초, 크기 dB)
 #   event: 녹음 속 소리 덩어리(짖음 하나·야옹 하나·발걸음 하나)를 찾아 그중 하나만 / loop: 가운데를 잘라 이음매 없이 되풀이 / whole: 통째로
 REAL_SFX = (
-    [(f'cat_meow{i}', 1888 + i, 'event', 'longest', 1.6, -4) for i in range(1, 10)]
+    [(f'cat_meow{i}', 1888 + i, 'event', 'longest', 1.6, -4) for i in range(1, 15)]          # 야옹 #1~#14
+    # 아기 고양이 미야 (녹음 속 미야 하나하나를 따로) — 짧고 높아 귀여운 목소리
+    + [(f'cat_kitten{i + 1}', 390, 'event', i, 1.0, -6) for i in range(4)]
+    + [(f'cat_kitten{i + 5}', 372, 'event', i, 1.0, -6) for i in range(3)]
+    # 작은 냥 (1초 안의 짧은 냥) — 대답·인사용
+    + [(f'cat_mew{i + 1}', sid, 'event', 'longest', 0.8, -6) for i, sid in enumerate([494, 1472, 1473, 1474, 1475, 1476, 1477, 1478, 1479, 1480, 1481])]
     + [('cat_mew', 494, 'event', 'longest', 1.0, -6),
        ('cat_mrrp1', 1472, 'event', 'longest', 0.9, -7), ('cat_mrrp2', 1473, 'event', 'longest', 0.9, -7), ('cat_mrrp3', 1474, 'event', 'longest', 0.9, -7),
        ('cat_chirp', 1475, 'event', 0, 0.5, -7), ('cat_chirp2', 1476, 'event', 0, 0.5, -7), ('cat_chirp3', 1477, 'event', 0, 0.5, -7),

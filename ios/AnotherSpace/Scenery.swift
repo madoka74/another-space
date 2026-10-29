@@ -229,16 +229,19 @@ final class Scenery {
                    SIMD3<Float>(-0.05 * span, 0, 0.26 * span), .zero, .zero, .zero, .zero)
         guard let body = bodyG.mesh("birdBody") else { return }
         let flock = ring(R + Float.random(in: 15...40, using: &g), Float.random(in: 0...(2 * .pi), using: &g))
+        // 새마다 도는 반지름·높이를 3m·2.5m씩 벌리고 모두 같은 방향으로 — 예전엔 반지름·높이를 아무렇게나 고르고 셋 중 하나는 거꾸로 돌아,
+        // 두 마리가 같은 거리·높이에서 마주 지나가며 겹쳤다 갈라져 한 마리가 이중으로 보이는 것 같았음. 빠르기도 낮춤(눈으로 따라가기 편하게)
+        let flockDir: Float = Bool.random(using: &g) ? 1 : -1
         for i in 0..<n {
             let f = Flyer()
             f.center = big ? center : flock
-            f.radius = big ? R + Float.random(in: 30...60, using: &g) : Float.random(in: 8...26, using: &g)
-            f.height = floorY + (big ? Float.random(in: 30...45, using: &g) : Float.random(in: 10...28, using: &g))
-            f.speed = big ? Float.random(in: 5...7, using: &g) : Float.random(in: 6...10, using: &g)
+            f.radius = big ? R + 30 + Float(i) * 12 + Float.random(in: 0...6, using: &g) : 8 + Float(i) * 3 + Float.random(in: 0...1.5, using: &g)
+            f.height = floorY + (big ? 30 + Float(i) * 6 + Float.random(in: 0...3, using: &g) : 11 + Float(i) * 2.5 + Float.random(in: 0...1, using: &g))
+            f.speed = big ? Float.random(in: 3.5...5, using: &g) : Float.random(in: 4...6.5, using: &g)
             f.flap = big ? 2.5 : Float.random(in: 8...12, using: &g)
             f.ang = Float(i) / Float(n) * 2 * .pi + Float.random(in: 0...0.6, using: &g)
             f.phase = Float.random(in: 0...6, using: &g)
-            f.dir = big || i % 3 != 0 ? 1 : -1
+            f.dir = flockDir
             // 처음 자리 (이동은 tick 이 이어서 맡김)
             let p0 = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
             let v0 = SIMD3<Float>(-sin(f.ang), 0, cos(f.ang)) * f.dir
