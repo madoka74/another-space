@@ -160,7 +160,7 @@ private struct FurnPanel: View {
             }
             if let b = s.furnSelBox {
                 Text("끌어서 옮기기 · 두 손으로 집어 벌리거나 좁혀 크기 바꾸기").font(.callout).foregroundStyle(.secondary)
-                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                SwiftUI.Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                     row("폭", b.w, { s.resizeFurn(dw: $0) })
                     row("깊이", b.d, { s.resizeFurn(dd: $0) })
                     row("높이", b.h, { s.resizeFurn(dh: $0) })
@@ -185,7 +185,7 @@ private struct FurnPanel: View {
 
     @ViewBuilder
     private func row(_ name: String, _ v: Float, _ change: @escaping (Float) -> Void) -> some View {
-        GridRow {
+        SwiftUI.GridRow {
             Text(name).frame(width: 44, alignment: .leading)
             Button { change(-0.1) } label: { Image(systemName: "minus") }.buttonBorderShape(.circle)
             Text("\(Int((v * 100).rounded()))cm").monospacedDigit().frame(width: 70)
