@@ -625,7 +625,8 @@ final class ExploreSession {
         for id in on { if let lead = groups[id]?.first { skyOn.insert(lead) } }      // 하늘 세계 쪽 눈·비는 그 세계를 만든 대표 방에 있음
         for (id, w) in worlds {
             // 방 안 눈·비·바람·반딧불은 지금 방만 (같은 테마 방이 모두 켜지면 방 수만큼 입자가 늘어 크게 느려졌음)
-            w.setActive(sky: skyOn.contains(id), room: id == current)
+            // 하늘 쪽 눈·비는 지금 방이 보는 세계(무리 대표 방)만 다 내리고, 이웃 세계는 1/4 (기준서 4·7)
+            w.setActive(sky: skyOn.contains(id), room: id == current, full: id == (groups[current]?.first ?? current))
             w.setPortalTier(cur.contains(id) ? 2 : (on.contains(id) ? 1 : 0))      // 포털 면은 지금 방 → 이웃 방 → 먼 방 순으로 나중에 그림
         }
     }
