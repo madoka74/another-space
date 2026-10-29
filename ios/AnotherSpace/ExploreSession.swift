@@ -1400,6 +1400,8 @@ final class ExploreSession {
         wld.jelly?.head = f.toSaved(head)
         if wld.jelly?.furnitureH == nil, let v = vox { wld.jelly?.furnitureH = { p in v.heightAt(L.plane(p.x, p.y)) } }
         wld.creek?.tick(dt, hands: handPts, feet: f.toSaved(head - fwd * 0.09 - headUp * 0.07))      // 몸(목 뒤) 자리 — 고개만 돌려도 걸은 걸로 치지 않게
+        // 같은 세계 무리의 다른 방 개울도 물이 흐르게 (벽 너머로 그 방 물길·나가는 물길이 보임 — 지금 방 것만 흘러 나머지는 그림처럼 멈춰 있었음)
+        for id in currentGroup where id != rm.id { worlds[id]?.creek?.flowTick(dt) }
         // 카페: 천장 스피커에서 오르골, 탁자 위 차림
         if rm.place == "cafe" && fade > 0.5 {
             music.set(true, at: wld.speakerSpot ?? wld.center + SIMD3<Float>(0, rm.ceil - 0.35, 0))      // 천장 들보에 매단 스피커에서

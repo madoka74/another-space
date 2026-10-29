@@ -854,6 +854,17 @@ final class ValleyCreek {
 
     // MARK: 매 프레임
     /// hands: 손 자리, feet: 머리 바로 아래 바닥 자리 (저장 좌표)
+    /// 물 무늬 흐름만 (같은 세계 무리의 다른 방 개울 — 벽 너머로 보이는 그 방 물길·나가는 물길도 흐르게)
+    func flowTick(_ dt: Float) {
+        for i in flows.indices {
+            var f = flows[i]
+            f.3 = (f.3 + f.2 * dt).truncatingRemainder(dividingBy: 1)
+            f.1.textureCoordinateTransform.offset = SIMD2<Float>(0, f.3)
+            f.0.model?.materials = [f.1]
+            flows[i] = f
+        }
+    }
+
     func tick(_ dt: Float, hands: [SIMD3<Float>], feet: SIMD3<Float>? = nil) {
         t += dt
         for i in flows.indices {
