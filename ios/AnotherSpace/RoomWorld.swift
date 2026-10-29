@@ -114,7 +114,8 @@ final class RoomWorld {
     let room: RoomRec
     let style: WorldStyle
     let world: Entity               // 포털 너머 세계 (같은 세계 무리면 대표 방의 것을 함께 씀)
-    let local = Entity()            // 방 안 (저장 좌표)
+    let local = Entity()            // 방 안 (저장 좌표). 지금 방·열린 문으로 보이는 방만 켬 (ExploreSession.updateRoomVisibility)
+    let doorsRoot = Entity()        // 실제 문짝 (저장 좌표) — 문 양쪽 방 어디서든 보여야 해서 local 과 따로, 늘 켬
     /// 같은 세계 무리(문으로 이어진 같은 테마 방들)의 대표 방 세계. nil이면 이 방이 대표(세계를 직접 만듦).
     /// 무리는 하늘·땅·풍경·날씨 하늘 쪽을 대표 방이 무리 전체 둘레에 하나만 만들고, 나머지 방은 그 세계를 포털 너머로 함께 봄 —
     /// 예전엔 방마다 따로 만들어 같은 테마 옆방끼리 창밖 풍경·요트·해파리 자리가 달라 문 너머로 겹치거나 엉뚱한 곳(내 쪽 방 자리)에 크게 보였음
@@ -361,10 +362,7 @@ final class RoomWorld {
         }
         // 천장 = 하늘 세계로 열린 창 (천장보다 2cm 아래)
         if let m = Self.flatMesh(rects, L, y: ceilY - 0.02, tile: 1) {
-            let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
-            p.components.set(PortalComponent(target: world))
-            addPortal(p)
-            local.addChild(p)
+            portalEntity(m, clipAt: SIMD3<Float>(roomCenter.x, ceilY - 0.02, roomCenter.z), normal: SIMD3<Float>(0, -1, 0))
         }
         if style.open {
             openWalls(segs, L, floorY: floorY, ceilY: ceilY)
@@ -451,11 +449,46 @@ final class RoomWorld {
         if let e = g.entity("outline", Ink.line) { local.addChild(e) }
     }
 
+    // MARK: 포털 면
+    /// 하늘 세계로 열린 포털 면(벽·창·천장·문 자리 판)은 '그 면이 향한 방 쪽'에 놓인 세계 것을 잘라 냄 (PortalComponent.clippingMode .plane).
+    /// 예전엔 자르지 않아, 포털 앞(내 쪽)에 놓인 세계 것까지 포털을 통해 그려졌음 — 열린 문 너머로 옆방 벽(포털)을 보면
+    /// 그 세계의 울타리·배·말뚝 등 내 쪽(문간·지금 방 자리)에 있는 것이 문간 가득 일그러져 보였고, 그 방에 들어가야 제대로 보였음.
+    /// 자를 평면이 하나여야 하므로 같은 평면(같은 방향·같은 줄)의 면끼리만 한 엔티티로 묶음
+    private struct PortalPlanes {
+        var sets: [String: (Geo, SIMD3<Float>, SIMD3<Float>)] = [:]
+        mutating func face(_ a: SIMD3<Float>, _ b: SIMD3<Float>, toward n: SIMD3<Float>, y0: Float, y1: Float) {
+            let nn = simd_normalize(SIMD3<Float>(n.x, 0, n.z))
+            let d = simd_dot(nn, a)
+            let key = "\(Int((nn.x * 1000).rounded()))_\(Int((nn.z * 1000).rounded()))_\(Int((d * 200).rounded()))"
+            var e = sets[key] ?? (Geo(), a, nn)
+            e.0.face(a, b, toward: n, y0: y0, y1: y1, u0: 0, u1: 1)
+            sets[key] = e
+        }
+    }
+
+    /// 포털 면 엔티티 하나: 평면(point·normal, 엔티티 좌표 = 메시 좌표)의 normal 쪽(방 쪽) 세계 것은 그리지 않음
+    @discardableResult
+    private func portalEntity(_ m: MeshResource, clipAt point: SIMD3<Float>, normal: SIMD3<Float>) -> ModelEntity {
+        let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
+        var pc = PortalComponent(target: world)
+        pc.clippingMode = .plane(PortalComponent.Plane(position: point, normal: normal))
+        e.components.set(pc)
+        addPortal(e)
+        local.addChild(e)
+        return e
+    }
+
+    private func addPortalPlanes(_ pp: PortalPlanes, name: String) {
+        for (k, v) in pp.sets {
+            if let m = v.0.mesh(name + k) { portalEntity(m, clipAt: v.1, normal: v.2) }
+        }
+    }
+
     // MARK: 벽
     /// 바깥 장소: 벽 자리 전체가 하늘 세계로 열린 창. 그 너머 22cm부터 테마마다 입체 울타리(통나무 울타리·덤불·돌무더기·말뚝 밧줄·돌담·옥상 난간)를
     /// 둘러 세워 '막힌 곳'으로 보이게 (안전). 예전엔 얇은 그림 판 한 장이라 옆에서 보면 종이처럼 보였음 — 너머는 실제 벽이라 적당한 두께를 둠
     private func openWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
-        var portal = Geo()
+        var portal = PortalPlanes()
         var spans: [BarrierSpan] = []
         // 문 자리 양끝 점: 여기서 끝나는 울타리는 늘리지 않음 (문 자리 너머로 덤불이 삐져나오지 않게)
         var doorEnds: [SIMD2<Float>] = []
@@ -470,7 +503,7 @@ final class RoomWorld {
             let len = simd_distance(a2, b2)
             guard len > 0.01 else { continue }
             let n = L.flat(s.n) - L.flat(SIMD2<Float>(0, 0))           // 방 안쪽
-            portal.face(a, b, toward: SIMD3<Float>(n.x, 0, n.y), y0: 0, y1: ceilY - floorY, u0: 0, u1: 1)
+            portal.face(a, b, toward: SIMD3<Float>(n.x, 0, n.y), y0: 0, y1: ceilY - floorY)
             // 울타리는 '아무도 걸을 수 없는 곳'에만. 포털 너머 세계의 물건은 포털 앞(방 안)에 있어도 포털을 통해 그려지므로,
             // 걸을 수 있는 곳(이 방·다른 방·문 자리)에 놓이면 복도 한가운데 덤불처럼 보임.
             // 방과 방 사이 벽(벽 너머 45cm 안에 옆방이 있는 바깥벽 포함): 뒤가 옆방이라 3cm 뒤에 얇게(8cm) 바짝, 늘리지 않음.
@@ -521,12 +554,7 @@ final class RoomWorld {
                 if t1 >= len + ext - 1e-4 { break }
             }
         }
-        if let m = portal.mesh("walls") {
-            let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
-            p.components.set(PortalComponent(target: world))
-            addPortal(p)
-            local.addChild(p)
-        }
+        addPortalPlanes(portal, name: "walls")
         addBarriers(spans)
     }
 
@@ -702,7 +730,7 @@ final class RoomWorld {
     private func solidWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         let sun = Worlds.sunDir(room.time)
         var parts = [Geo(), Geo(), Geo()]
-        var win = Geo(), frame = Geo()
+        var win = PortalPlanes(), frame = Geo()
         let tile = style.wallTile
         let top = ceilY - floorY
         for s in segs {
@@ -720,7 +748,7 @@ final class RoomWorld {
                 let n3 = SIMD3<Float>(nw.x, 0, nw.y)
                 parts[k].face(a, b, toward: n3, y0: 0, y1: w0, u0: u0, u1: u1, v0: 0, v1: w0 / tile)
                 parts[k].face(a, b, toward: n3, y0: w1, y1: top, u0: u0, u1: u1, v0: w1 / tile, v1: top / tile)
-                win.face(a, b, toward: n3, y0: w0, y1: w1, u0: 0, u1: 1)
+                win.face(a, b, toward: n3, y0: w0, y1: w1)
                 let inn = SIMD3<Float>(nw.x, 0, nw.y) * 0.02
                 let d3 = simd_normalize(b - a)
                 // 창틀: 위·아래 가로대 + 양옆 세로대, 카페는 1.1m 안팎마다 세로 살(통창), 집은 가운데 십자 살 + 창턱
@@ -754,11 +782,8 @@ final class RoomWorld {
                 tinted.append((e, style.wall, tk, false))
             }
         }
-        if let m = win.mesh("window") {
-            let p = ModelEntity(mesh: m, materials: [PortalMaterial()])
-            p.components.set(PortalComponent(target: world))
-            addPortal(p)
-            local.addChild(p)
+        if !win.sets.isEmpty {
+            addPortalPlanes(win, name: "window")
             let frameCol: SIMD3<Float> = room.place == "cafe" ? SIMD3<Float>(0.09, 0.09, 0.1) : SIMD3<Float>(0.36, 0.26, 0.17)     // 카페: 검은 철제 창틀, 집: 나무 창틀
             if let f = frame.entity("frame", ink(frameCol * Worlds.safe(tint))) {
                 local.addChild(f)
@@ -870,7 +895,9 @@ final class RoomWorld {
                     panel.face(pa, pb, toward: front, y0: 0, y1: low, u0: 0, u1: 1)
                     if let m = panel.mesh("door\(i)") {
                         let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
-                        e.components.set(PortalComponent(target: world))
+                        var pc = PortalComponent(target: world)
+                        pc.clippingMode = .plane(.positiveZ)          // 문 자리 판 앞(이 방 쪽)의 세계 것은 잘라 냄 (포털 면 참고)
+                        e.components.set(pc)
                         place(e, 0)
                         addPortal(e)
                         local.addChild(e)
@@ -881,7 +908,9 @@ final class RoomWorld {
                         hd.face(pa, pb, toward: front, y0: dh, y1: top, u0: 0, u1: 1)
                         if let m = hd.mesh("header\(i)") {
                             let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
-                            e.components.set(PortalComponent(target: world))
+                            var pc = PortalComponent(target: world)
+                            pc.clippingMode = .plane(.positiveZ)
+                            e.components.set(pc)
                             place(e, 0)
                             addPortal(e)
                             local.addChild(e)
@@ -1020,7 +1049,7 @@ final class RoomWorld {
                     real.addChild(lever)
                 }
                 real.isEnabled = false
-                local.addChild(real)
+                doorsRoot.addChild(real)                 // 옆방에 있을 때도 보여야 함 → 방 안(local)이 아니라 늘 켜진 묶음에
                 doorLeaf[i] = real
             }
         }

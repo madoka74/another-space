@@ -52,6 +52,7 @@ final class HomeDog {
     private var frameT: Float = 0
     private var blinkT: Float = 3
     private var hidden: Float = 0
+    private var playUntil: Float = 0                        // 이때까지는 내가 막대로 놀아 주는 중 (톡·집기·던지기) — 그동안은 막대를 쫓느라 시야 밖에 있어도 됨
     private var gazeT: Float = 0
     private var voiceCool: Float = 3
     private var talkT: Float = 9
@@ -282,6 +283,7 @@ final class HomeDog {
     /// 막대를 톡 침: 설이가 물어서 내 앞에 가져다 놓음
     func tapStick() {
         guard stick != nil, !stickHeld, stickAir == nil, !carrying else { return }
+        playUntil = t + 12
         yip(-3)
         emote("exclaim", 1)
         fetchRest = 0
@@ -291,6 +293,7 @@ final class HomeDog {
     /// 막대를 손으로 집음: 막대가 손을 따라오고, 설이는 앞에 와서 놀자 자세로 들썩이며 기다림
     func holdStick(at p: SIMD3<Float>) {
         guard stick != nil else { return }
+        playUntil = t + 12
         if carrying { carrying = false }
         if !stickHeld {
             stickHeld = true
@@ -307,6 +310,7 @@ final class HomeDog {
     /// 놓음: 손의 빠르기 그대로 날아가 떨어짐 → 달려가 물어 옴
     func releaseStick(vel: SIMD3<Float>) {
         guard stickHeld else { return }
+        playUntil = t + 12
         stickHeld = false
         var v = vel
         let sp = simd_length(v)
@@ -375,7 +379,9 @@ final class HomeDog {
         }
         lastHands = c.hands
 
-        let busy = act == .leave || act == .enter || act == .jump || act == .fetch || act == .bring || act == .wait
+        // 혼자 시작한 막대 가지러 가기(fetch)는 시야 밖으로 벗어나면 그만두고 내가 보는 쪽으로 옴 (예전엔 막대 곁에만 머물렀음).
+        // 내가 놀아 줄 때(톡·집기·던지기 12초 안)와 물고 오는 중(bring — 내 앞으로 옴)·기다리는 중(wait)은 그대로
+        let busy = act == .leave || act == .enter || act == .jump || (act == .fetch && t < playUntil) || act == .bring || act == .wait
             || act == .jumpUp || act == .jumpDown
         if !busy {
             if let h = handNear {
@@ -967,6 +973,8 @@ final class HomeDog {
         // 막대를 물고 와서 발치에 놓음 (놀자는 뜻)
         opts.append((stick == nil ? 2.6 : 3.2, { [unowned self] in          // 막대 놀이는 자주
             if !carrying && stick != nil && t < fetchRest { return false }     // 닿지 않는 곳의 막대는 한동안 포기
+            // 혼자 하는 막대 놀이는 막대가 내 시야(앞 4.2m 안) 안에 있을 때만 — 내가 다른 쪽을 보는데 뒤쪽 막대에만 붙어 있지 않게
+            if !carrying, stick != nil, !HomeCat.inView(stickPos, c) { return false }
             if stick == nil { makeStick(near: pos) }
             start(carrying ? .bring : .fetch, 10)
             return true

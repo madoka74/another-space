@@ -514,6 +514,8 @@ final class ExploreSession {
         let w = RoomWorld(d, r, layout: L, blocked: vox?.blockedCells(minH: 0.2) ?? [], group: g, host: host)
         if w.ownsWorld { spaceRoot.addChild(w.world) }
         spaceRoot.addChild(w.local)
+        spaceRoot.addChild(w.doorsRoot)
+        w.local.isEnabled = roomShown(r.id)
         worlds[r.id] = w
         vox?.restyle()
         return w
@@ -537,6 +539,7 @@ final class ExploreSession {
         guard let old = worlds[id] else { return }
         if old.ownsWorld { old.world.removeFromParent() }
         old.local.removeFromParent()
+        old.doorsRoot.removeFromParent()
         worlds[id] = nil
     }
 
@@ -581,6 +584,37 @@ final class ExploreSession {
     /// 비·눈·반딧불은 지금 방과 이웃 방만 (문턱을 넘을 때 이미 내리고 있게)
     /// 지금 방이 속한 같은 세계 무리 (혼자면 지금 방)
     private var currentGroup: Set<Int> { Set(groups[current] ?? [current]) }
+
+    /// 방 안(local: 바닥·가구 꾸밈·들보·포털 면 등)을 그리는 방: 지금 방(무리)과, 그 방들에서 '열린 문'(뚫린 통로·열쇠로 연 문)으로
+    /// 바로 이어진 방(과 그 무리)만. 나머지 방의 방 안은 그리지 않음.
+    /// 포털 면(벽)은 그 뒤의 다른 방 물건을 가리지 못해, 예전엔 벽 너머 옆방의 들보·꾸밈이 벽을 뚫고 지금 방 풍경 위에 보였음
+    /// (옆방 테마를 바꿔야 사라짐). 닫힌 문(벽·열쇠 문·실제 문짝) 너머 방은 어차피 보이지 않으므로 끔
+    @ObservationIgnored private var openDoorSet: Set<Int> = []
+    private func roomShown(_ id: Int) -> Bool { shownRooms().contains(id) }
+    private func shownRooms() -> Set<Int> {
+        var vis = currentGroup
+        guard let L = layout else { return vis }
+        let base = vis
+        for i in openDoorSet where i < L.doors.count {
+            let ds = L.doors[i]
+            for (from, to) in [(ds.roomA, ds.roomB), (ds.roomB, ds.roomA)] where base.contains(from) && !vis.contains(to) {
+                vis.insert(to)
+                vis.formUnion(groups[to] ?? [])
+            }
+        }
+        return vis
+    }
+    private func updateRoomVisibility() {
+        let vis = shownRooms()
+        for (id, w) in worlds {
+            let on = vis.contains(id)
+            if w.local.isEnabled != on { w.local.isEnabled = on }
+        }
+        for (id, c) in cafeSets {
+            let on = vis.contains(id)
+            if c.1.root.isEnabled != on { c.1.root.isEnabled = on }
+        }
+    }
 
     private func refreshActive() {
         // 같은 세계 무리는 한 공간: 무리 전체가 '지금 방'(방 안 눈·비도 함께), 무리 방들의 이웃이 '이웃 방'
@@ -1706,6 +1740,7 @@ final class ExploreSession {
         var solid = Set<Int>()
         var leaf: (Int, Float)? = nil
         var anyLeaf = false
+        var opened = Set<Int>()
         for (i, ds) in L.doors.enumerated() {
             var same = ds.single
             if !same, let ra = d.rec.room(ds.roomA), let rb = d.rec.room(ds.roomB) { same = Self.sameTheme(ra, rb) }
@@ -1793,6 +1828,7 @@ final class ExploreSession {
             if !same && near && !inside && !real && !fresh && !doorOpen.contains(i) && prog == nil { urgent = true }
 
             let panelsOn = shape == .wall || shape == .key || (shape == .opening && (prog ?? 1) < 0.4)
+            if !panelsOn && shape != .leaf { opened.insert(i) }
             for rid in [ds.roomA, ds.roomB] {
                 for e in worlds[rid]?.doorPanels[i] ?? [] where e.isEnabled != panelsOn { e.isEnabled = panelsOn }
             }
@@ -1834,6 +1870,8 @@ final class ExploreSession {
         }
         doorUrgent = urgent
         solidDoors = solid
+        openDoorSet = opened
+        updateRoomVisibility()
         leafDoor = leaf?.0
         if !anyLeaf { peekDismissed = nil }        // 닫힌 문에서 벗어나면 더블탭으로 닫은 것도 풂
     }

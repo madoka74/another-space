@@ -32,6 +32,13 @@ final class HomeCat {
         var ceil: Float                          // 천장 높이 (바닥에서)
     }
 
+    /// 그 자리가 내 시야 안인지 (앞 53° 안, 4.2m 안 — 강아지·고양이가 '보이는 곳'을 고를 때와 같은 기준)
+    static func inView(_ p: SIMD2<Float>, _ c: Ctx) -> Bool {
+        let v = p - SIMD2<Float>(c.head.x, c.head.z)
+        let d = simd_length(v)
+        return d < 4.2 && (d < 0.3 || simd_dot(v / d, c.fwd) > 0.6)
+    }
+
     /// 날아가는 장난감이 벽·천장·가구에 부딪히는지 (가구는 그 윗면보다 낮을 때만)
     static func toyHit(_ p: SIMD3<Float>, _ c: Ctx, radius r: Float) -> Bool {
         let q = SIMD2<Float>(p.x, p.z)
@@ -201,6 +208,7 @@ final class HomeCat {
     private var frameT: Float = 0
     private var blinkT: Float = 3
     private var hidden: Float = 0                // 시야 밖에 있은 시간
+    private var playUntil: Float = 0             // 이때까지는 내가 공으로 놀아 주는 중 (집기·던지기·차기) — 그동안은 공을 쫓느라 시야 밖에 있어도 됨
     private var gazeT: Float = 0
     private var meowCool: Float = 4
     private var talkT: Float = 8                 // 다음 혼잣말
@@ -464,6 +472,7 @@ final class HomeCat {
     /// 털실 공을 톡 침: 나에게서 먼 쪽으로 굴러가고 고양이가 쫓아감
     func kickBall(from head: SIMD3<Float>) {
         guard ball != nil else { return }
+        playUntil = t + 12
         let me = SIMD2<Float>(head.x, head.z)
         var d = ballPos - me
         d = simd_length(d) > 0.01 ? simd_normalize(d) : SIMD2<Float>(0, 1)
@@ -481,6 +490,7 @@ final class HomeCat {
     /// 털실 공을 손으로 집음: 공이 손을 따라오고, 고양이는 다가와 엉덩이를 씰룩이며 노림
     func holdBall(at p: SIMD3<Float>) {
         guard ball != nil else { return }
+        playUntil = t + 12
         if !ballHeld {
             ballHeld = true
             ballAir = nil
@@ -500,6 +510,7 @@ final class HomeCat {
     /// 놓음: 손의 빠르기 그대로 날아가 떨어져 통통 튀고 굴러감 → 쫓아가 덮침
     func releaseBall(vel: SIMD3<Float>) {
         guard ballHeld else { return }
+        playUntil = t + 12
         ballHeld = false
         var v = vel
         let sp = simd_length(v)
@@ -601,7 +612,8 @@ final class HomeCat {
                     emote("heart")
                     if meowCool <= 0 { say("cat_trill", -3) }
                 }
-            } else if hidden > 1.4 && act != .chase && (act != .walk || (hidden > 2.4 && !running)) {
+            } else if hidden > 1.4 && (act != .chase || t > playUntil) && (act != .walk || (hidden > 2.4 && !running)) {
+                // (혼자 공놀이하다 시야 밖으로 벗어났으면 공은 두고 내가 보는 쪽으로 — 예전엔 공 곁에만 머물렀음)
                 // 시야 밖 → 보이는 자리로
                 if elev > 0.05 { jumpDownNear(c, prefer: me + c.fwd * 1.4) } else if let s = viewSpot(c, near: 1.5) { go(s, then: .sit, 4, run: true) }
             } else if c.userSpeed > 0.35 && act != .walk && act != .chase && elev < 0.05 {
@@ -1137,6 +1149,8 @@ final class HomeCat {
         // 털실 공 놀이: 공이 보이면 노려보다 덮침, 없으면 꺼내 옴
         opts.append((ball == nil ? 3.2 : 4.5, { [unowned self] in          // 털실 공 놀이는 자주 (공이 있으면 더 자주)
             guard makeBall(near: pos, c) else { return false }
+            // 혼자 하는 공놀이는 공이 내 시야(앞 4m 안) 안에 있을 때만 — 내가 다른 쪽을 보는데 뒤쪽 공에만 붙어 있지 않게
+            guard t < playUntil || Self.inView(SIMD2<Float>(ballPos.x, ballPos.y), c) else { return false }
             if simd_distance(ballPos, pos) > 0.9 || !pathOK(pos, ballPos, c) { hits = 0; hitsMax = Int.random(in: 2...5); start(.chase, 10); return true }
             pounceFrom = pos
             let dv = ballPos - pos
