@@ -233,6 +233,8 @@ final class HomeDog {
     private func start(_ a: Act, _ dur: Float) {
         nav.reset()
         if a == .fetch { pickT = 0 }
+        reachSide = nil
+        reachFlipped = false
         act = a
         actT = 0
         actDur = dur
@@ -619,9 +621,14 @@ final class HomeDog {
     private func mouthTouch(_ b: SIMD2<Float>, reach: Float = 0.14) -> Bool {
         simd_distance(pos + cardRight() * sideFor(b) * 0.22, b) < reach
     }
-    /// 입이 그 자리에 닿도록 몸이 설 자리
+    /// 입이 그 자리에 닿도록 몸이 설 자리: 막대의 어느 쪽에 설지는 가지러 가기 시작할 때 한 번 정함 (가는 동안 좌우가 바뀌어 목표가 오락가락하지 않게).
+    /// 그쪽이 막혔으면 한 번 반대쪽으로
+    private var reachSide: Float?
+    private var reachFlipped = false
     private func mouthSpot(_ b: SIMD2<Float>) -> SIMD2<Float> {
-        b - cardRight() * sideFor(b) * 0.22
+        let f = reachSide ?? sideFor(b)
+        reachSide = f
+        return b - cardRight() * f * 0.22
     }
 
     private func cardRight() -> SIMD2<Float> {
@@ -945,6 +952,10 @@ final class HomeDog {
                 show(loop(["dog_fhappy", "dog_fsit1"], fps: 4))
             } else if mouthTouch(target, reach: 0.2) {
                 pickT = dt                                         // 고개를 내밀어 물기 (입이 20cm 안일 때만 — 닿지 않는데 물지 않게)
+            } else if !reachFlipped {
+                reachFlipped = true                                // 이쪽이 막혔으면 막대 반대쪽으로 돌아가 봄
+                reachSide = -(reachSide ?? face)
+                nav.reset()
             } else {
                 fetchRest = t + 25
                 say("dog_whine", -6)

@@ -93,6 +93,7 @@ struct SpaceRec: Codable, Identifiable, Equatable {
     var rooms: [RoomRec]
     var shapes: [ShapeRec]?          // v0.2부터: 집을 이루는 사각형들 (없으면 예전 공간 → 스캔에서 다시 제안)
     var unified: Bool?               // v0.3.1부터: true면 모든 방이 같은 세계 (바꾸면 모든 방이 같이 바뀜)
+    var glassDoors: [Int]? = nil     // v0.5.37부터: 통창·유리문으로 표시한 문 사각형 번호 — 그물·평면에 유리가 잡히지 않아 늘 닫힌 문처럼 다룸
 
     var isUnified: Bool { unified ?? false }
 

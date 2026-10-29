@@ -312,6 +312,8 @@ final class VoxelWorld {
     /// 손으로 고친 칸 → 높이(10cm 단위, 0 = 비움). 알아낸 기둥보다 먼저 (shownH 한 곳에서 따름)
     private var editH: [Int64: UInt8] = [:]
     private var editByChunk: [Int64: Set<Int64>] = [:]
+    /// 손으로 넣은 상자 칸의 방 = 상자 가운데가 있는 방 (그 방 테마로 칠함). 옆 가구 덩어리와 섞어 정하지 않음
+    private var editRoom: [Int64: Int] = [:]
     private(set) var changed = false
     var material: (Int, Int) -> RealityKit.Material = { _, _ in UnlitMaterial(color: .gray) }
     var sun: (Int) -> SIMD3<Float> = { _ in SIMD3<Float>(0, 1, 0) }
@@ -341,22 +343,29 @@ final class VoxelWorld {
     func setEdits(_ e: FurnEdits) {
         var nh: [Int64: UInt8] = [:]
         for r in e.erases { for k in Self.cells(r.x0, r.z0, r.x1, r.z1) { nh[k] = 0 } }
+        var nr: [Int64: Int] = [:]
         for b in e.adds {
             let h = UInt8(min(21, max(1, Int((b.h / Vox.size).rounded()))))
-            for k in Self.cells(b.cx - b.w / 2, b.cz - b.d / 2, b.cx + b.w / 2, b.cz + b.d / 2) { nh[k] = h }
+            let c = L.flat(SIMD2<Float>(b.cx, b.cz))
+            var room = L.at(x: c.x, z: c.y).room
+            if room == 0 { room = L.roomNear(x: c.x, z: c.y, radius: 0.8) }
+            if room == 0 { room = fallbackRoom }
+            for k in Self.cells(b.cx - b.w / 2, b.cz - b.d / 2, b.cx + b.w / 2, b.cz + b.d / 2) { nh[k] = h; nr[k] = room }
         }
         var diff = Set<Int64>()
         for (k, h) in nh where editH[k] != h { diff.insert(k) }
         for k in editH.keys where nh[k] == nil { diff.insert(k) }
+        for (k, r) in nr where editRoom[k] != r { diff.insert(k) }
         guard !diff.isEmpty else { return }
         editH = nh
+        editRoom = nr
         editByChunk = [:]
         for k in nh.keys where nh[k] ?? 0 > 0 { editByChunk[Self.chunkOfCol(k), default: []].insert(k) }
         colRoom.removeAll()                                 // 덩어리가 바뀜 → 칠할 방을 다시 정함
         for k in diff { markDirty(k) }
     }
 
-    /// 그 자리(평면 좌표)를 포함한 가구 한 덩어리 (붙은 보이는 기둥들): 둘레 사각형(평면 좌표 m)과 가장 많은 높이(m)
+    /// 그 자리(평면 좌표)의 평평한 가구 면 (붙은 보이는 기둥 중 높이 차 10cm 안, 1.2m 안): 둘레 사각형(평면 좌표 m)과 가장 많은 높이(m)
     func pieceAt(_ p: SIMD2<Float>) -> (SIMD2<Float>, SIMD2<Float>, Float)? {
         /// 알아낸 기둥만 (손으로 고친 칸 — 넣은 상자·비운 곳 — 은 빼고: 옆에 놓은 상자와 한 덩어리로 묶이지 않게)
         func pieceH(_ u: Int, _ v: Int) -> Int { editH[Vox.chunkKey(u, v)] != nil ? 0 : shownH(u, v) }
@@ -366,6 +375,7 @@ final class VoxelWorld {
             outer: for du in -1...1 { for dv in -1...1 where pieceH(u + du, v + dv) > 0 { start = (u + du, v + dv); break outer } }
         }
         guard let s0 = start else { return nil }
+        let h0 = pieceH(s0.0, s0.1)
         var seen: Set<Int64> = [Vox.chunkKey(s0.0, s0.1)]
         var q = [s0], qi = 0
         var lo = SIMD2<Int>(s0.0, s0.1), hi = lo
@@ -376,7 +386,9 @@ final class VoxelWorld {
             lo = SIMD2<Int>(min(lo.x, cu), min(lo.y, cv)); hi = SIMD2<Int>(max(hi.x, cu), max(hi.y, cv))
             for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
                 let k = Vox.chunkKey(cu + du, cv + dv)
-                guard !seen.contains(k), pieceH(cu + du, cv + dv) > 0 else { continue }
+                // 탭한 곳과 같은 평평한 면(높이 차 10cm 안)만, 탭한 곳에서 1.2m 안까지 — 이어진 가구 전체가 한 상자가 되지 않게
+                let nh = pieceH(cu + du, cv + dv)
+                guard !seen.contains(k), nh > 0, abs(nh - h0) <= 1, abs(cu + du - s0.0) <= 12, abs(cv + dv - s0.1) <= 12 else { continue }
                 seen.insert(k)
                 q.append((cu + du, cv + dv))
             } }
@@ -756,6 +768,7 @@ final class VoxelWorld {
     ///  선 그림 방에 컬러 무늬 가구가 섞여 보였음)
     private func roomAt(_ u: Int, _ v: Int) -> Int {
         let ck = Vox.chunkKey(u, v)
+        if let r = editRoom[ck] { return r }                // 손으로 넣은 상자: 상자 가운데의 방
         if let r = colRoom[ck] { return r }
         func here(_ u: Int, _ v: Int) -> Int {
             let p = L.flat(SIMD2<Float>((Float(u) + 0.5) * Vox.size, (Float(v) + 0.5) * Vox.size))
@@ -775,7 +788,7 @@ final class VoxelWorld {
                 if r != 0 { tally[r, default: 0] += 1 }
                 for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
                     let k = Vox.chunkKey(cu + du, cv + dv)
-                    guard !seen.contains(k), shownH(cu + du, cv + dv) > 0 else { continue }
+                    guard !seen.contains(k), editH[k] == nil, shownH(cu + du, cv + dv) > 0 else { continue }      // 손으로 고친 칸은 덩어리에 넣지 않음
                     seen.insert(k)
                     queue.append((cu + du, cv + dv))
                     members.append(k)

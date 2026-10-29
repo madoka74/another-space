@@ -91,10 +91,15 @@ final class HomeCat {
         let s0 = sj * nx + si
         prev[s0] = Int32(s0)
         var q = [s0], qi = 0, goal = -1
+        // 도착 칸: reach 안의 칸, 또는 목표가 든 칸 — reach 가 칸 크기(10cm)보다 작으면 칸 가운데가 그 안에 들지 않아
+        // 길이 없다고 보는 일이 많았음 (v0.5.36: 앞발·입 자리처럼 5cm로 찾으면 대부분 실패 → 동물이 제자리에서 물음표·포기)
+        let (bi, bj) = cell(b)
+        let bk = bj * nx + bi
+        let near = max(reach, cs * 0.75)
         while qi < q.count {
             let k = q[qi]; qi += 1
             let i = k % nx, j = k / nx
-            if simd_distance(cp(i, j), b) <= reach { goal = k; break }
+            if k == bk || simd_distance(cp(i, j), b) <= near { goal = k; break }
             for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)] {
                 let x = i + di, y = j + dj
                 guard x >= 0, y >= 0, x < nx, y < nz else { continue }
@@ -128,6 +133,8 @@ final class HomeCat {
             anchor = pts[j]
             i = j + 1
         }
+        // 마지막 칸 가운데에서 목표 자리까지 (갈 수 있으면) — 앞발·입이 장난감에 정확히 닿게
+        if c.pass(b) && clear(anchor, b) && simd_distance(anchor, b) > 0.005 { out.append(b) }
         return out
     }
 
@@ -415,6 +422,8 @@ final class HomeCat {
         actDur = dur
         frameT = 0
         if a != .chase && a != .swat { inviteMe = false }
+        reachSide = nil
+        reachFlipped = false
         switch a {
         case .rub, .loaf, .sleep, .flop, .knead, .love, .weave: break
         default: setPurr(false)
@@ -1158,9 +1167,13 @@ final class HomeCat {
     private func pawTouch(_ b: SIMD2<Float>) -> Bool {
         simd_distance(pos + cardRight() * sideFor(b) * 0.17, b) < 0.12
     }
-    /// 앞발이 그 자리에 닿도록 몸이 설 자리
+    /// 앞발이 그 자리에 닿도록 몸이 설 자리: 공의 어느 쪽에 설지는 쫓기 시작할 때 한 번 정함(가는 동안 목표가 오락가락하지 않게), 막혔으면 한 번 반대쪽
+    private var reachSide: Float?
+    private var reachFlipped = false
     private func pawSpot(_ b: SIMD2<Float>) -> SIMD2<Float> {
-        b - cardRight() * sideFor(b) * 0.17
+        let f = reachSide ?? sideFor(b)
+        reachSide = f
+        return b - cardRight() * f * 0.17
     }
 
     private func hitBall() {
@@ -1235,7 +1248,11 @@ final class HomeCat {
             show(walkFrame(moveDir))
         case .arrived, .blocked:
             // 더 다가갈 수 없음: 앞발이 닿으면 치고, 닿지 않으면(가구 틈 등) 갸웃하고 포기 — 닿지 않는데 공이 튀지 않게
-            if pawTouch(ballPos) { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else { emote("question", 1); start(.sit, 2) }
+            if pawTouch(ballPos) { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else if !reachFlipped {
+                reachFlipped = true                                 // 이쪽이 막혔으면 공 반대쪽으로 돌아가 봄
+                reachSide = -(reachSide ?? face)
+                nav.reset()
+            } else { emote("question", 1); start(.sit, 2) }
         }
     }
 

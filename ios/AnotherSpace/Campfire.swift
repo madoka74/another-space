@@ -114,9 +114,9 @@ final class Campfire {
         let logM: RealityKit.Material = line ? Ink.paper(1) : Tex.with(look) { Tex.unlit("charlog", tint: [1, 1, 1], folder: "tex", sampler: Tex.tiling) }
         for k in 0..<4 {
             let a = Float(k) / 4 * 2 * .pi + 0.4
-            let log = ModelEntity(mesh: .generateCylinder(height: 0.46 * size + 0.08, radius: 0.035), materials: [logM])
+            let log = ModelEntity(mesh: .generateCylinder(height: 0.58 * size + 0.1, radius: 0.042), materials: [logM])
             let out = SIMD3<Float>(cos(a), 0, sin(a))
-            log.position = out * 0.1 + SIMD3<Float>(0, 0.19 * size + 0.03, 0)
+            log.position = out * 0.12 + SIMD3<Float>(0, 0.24 * size + 0.04, 0)
             log.orientation = simd_quatf(angle: -0.42, axis: simd_normalize(simd_cross(SIMD3<Float>(0, 1, 0), out)))
             if line { Ink.hull(log) }                        // 선 그림: 장작 외곽선
             remains.addChild(log)
@@ -163,7 +163,7 @@ final class Campfire {
         var gl: ModelEntity? = nil
         if glowK > 0 {
             var q = Geo()
-            let R: Float = 1.1 + 0.9 * glowK
+            let R: Float = 0.9 + 0.6 * glowK
             q.quad(SIMD3<Float>(-R, 0.016, -R), SIMD3<Float>(R, 0.016, -R), SIMD3<Float>(R, 0.016, R), SIMD3<Float>(-R, 0.016, R),
                    SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
             var m = UnlitMaterial(color: Tex.with(look) { Tex.color([1, 0.6, 0.3]) })
@@ -207,7 +207,7 @@ final class Campfire {
         let spots: [(SIMD2<Float>, Float)] = [([0, 0], 0.78), ([0.02, 0.01], 0.66), ([0.09, 0.04], 0.46), ([-0.08, 0.06], 0.44),
                                                ([0.02, -0.09], 0.42), ([-0.06, -0.05], 0.34), ([0.11, -0.06], 0.3), ([-0.11, 0.0], 0.28)]
         for (k, sp) in spots.enumerated() {
-            let h = sp.1 * size
+            let h = sp.1 * size * 1.2                              // 불길을 키움 (예전엔 둘레 돌·바닥 불빛에 비해 불이 작아 보였음)
             var q = Geo()
             q.crossTree(at: .zero, width: h * 0.5, height: h, yaw: Float(k) * 0.7)
             let start = (k * 5) % 16
@@ -228,7 +228,7 @@ final class Campfire {
         // 자리에 맞춘 크기 (좁으면 작은 모닥불): 돌·장작·숯·불길·바닥 불빛을 함께 줄임
         remains.scale = SIMD3<Float>(repeating: k)
         flameRoot.scale = SIMD3<Float>(repeating: k)
-        glow?.scale = SIMD3<Float>(repeating: max(0.5, k))
+        glow?.scale = SIMD3<Float>(repeating: min(1, max(0.5, k)))      // 바닥 불빛은 불이 커져도 넓히지 않음 (예전엔 함께 커져 불보다 둘레 원만 커 보였음)
 
         // 입자 크기도 불 크기(자리에 맞춘 단계)에 맞춤
         let ps = size * k
@@ -240,15 +240,15 @@ final class Campfire {
         var fire = ParticleEmitterComponent()
         fire.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
         fire.emitterShape = .box
-        fire.emitterShapeSize = [0.26 * ps, 0.04, 0.26 * ps]
+        fire.emitterShapeSize = [0.3 * ps, 0.04, 0.3 * ps]
         fire.birthLocation = .volume
         fire.birthDirection = .world
         fire.emissionDirection = [0, 1, 0]
-        fire.speed = 0.45 * ps + 0.1
+        fire.speed = 0.6 * ps + 0.12
         fire.speedVariation = 0.2
         fire.mainEmitter.birthRate = fr
         fire.mainEmitter.lifeSpan = 0.75
-        fire.mainEmitter.size = 0.09 * ps
+        fire.mainEmitter.size = 0.11 * ps
         fire.mainEmitter.sizeMultiplierAtEndOfLifespan = 0.15
         fire.mainEmitter.acceleration = drift * 0.9
         if line {

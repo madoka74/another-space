@@ -14,6 +14,7 @@ struct ShapeInspector: View {
                     VStack(alignment: .leading, spacing: 18) {
                         header(d)
                         actions
+                        if m.picked.allSatisfy(\.isDoor) { glassToggle(d) }
                         fineBox
                         if m.pickedRooms.count == 1, let rid = m.pickedRooms.first, let r = d.rec.room(rid) {
                             world(r, d)
@@ -56,6 +57,27 @@ struct ShapeInspector: View {
             Label(picked.count == 1 ? "문·통로" : "문·통로 \(picked.count)개", systemImage: "door.left.hand.open").font(.title2.weight(.bold))
         } else {
             Label("사각형 \(picked.count)개", systemImage: "square.on.square").font(.title2.weight(.bold))
+        }
+    }
+
+    /// 통창·유리문 표시: 유리는 비전프로가 알아보지 못해 문이 열렸는지 닫혔는지 알 수 없음 → 늘 닫힌 문으로 다루고, 다가가면 현실 원을 띄움
+    @ViewBuilder
+    private func glassToggle(_ d: SpaceData) -> some View {
+        let ids = m.sel
+        Toggle(isOn: Binding(get: {
+            let g = Set(d.rec.glassDoors ?? [])
+            return !ids.isEmpty && ids.allSatisfy { g.contains($0) }
+        }, set: { on in
+            m.change { dd in
+                var g = Set(dd.rec.glassDoors ?? [])
+                for id in ids { if on { g.insert(id) } else { g.remove(id) } }
+                dd.rec.glassDoors = g.isEmpty ? nil : g.sorted()
+            }
+        })) {
+            VStack(alignment: .leading, spacing: 2) {
+                Label("통창·유리문", systemImage: "door.sliding.left.hand.closed")
+                Text("열림·닫힘을 알 수 없어 늘 닫힌 문으로 — 다가가면 현실 원이 열려요").font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 

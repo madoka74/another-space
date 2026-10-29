@@ -30,6 +30,8 @@ struct DoorSeg: Sendable {
     var pB: Float                   // 방 B 입구 줄
     var s0: Float                   // 문 폭 (다른 축 좌표)
     var s1: Float
+    /// 통창·유리문 (방 구성에서 표시): 열림·닫힘을 알 수 없어 늘 닫힌 실제 문처럼 — 다가가면 현실 원
+    var glass = false
 
     var lo: SIMD2<Float> { alongU ? SIMD2<Float>(min(pA, pB), s0) : SIMD2<Float>(s0, min(pA, pB)) }
     var hi: SIMD2<Float> { alongU ? SIMD2<Float>(max(pA, pB), s1) : SIMD2<Float>(s1, max(pA, pB)) }
@@ -131,9 +133,11 @@ struct Layout: Sendable {
                 let ra = first.key
                 let pA = alongU ? bu + Float(a0) * r : bv + Float(b0) * r
                 let pB = alongU ? bu + Float(a1) * r : bv + Float(b1) * r
-                cand.append(DoorSeg(roomA: ra, roomB: ra, alongU: alongU, nA: alongU ? SIMD2<Float>(-1, 0) : SIMD2<Float>(0, -1), pA: pA, pB: pB,
-                                    s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
-                                    s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r))
+                var dg = DoorSeg(roomA: ra, roomB: ra, alongU: alongU, nA: alongU ? SIMD2<Float>(-1, 0) : SIMD2<Float>(0, -1), pA: pA, pB: pB,
+                                 s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
+                                 s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r)
+                dg.glass = d.rec.glassDoors?.contains(sh.id) ?? false
+                cand.append(dg)
                 candRect.append((a0, b0, a1, b1))
                 continue
             }
@@ -159,9 +163,11 @@ struct Layout: Sendable {
             let pA = aMax >= aMin ? base + Float(aLow ? aMax + 1 : aMin) * r : (aLow ? lo : hi)
             let pB = bMax >= bMin ? base + Float(aLow ? bMin : bMax + 1) * r : (aLow ? hi : lo)
             let nA = alongU ? SIMD2<Float>(aLow ? -1 : 1, 0) : SIMD2<Float>(0, aLow ? -1 : 1)
-            cand.append(DoorSeg(roomA: ra, roomB: rb, alongU: alongU, nA: nA, pA: pA, pB: pB,
-                                s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
-                                s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r))
+            var dg = DoorSeg(roomA: ra, roomB: rb, alongU: alongU, nA: nA, pA: pA, pB: pB,
+                             s0: alongU ? bv + Float(b0) * r : bu + Float(a0) * r,
+                             s1: alongU ? bv + Float(b1) * r : bu + Float(a1) * r)
+            dg.glass = d.rec.glassDoors?.contains(sh.id) ?? false
+            cand.append(dg)
             candRect.append((a0, b0, a1, b1))
         }
         // 문 칸 표시. 방이 아닌 칸(틈)은 걸을 수 있게 하고, 그 칸의 방은 '이 문이 잇는 두 방' 중 가까운 쪽으로만
