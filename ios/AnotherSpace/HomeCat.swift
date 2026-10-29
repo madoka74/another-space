@@ -1294,6 +1294,7 @@ final class HomeCat {
 /// 강아지·고양이 길 따라 걷기 (가구를 돌아서) — 한 프레임에 한 걸음.
 /// 막히면 축 방향으로 미끄러져 보고, 0.6초 넘게 못 움직이면 '막힘'으로 알려 줌 (부르는 쪽이 물기·포기·놀자 자세 등으로 넘어감).
 /// (예전엔 막힌 걸음을 그대로 버리고 같은 길을 다시 찾기만 해, 막대·공이 바로 옆에 있어도 제자리에서 발만 굴렀음)
+@MainActor
 struct PetNav {
     enum Step { case move(SIMD2<Float>), hold, arrived, blocked }
     private var path: [SIMD2<Float>] = []

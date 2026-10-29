@@ -332,7 +332,7 @@ final class RoomWorld {
         var sameNear = Set<Int>()
         for s in mySegs where s.nearRoom != 0 {
             if groupIds.contains(s.nearRoom) { sameNear.insert(s.nearRoom); continue }
-            if let o = d.rec.room(s.nearRoom), o.place == r.place, o.weather == r.weather, o.time == r.time, o.lookMode == r.lookMode { sameNear.insert(s.nearRoom) }
+            if let o = d.rec.room(s.nearRoom), o.place == room.place, o.weather == room.weather, o.time == room.time, o.lookMode == room.lookMode { sameNear.insert(s.nearRoom) }
         }
         for i in mySegs.indices where mySegs[i].window && sameNear.contains(mySegs[i].nearRoom) { mySegs[i].window = false }
         let segs = Self.withWindows(mySegs, place: room.place, doors: L.doors, roomId: room.id, nearSame: sameNear)
@@ -3143,7 +3143,8 @@ final class RoomWorld {
             // ① 집 위 (천장까지)
             for id in groupIds { for r in L.rects(id) { sheet(r.0 - SIMD2<Float>(repeating: 0.25), r.1 + SIMD2<Float>(repeating: 0.25), bottom: ceilY, density: 0.3) } }
             // ② 집 둘레 (땅까지)
-            if let (lo, hi) = L.walkBounds() {
+            if let wb = L.walkBounds() {
+                let lo = wb.0, hi = wb.1
                 for r in outsideRects(L, lo: lo, hi: hi, margin: 3, cell: 0.5, clear: 0.2) { sheet(r.0, r.1, bottom: floorY, density: 0.3) }
                 // ③ 그 바깥 띠 넷 (땅까지)
                 let i0 = lo - SIMD2<Float>(repeating: 3), i1 = hi + SIMD2<Float>(repeating: 3)
