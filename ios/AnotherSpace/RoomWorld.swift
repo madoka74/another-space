@@ -154,6 +154,10 @@ final class RoomWorld {
     private var sortGroup: ModelSortGroup { Sorting.group }       // 모든 방이 같은 묶음 (포털 0번 → 방 안 반투명 25~30번)
     /// 문 번호 → 이 방 쪽 문짝 (닫히면 이 방 벽처럼 보임). 열 때 가로로 오므라듦
     private(set) var doorPanels: [Int: [Entity]] = [:]
+    /// 다른 세계 옆방과 맞댄 벽 뒤 울타리 (옆방 번호 → 엔티티). 그 울타리는 벽 너머 = 옆방 자리(또는 벽 두께 속)에 섬 →
+    /// 그 옆방에 서서 열린 문 너머로 이 방을 볼 때 내 앞(옆방 쪽)에 있는 세계 것이 이 방 포털에 크게·엉뚱한 각도로 비침 (포털은 자르지 않으므로).
+    /// 그래서 내가 그 옆방(또는 그 사이 문 자리)에 있는 동안은 끔 — 그때는 어차피 이 방 쪽에서 그 벽 뒤를 볼 일이 없음
+    private(set) var barrierToward: [Int: [Entity]] = [:]
     /// 문 번호 → 1m 안으로 다가가면 보이는 마법의 양문 (이 방 쪽)
     private(set) var doorView: [Int: DoorView] = [:]
     /// 문 번호 → 실제 문이 닫혀 있을 때 보이는 문짝 (방 A 쪽 세계에만)
@@ -504,7 +508,7 @@ final class RoomWorld {
     private func openWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         var portal = PortalPlanes()
         /// 울타리 줄 위 한 점 (평면 좌표): 방향 n(방 안쪽), 줄 따라 좌표 u, 줄 자리 c(= n·점), 세울 두께, 얇게, 한가운데 공유 줄인지
-        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool; let outside: Bool }
+        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool; let outside: Bool; let toward: Int }
         var samples: [Sample] = []
         let base = barrierProt + 0.01                                      // 울타리 앞면이 벽 평면 1cm 뒤
         let step: Float = 0.05
@@ -556,7 +560,9 @@ final class RoomWorld {
                     shared = true
                 }
                 let q = p - s.n * off
-                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0))
+                // 너머가 다른 세계 옆방이면 그 방 번호 (그 방에 있을 때 끌 울타리)
+                let toward = m > 0 && m != room.id && !groupIds.contains(m) ? m : 0
+                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0, toward: toward))
             }
         }
         addPortalPlanes(portal, name: "walls")
@@ -595,7 +601,7 @@ final class RoomWorld {
                 while i < byU.count {
                     var j = i
                     var dep = byU[i].depth - (byU[i].c - c)
-                    while j + 1 < byU.count && byU[j + 1].u - byU[j].u <= step * 1.6 && byU[j + 1].thin == byU[i].thin && byU[j + 1].outside == byU[i].outside {
+                    while j + 1 < byU.count && byU[j + 1].u - byU[j].u <= step * 1.6 && byU[j + 1].thin == byU[i].thin && byU[j + 1].outside == byU[i].outside && byU[j + 1].toward == byU[i].toward {
                         j += 1
                         dep = min(dep, byU[j].depth - (byU[j].c - c))
                     }
@@ -614,7 +620,7 @@ final class RoomWorld {
                         let wa = L.flat(pt(u0)), wb = L.flat(pt(u1))
                         let o2 = L.flat(-n) - L.flat(SIMD2<Float>(0, 0))
                         spans.append(BarrierSpan(a: SIMD3<Float>(wa.x, floorY, wa.y), b: SIMD3<Float>(wb.x, floorY, wb.y),
-                                                 out: simd_normalize(SIMD3<Float>(o2.x, 0, o2.y)), depth: max(0.08, dep), thin: byU[i].thin))
+                                                 out: simd_normalize(SIMD3<Float>(o2.x, 0, o2.y)), depth: max(0.08, dep), thin: byU[i].thin, toward: byU[i].toward))
                     }
                     i = j + 1
                 }
@@ -639,7 +645,7 @@ final class RoomWorld {
     }
 
     /// 울타리 한 토막: 바닥 a→b (벽에서 off 뒤), 바깥 방향 out, 세울 수 있는 두께, 방과 방 사이(얇게)인지
-    struct BarrierSpan { let a: SIMD3<Float>; let b: SIMD3<Float>; let out: SIMD3<Float>; let depth: Float; let thin: Bool }
+    struct BarrierSpan { let a: SIMD3<Float>; let b: SIMD3<Float>; let out: SIMD3<Float>; let depth: Float; let thin: Bool; var toward: Int = 0 }
 
     /// 테마마다 입체 울타리 (선 그림: 흰 면 + 같은 펜 굵기 외곽선, 흑백: 무늬 색을 뺌 — Tex 가 표시 방식대로)
     private func addBarriers(_ spans: [BarrierSpan]) {
@@ -683,9 +689,20 @@ final class RoomWorld {
             postsMade.append(p)
             return (p, true)
         }
+        // 줄마다 담을 그물 묶음: 다른 세계 옆방 쪽 줄은 그 방 번호별로 따로 (그 방에 있을 때 끄려고). 말뚝 나눠 쓰기·높이 차이는 모든 줄이 같이 셈
+        var bank: [Int: [Geo]] = [:]
+        var curKey = 0
+        func useKey(_ k: Int) {
+            guard k != curKey else { return }
+            bank[curKey] = [solidA, solidB, solidC, lumps, lines, hulls]
+            let n = bank[k] ?? [Geo(), Geo(), Geo(), Geo(), Geo(), Geo()]
+            solidA = n[0]; solidB = n[1]; solidC = n[2]; lumps = n[3]; lines = n[4]; hulls = n[5]
+            curKey = k
+        }
         for (si, sp) in spans.enumerated() {
             let L2 = simd_distance(sp.a, sp.b)
             guard L2 > 0.06 else { continue }
+            useKey(sp.toward)
             let dir = (sp.b - sp.a) / L2
             let out = sp.out
             let D = sp.thin ? 0.08 : min(sp.depth, 0.5)
@@ -811,13 +828,27 @@ final class RoomWorld {
         } else {
             matC = Ink.paper(2)
         }
-        for (geo, m, nm) in [(solidA, matA, "barrierA"), (solidB, matB, "barrierB"), (solidC, matC, "barrierC"), (lumps, lumpMat, "barrierLumps")] {
-            if let e = geo.entity(nm, m) { layer(e, 6); world.addChild(e) }
+        bank[curKey] = [solidA, solidB, solidC, lumps, lines, hulls]
+        for k in bank.keys.sorted() {
+            guard let gs = bank[k] else { continue }
+            var made: [Entity] = []
+            for (geo, m, nm) in [(gs[0], matA, "barrierA"), (gs[1], matB, "barrierB"), (gs[2], matC, "barrierC"), (gs[3], lumpMat, "barrierLumps")] {
+                if let e = geo.entity(nm, m) { layer(e, 6); world.addChild(e); made.append(e) }
+            }
+            if lineMode {
+                if let e = gs[3].inkHull("barrierLumpLines", width: { inkW($0) }) { layer(e, 6); world.addChild(e); made.append(e) }
+                if let e = gs[5].entity("barrierLogLines", Ink.hullMat) { layer(e, 6); world.addChild(e); made.append(e) }
+                if let e = gs[4].entity("barrierLines", Ink.line) { layer(e, 7); world.addChild(e); made.append(e) }
+            }
+            if k != 0 { barrierToward[k, default: []] += made }
         }
-        if lineMode {
-            if let e = lumps.inkHull("barrierLumpLines", width: { inkW($0) }) { layer(e, 6); world.addChild(e) }
-            if let e = hulls.entity("barrierLogLines", Ink.hullMat) { layer(e, 6); world.addChild(e) }
-            if let e = lines.entity("barrierLines", Ink.line) { layer(e, 7); world.addChild(e) }
+    }
+
+    /// 내가 있는 방들(지금 방·몸이 있는 방·몸이 선 문 양쪽 방)에 맞댄 벽 뒤 울타리는 끔 (barrierToward 참고)
+    func hideBarriers(near rooms: Set<Int>) {
+        for (k, list) in barrierToward {
+            let on = !rooms.contains(k)
+            for e in list where e.isEnabled != on { e.isEnabled = on }
         }
     }
 

@@ -122,7 +122,8 @@ final class HomeDog {
                SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
         if let m = g.mesh("dog") { card.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
         card.name = "homedog"
-        card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [s * 0.74, s * 0.62, 0.14]).offsetBy(translation: [0, s * 0.31, 0])]))
+        // 탭 판은 얇게 (2cm) — 두꺼운 상자 앞면이 곁의 막대보다 앞에 있어 막대를 집으려 해도 강아지 탭이 되던 것 (HomeCat 참고)
+        card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [s * 0.74, s * 0.62, 0.02]).offsetBy(translation: [0, s * 0.31, 0])]))
         card.components.set(InputTargetComponent())
         root.addChild(card)
         var bq = Geo()

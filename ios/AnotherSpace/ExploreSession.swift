@@ -31,7 +31,7 @@ struct ExploreView: View {
             Attachment(id: "stars") { StarCard(s: s) }
             Attachment(id: "furn") { FurnPanel(s: s) }
         }
-        // 탭은 한 번씩만 받고, 싱글·더블은 앱이 시간으로 가름 (두 번째 탭이 0.4초 안에 오면 더블탭).
+        // 탭은 손짓 하나에 한 번씩만 받고(시스템 탭·손 추적 짝짓기), 싱글·더블은 앱이 가름: 두 번째 탭이 0.45초 안에 오면 더블탭, 안 오면 그때 싱글탭.
         // 보는 곳 어디든 받도록 머리 둘레에 보이지 않는 '탭 받는 상자'를 둠. 열쇠·그림 버튼은 바로 처리
         .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { v in
             s.tapped(v.entity, at: v.convert(v.location3D, from: .local, to: .scene))
@@ -93,18 +93,18 @@ private struct ExploreHud: View {
                 HStack(spacing: 14) {
                     if s.room != nil {
                         Button {
-                            s.toggleTheme()
+                            if s.menuReady() { s.toggleTheme() }
                         } label: {
                             Label(s.unified ? "모든 방 테마 바꾸기" : "테마 바꾸기", systemImage: "paintpalette")
                         }
                     }
                     Button {
-                        s.startFurn()
+                        if s.menuReady() { s.startFurn() }
                     } label: {
                         Label("가구 맞추기", systemImage: "cube.transparent")
                     }
                     Button {
-                        s.exit()
+                        if s.menuReady() { s.exit() }
                     } label: {
                         Label("현실로 돌아가기", systemImage: "arrow.uturn.backward")
                     }
@@ -292,6 +292,9 @@ final class ExploreSession {
     @ObservationIgnored private var openHold: [Int: Float] = [:]    // 이때까지는 다시 닫힘으로 치지 않음 (방금 문 자리를 지남)
     @ObservationIgnored private var realClosed: Set<Int> = []       // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var doorPlanes: [UUID: (Int, Bool)] = [:]   // 문으로 알아본 평면 → (문 번호, 문 자리를 가로막고 있는지)
+    @ObservationIgnored private var doorPlaneS: [UUID: Float] = [:]  // 문 자리를 가로막던 평면의 가운데 (문 폭 방향 자리) — 미닫이가 밀려났는지 보려고
+    @ObservationIgnored private var heldHits: [Int: [UUID: Set<Int>]] = [:]   // 열림 판단 때 치워 둔 그물 기록 (그 덩어리가 새로 오면 버림) — 지금 그물 전체 모양
+    @ObservationIgnored private var viewT: [Int: Float] = [:]       // 실제 문이 열린 뒤(3초 넘어) 곁에서 문 자리를 바라본 시간
     @ObservationIgnored private var hands: HandTrackingProvider?
     @ObservationIgnored private var grip: [Int: (Float, Float, Float, Float)] = [:]   // 문 → (손이 문짝에 가장 가까웠던 거리, 처음 닿은 때, 마지막으로 닿아 있던 때, 닿은 쪽)
     @ObservationIgnored private var coverPeak: [Int: Float] = [:]   // 닫혀 있는 동안 가장 많이 막혔던 비율
@@ -323,7 +326,7 @@ final class ExploreSession {
     // 탭
     @ObservationIgnored private let tapCatcher = Entity()
     @ObservationIgnored private var pendingTap: Float?        // 한 번 탭한 때 — 0.45초 안에 또 오면 더블탭
-    @ObservationIgnored private var beforeTap: (Bool, Float, Bool)?   // 첫 탭 전 안내판 상태 (더블탭이면 되돌림)
+    @ObservationIgnored private var menuShownAt: Float = -9   // 메뉴판을 띄운 때 (막 뜬 메뉴판 버튼은 잠깐 받지 않음 — menuReady)
     @ObservationIgnored private var lastUITap: Float = -9
     // 안내판
     @ObservationIgnored private var hud: Entity?
@@ -342,12 +345,15 @@ final class ExploreSession {
     @ObservationIgnored private var turnSpeed: Float = 0
     @ObservationIgnored private var pinchOpenAt: [Float] = [-9, -9]
     @ObservationIgnored private var pinchCloseAt: [Float] = [-9, -9]
-    @ObservationIgnored private var handTapAt: Float?
-    @ObservationIgnored private var lastSysTap: Float = -9
-    @ObservationIgnored private var lastHandTap: Float = -9
+    /// 손 추적으로 본 '집었다 놓기' 하나하나 (놓은 때, 눈앞에서 빠르게 한 손짓인지, 상태 0 = 아직 / 1 = 시스템 탭과 짝지음 / 2 = 손 탭으로 넣음)
+    @ObservationIgnored private var pinchRel: [(t: Float, ok: Bool, state: Int)] = []
+    /// 시스템 탭 중 아직 손 추적 놓기와 짝짓지 못한 것 (시스템 탭이 손 추적보다 먼저 온 경우)
+    @ObservationIgnored private var sysTaps: [Float] = []
     @ObservationIgnored private var hudPinned = false
     // 가구 맞추기 (세계를 걷고 현실 위에 가구 블록을 반투명하게 보이며, 탭·끌기·두 손 집기·판 버튼으로 넣고 빼고 줄이고 키움)
     var furnMode = false
+    @ObservationIgnored private var furnHidden = false
+    @ObservationIgnored private var furnHiddenList: [Entity] = []
     var furnSel: Int?                                   // 고른 상자 (furnEdits.adds 번호)
     var furnEdits = FurnEdits()
     var furnCanUndo = false
@@ -360,6 +366,10 @@ final class ExploreSession {
     @ObservationIgnored private let furnRoot = Entity()              // 저장 좌표 (공간 뿌리와 같은 자리 — 세계를 가린 동안에도 보임)
     @ObservationIgnored private var furnPreview: ModelEntity?
     @ObservationIgnored private var furnBoxes: [ModelEntity] = []
+    @ObservationIgnored private let furnGuide = Entity()             // 고치는 상자 둘레 거리 표시 (저장 좌표)
+    @ObservationIgnored private var guideBox: FurnBox?               // 거리 표시를 마지막으로 계산한 상자
+    @ObservationIgnored private var guideAt: Float = -9
+    @ObservationIgnored private var guideText: [String: MeshResource] = [:]
     @ObservationIgnored private var furnGrab: SIMD2<Float>?           // 끌기 시작할 때 상자 가운데 - 손 자리 (평면 좌표)
     @ObservationIgnored private var furnScale0: FurnBox?
     @ObservationIgnored private var furnApplyAt: Float?               // 끄는 동안 블록·미리보기 다시 그릴 때 (0.15초마다)
@@ -734,12 +744,17 @@ final class ExploreSession {
         let now = shownRooms()
         for id in now { shownUntil[id] = t + 0.8 }
         let vis = Set(shownUntil.filter { $0.value > t }.keys)
+        // 내가 있는 방(지금 방·몸이 있는 방·몸이 선 문 양쪽 방): 다른 세계 방들이 이 방과 맞댄 벽 뒤에 세운 울타리는 이 방 자리에 있으므로 끔
+        // (열린 열쇠 문 너머 옆방 포털에 내 곁의 그 울타리가 크게·엉뚱한 각도로 비쳤음 — RoomWorld.barrierToward)
+        var here: Set<Int> = [current, bodyRoom]
+        if let L = layout { for i in bodyDoors where i < L.doors.count { here.insert(L.doors[i].roomA); here.insert(L.doors[i].roomB) } }
         for (id, w) in worlds {
             let on = vis.contains(id)
             if w.local.isEnabled != on { w.local.isEnabled = on }
+            w.hideBarriers(near: here)
         }
         for (id, c) in cafeSets {
-            let on = vis.contains(id)
+            let on = vis.contains(id) && !furnHidden                 // 가구 맞추기 중엔 끔 (furnHideScene)
             if c.1.root.isEnabled != on { c.1.root.isEnabled = on }
         }
     }
@@ -1051,18 +1066,50 @@ final class ExploreSession {
                     break
                 }
             }
-            if let n = now { doorPlanes[a.id] = n; doorSeenAt[n.0] = t } else { doorPlanes[a.id] = nil }
+            // 가로막고 있던 문 면이 '열렸다'는 것은 문 면 그대로(문으로 분류된 채) 문 자리 곁에서 젖혀지거나(여닫이) 옆으로 밀려났을 때만.
+            // 분류가 벽 등으로 바뀌거나, 작아지거나, 이웃 면과 합쳐져 가운데가 멀리 튀거나, 사라지는 것은 비전프로가 평면을 다시 정리하는 일 —
+            // 예전엔 이것도 바로 '열림'으로 쳐서, 닫힌 문이 코앞에서 열려 보였음 (그 뒤 그물이 바뀌지 않으면 닫힘 증거가 다시 오지 않아 계속 열림)
+            if let w = was, w.1, u.event == .updated, now.map({ !$0.1 }) ?? true {
+                var moved = false
+                if a.classification == .door, w.0 < L.doors.count {
+                    let ds = L.doors[w.0]
+                    let m = a.originFromAnchorTransform * a.geometry.extent.anchorFromExtentTransform
+                    let c = f.toSaved(simd_make_float3(m.columns.3))
+                    let ay = simd_make_float3(m.columns.1), az = simd_make_float3(m.columns.2)
+                    let n = f.dirToSaved(simd_normalize(abs(ay.y) < abs(az.y) ? ay : az))
+                    let pp = L.plane(c.x, c.z)
+                    let np = SIMD2<Float>(simd_dot(SIMD2<Float>(n.x, n.z), L.ex), simd_dot(SIMD2<Float>(n.x, n.z), L.ez))
+                    let across = abs(ds.alongU ? np.x : np.y)
+                    let sNow: Float = ds.alongU ? pp.y : pp.x
+                    if ds.zone(pp, margin: 0.9, side: 0.3) {
+                        if across < 0.7 { moved = true }                                            // 젖혀짐 (45° 넘게)
+                        else if let s0 = doorPlaneS[a.id], abs(sNow - s0) > 0.25 { moved = true }   // 미닫이처럼 옆으로 밀림
+                    }
+                }
+                if moved {
+                    doorPlanes[a.id] = nil
+                    doorPlaneS[a.id] = nil
+                    planeAcrossAt[w.0] = nil
+                    realOpen(w.0, hold: 6)
+                    shelveHits(w.0)
+                    coverFresh[w.0] = 0
+                } else {
+                    doorPlanes[a.id] = w                // 열린 증거가 아님 → 예전 기록 그대로 (다음 갱신에서 젖혀지는지 계속 봄)
+                }
+                continue
+            }
+            if u.event == .removed { doorPlanes[a.id] = nil; doorPlaneS[a.id] = nil; continue }
+            if let n = now { doorPlanes[a.id] = n; doorSeenAt[n.0] = t } else if was == nil || !(was!.1) { doorPlanes[a.id] = nil; doorPlaneS[a.id] = nil }
             if let n = now, n.1 {
                 // 문 자리를 가로막은 문 면 → 닫힘 증거 (문 판정이 그물과 함께 따져 1초 이어지면 닫음 — closingEvidence)
                 planeAcrossAt[n.0] = t
-            } else if let w = was, w.1, u.event == .updated {
-                // 가로막고 있던 문 면이 젖혀지거나 자리를 벗어남 → 바로 열림.
-                // (평면이 사라지는 것만으로는 열림으로 치지 않음: 비전프로가 평면을 합치거나 다시 만들 때도 사라졌다 새로 생김)
-                planeAcrossAt[w.0] = nil
-                realOpen(w.0, hold: 6)
-                realHits[w.0] = [:]
-                hitsAt[w.0] = [:]
-                coverFresh[w.0] = 0
+            }
+            if let n = now, n.1, !(was?.1 ?? false) {
+                // 처음 가로막은 자리만 기억 (조금씩 다듬어지며 옮겨지는 것과 섞이지 않게)
+                let m = a.originFromAnchorTransform * a.geometry.extent.anchorFromExtentTransform
+                let c = f.toSaved(simd_make_float3(m.columns.3))
+                let pp = L.plane(c.x, c.z)
+                doorPlaneS[a.id] = L.doors[n.0].alongU ? pp.y : pp.x
             }
         }
     }
@@ -1230,7 +1277,8 @@ final class ExploreSession {
         // (예전엔 수평 방향만 따져서, 문 근처에서 아래를 보면 바닥 위에 현실 창이 떠 현실이 겹쳐 보였음)
         // (문 쪽을 바라보는지는 updateDoors에서 시선이 문짝에 닿는지로 판단 — 손잡이를 내려다봐도 유지, 바닥을 보면 꺼짐)
         let auto = leafDoor != nil && leafDoor != peekDismissed
-        let target: Float = (freePeek || auto) ? 1 : 0
+        // 가구 맞추기 중엔 끔: 현실 창(가려 주는 재질)이 시선 앞에서 가구 상자를 둥글게 지워 '투명하게 가려지는 곳'이 생겼음
+        let target: Float = (freePeek || auto) && !furnMode ? 1 : 0
         peekAmt += (target - peekAmt) * min(1, dt * (target > peekAmt ? 6 : 16))
         let on = peekAmt > 0.01
         if peek.isEnabled != on { peek.isEnabled = on }
@@ -1361,6 +1409,7 @@ final class ExploreSession {
             spaceRoot.setOpacity(v)
             appliedFade = v
         }
+        furnHideScene(furnMode && fade < 0.02)
         // 불러오는 중: 글 대신 진행 막대 (공간 찾기 → 방 세계 만들기 → 바닥 맞추기 / 테마 바꾸기)
         let total = max(1, data?.rec.rooms.count ?? 1)
         var goal: Float? = nil
@@ -1416,14 +1465,7 @@ final class ExploreSession {
         placeDocent(dt)
         furnTick()
         syncBars()
-        if let h = handTapAt, t - h > 0.18 {
-            handTapAt = nil
-            if t - lastSysTap > 0.45 {
-                lastHandTap = t
-                let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-                tapped(tapCatcher, at: head + g * 2, system: false)
-            }
-        }
+        tapTick()
         campTick(dt)
         catTick(dt)
         dogTick(dt)
@@ -1854,6 +1896,7 @@ final class ExploreSession {
         cover[i] = 0                     // 예전 막힘 비율은 버림 — 새 그물이 오기 전엔 문 면(평면)만으로 다시 닫지 않게
         coverFresh[i] = 0
         openedAt[i] = t
+        viewT[i] = 0
         openHold[i] = max(openHold[i] ?? 0, t + hold)
     }
 
@@ -1864,10 +1907,32 @@ final class ExploreSession {
         closeSince[i] = nil
     }
 
-    /// 닫힘 후보인지: 열린 뒤 새로 온 그물이 문틀을 55% 넘게 덮음, 또는 3초 안에 문 면이 가로막았고 그물도 40% 넘게 덮음(그물이 아직 없으면 평면만으로)
-    private func closingEvidence(_ i: Int) -> Bool {
+    /// 열림을 알았을 때 그 문의 그물 기록을 '열림 판단'에서 빼 둠 (지우지는 않음 — 그 덩어리가 새로 오면 그때 버림).
+    /// 예전엔 지웠음 → 잘못 열림으로 안 경우(문 자리에 선 것처럼 잡힘 등) 문이 그대로라 그물이 다시 오지 않으면 닫힘으로 돌아올 근거가 없었음
+    private func shelveHits(_ i: Int) {
+        for (k, e) in realHits[i] ?? [:] { heldHits[i, default: [:]][k] = e }
+        realHits[i] = [:]
+        hitsAt[i] = [:]
+    }
+
+    /// 지금 그물 전체(새로 온 것 + 치워 둔 것 중 아직 새로 오지 않은 덩어리)가 문틀 안쪽을 덮은 비율
+    private func coverNow(_ i: Int, _ ds: DoorSeg) -> Float {
+        var all = Set<Int>()
+        for (_, e) in realHits[i] ?? [:] { all.formUnion(e) }
+        for (k, e) in heldHits[i] ?? [:] where realHits[i]?[k] == nil { all.formUnion(e) }
+        let cols = max(1, Int(((ds.width - 0.16) / 0.1).rounded(.up)))
+        return Float(all.count) / Float(cols * 16)
+    }
+
+    /// 닫힘 후보인지:
+    /// - 열린 뒤 새로 온 그물이 문틀을 55% 넘게 덮음
+    /// - 3초 안에 문 면이 가로막았고 그물도 45% 넘게 덮음(그물이 아직 없으면 평면만으로) — 열림 기준(45% 밑)과 겹치지 않게 (예전 40%: 40~45%에서 닫힘·열림이 번갈아 남)
+    /// - 열린 뒤 3초 넘어 곁에서 문 자리를 2.5초 넘게 바라봤는데도 지금 그물 전체가 55% 넘게 덮음:
+    ///   정말 열렸다면 바라보는 동안 비전프로가 그물을 고쳐 보냄. 그대로라면 문은 닫혀 있는 것 (잘못 열림으로 안 것을 되돌림)
+    private func closingEvidence(_ i: Int, _ ds: DoorSeg) -> Bool {
         if (coverFresh[i] ?? 0) > 0.55 { return true }
-        if let pa = planeAcrossAt[i], (t - pa) < 3, pa > (openedAt[i] ?? -100) + 1, (cover[i] ?? 0.5) > 0.4 { return true }
+        if let pa = planeAcrossAt[i], (t - pa) < 3, pa > (openedAt[i] ?? -100) + 1, (cover[i] ?? 0.5) > 0.45 { return true }
+        if (viewT[i] ?? 0) > 2.5 && coverNow(i, ds) > 0.55 { return true }
         return false
     }
 
@@ -1903,7 +1968,11 @@ final class ExploreSession {
             // ── ① 실제 문
             let standing = ds.zone(p, margin: 0.05, side: -0.1)              // 문 자리 한가운데 = 실제 문은 열려 있음 (닫힌 문 자리엔 설 수 없음)
             if standing { realOpen(i, hold: 2) }
-            if closingEvidence(i) && !realClosed.contains(i) {
+            // 열린 뒤 3초 넘어 곁(1m)에서 문 자리를 바라본 시간 (지금 그물이 정말 열린 모양으로 바뀌었는지 볼 수 있었던 시간)
+            if !realClosed.contains(i) && near && t - (openedAt[i] ?? -100) > 3 && gazeHitsDoor(ds, pe, fs, headY: hs.y - L.floorY, L) {
+                viewT[i, default: 0] += dt
+            }
+            if closingEvidence(i, ds) && !realClosed.contains(i) {
                 if closeSince[i] == nil { closeSince[i] = t }
                 if let c0 = closeSince[i], t - c0 > 1.0, t > (openHold[i] ?? 0), !standing { realClose(i) }
             } else {
@@ -2087,13 +2156,14 @@ final class ExploreSession {
             hitsAt[i]?[id] = nil
             touched.insert(i)
         }
+        for (i, m) in heldHits where m[id] != nil && !seen.union(hits.keys).contains(i) { heldHits[i]?[id] = nil }
         for i in seen.union(hits.keys) {
             let nh = hits[i] ?? []
             let old = realHits[i]?[id] ?? []
             if old.count >= 6 && nh.count * 10 <= old.count * 7 {
-                realHits[i] = [:]                                   // 문이 움직였음 → 다른 덩어리의 예전 기록은 믿지 않음
-                hitsAt[i] = [:]
+                shelveHits(i)                                       // 문이 움직였음 → 다른 덩어리의 예전 기록은 열림 판단에 쓰지 않음
             }
+            heldHits[i]?[id] = nil                                  // 이 덩어리는 지금 모양이 새로 왔음
             realHits[i, default: [:]][id] = nh
             hitsAt[i, default: [:]][id] = t
         }
@@ -2114,8 +2184,7 @@ final class ExploreSession {
             let dropped = realClosed.contains(i) && (coverPeak[i] ?? 0) > 0.55 && cv < (coverPeak[i] ?? 0) - 0.15
             if realClosed.contains(i) && (cv < 0.45 || dropped) {
                 realOpen(i, hold: 5)
-                realHits[i] = [:]
-                hitsAt[i] = [:]
+                shelveHits(i)
                 coverFresh[i] = 0
             }
         }
@@ -2127,7 +2196,7 @@ final class ExploreSession {
     /// 잘못 알아챈 경우(손만 대고 뗌)는 3.5초 뒤 그물·평면이 다시 닫힘으로 돌려놓음 (그물은 문이 다 열리고도 몇 초 늦게 따라오므로 그 전엔 닫지 않음)
     /// 탭 보조: 시스템 탭이 가끔 안 들어와서, 손 추적으로 '빠르게 집었다 놓는' 손짓도 탭으로 받음.
     /// 손을 편히 둘 때 손가락이 붙어 있는 것과 구별하려고: 2.5cm 넘게 벌어져 있다가 0.3초 안에 0.9cm 안으로 집고, 0.5초 안에 다시 2cm 넘게 벌림.
-    /// 같은 손짓을 시스템도 알아채면 한 번만 (시스템 탭이 0.45초 안에 오면 이것은 버림)
+    /// 같은 손짓을 시스템도 알아채면 한 번만 — 놓기 하나하나를 시스템 탭과 짝지음 (claimSystemTap·tapTick)
     private func pinchWatch(_ a: HandAnchor?, _ i: Int) {
         guard let a, a.isTracked, let sk = a.handSkeleton else { pinchClosed[i] = false; return }
         let tj = sk.joint(.thumbTip), ij = sk.joint(.indexFingerTip)
@@ -2144,7 +2213,10 @@ final class ExploreSession {
             let toH = tp - head
             let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
             let inView = simd_length(toH) > 0.05 && simd_dot(simd_normalize(toH), g) > 0.5 && tp.y > head.y - 0.7
-            if inView && t - pinchCloseAt[i] < 0.5 { handTapAt = t }
+            // 놓은 손짓 하나 = 기록 하나. 바로 전(0.2초 안)에 시스템 탭이 왔으면 그 탭과 같은 손짓
+            var st = 0
+            if let k = sysTaps.lastIndex(where: { t - $0 < 0.2 }) { sysTaps.remove(at: k); st = 1 }
+            pinchRel.append((t: t, ok: inView && t - pinchCloseAt[i] < 0.5, state: st))
         }
     }
 
@@ -2190,8 +2262,7 @@ final class ExploreSession {
                 let held = g.2 - g.1 >= 0.2
                 if held && (through || (g.0 < 0.1 && far - g.0 > 0.2 && t - g.2 < 1.5)) {
                     realOpen(i, hold: 6)
-                    realHits[i] = [:]
-                    hitsAt[i] = [:]
+                    shelveHits(i)
                     coverFresh[i] = 0
                     grip[i] = nil
                 } else if t - g.2 > 1.5 {
@@ -2268,11 +2339,146 @@ final class ExploreSession {
         FurnStore.save(spaceId, furnEdits)
     }
 
+    /// 가구 맞추기 중(공간이 다 흐려진 뒤): 가구 블록·반려동물·카페 차림을 끔.
+    /// 흐림(투명도 0)으로만 숨기면 그리지는 않아도 깊이는 써서, 그 뒤·속에 놓인 고칠 상자가 곳곳에 투명하게 지워져 보였음.
+    /// 소리를 내는 것(세계·방 안·모닥불)은 끄지 않음 (끄면 소리가 멈춘 채 돌아오지 않을 수 있음) — 그것들은 포털 너머이거나 가구 위가 아님
+    private func furnHideScene(_ hide: Bool) {
+        guard hide != furnHidden else { return }
+        furnHidden = hide
+        var list: [Entity] = []
+        if let v = vox { list.append(v.root) }
+        if let c = cat { list.append(c.root); list.append(c.ballRoot) }
+        if let g = dog { list.append(g.root); list.append(g.propRoot) }
+        for (_, c) in cafeSets { list.append(c.1.root) }
+        if hide {
+            for e in list where e.isEnabled { e.isEnabled = false; furnHiddenList.append(e) }
+        } else {
+            for e in furnHiddenList { e.isEnabled = true }
+            furnHiddenList = []
+            updateRoomVisibility()                                   // 카페 차림은 보이는 방 기준으로 다시
+        }
+    }
+
     /// 매 프레임: 상자·미리보기를 공간 자리에 맞추고, 끄는 동안 모아 둔 바뀜을 0.15초마다 블록에 적용
     private func furnTick() {
         guard furnMode else { return }
         furnRoot.transform = spaceRoot.transform
         if let at = furnApplyAt, t >= at { furnApplyAt = nil; vox?.setEdits(furnEdits) }
+        updateFurnGuide()
+    }
+
+    /// 고치는 상자의 네 옆면에서 1.5m 안 가장 가까운 가구·벽까지 거리(줄 + cm 글자), 다른 가구·벽과 겹치면 상자를 빨갛게 + '겹침'.
+    /// 가구 = 알아낸 기둥(비운 곳 빼고) + 다른 넣은 상자. 바닥 평면에서 잼 (높이와 상관없이 놓을 자리가 맞닿는지)
+    private func updateFurnGuide() {
+        guard furnMode, let i = furnSel, i < furnEdits.adds.count, let L = layout, let v = vox else {
+            if guideBox != nil || !furnGuide.children.isEmpty { furnGuide.children.removeAll(); guideBox = nil }
+            return
+        }
+        let b = furnEdits.adds[i]
+        guard b != guideBox, t - guideAt > 0.1 else { return }
+        guideBox = b
+        guideAt = t
+        if furnGuide.parent == nil { furnRoot.addChild(furnGuide) }
+        furnGuide.children.removeAll()
+        let others = furnEdits.adds.enumerated().filter { $0.offset != i }.map(\.element)
+        /// 0 = 빈 곳, 1 = 가구, 2 = 벽(걸을 수 없는 곳)
+        func what(_ p: SIMD2<Float>) -> Int {
+            if !L.walkable(p) { return 2 }
+            if v.scanH(Int((p.x / Vox.size).rounded(.down)), Int((p.y / Vox.size).rounded(.down))) > 0.05 { return 1 }
+            for o in others where abs(p.x - o.cx) < o.w / 2 && abs(p.y - o.cz) < o.d / 2 { return 1 }
+            return 0
+        }
+        // 겹침: 상자 안쪽(가장자리 3cm 안) 5cm 간격
+        var overlap = false
+        var x = b.cx - b.w / 2 + 0.03
+        outer: while x <= b.cx + b.w / 2 - 0.03 {
+            var z = b.cz - b.d / 2 + 0.03
+            while z <= b.cz + b.d / 2 - 0.03 {
+                if what(SIMD2<Float>(x, z)) != 0 { overlap = true; break outer }
+                z += 0.05
+            }
+            x += 0.05
+        }
+        let y = L.floorY + max(0.04, min(b.h, 1.2) - 0.03)
+        func world(_ p: SIMD2<Float>) -> SIMD3<Float> { let f = L.flat(p); return SIMD3<Float>(f.x, y, f.y) }
+        // 네 옆면: (바깥 방향, 면 가운데, 면을 따라가는 방향, 면 반폭)
+        let sides: [(SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, Float)] = [
+            (SIMD2<Float>(1, 0), SIMD2<Float>(b.cx + b.w / 2, b.cz), SIMD2<Float>(0, 1), b.d / 2),
+            (SIMD2<Float>(-1, 0), SIMD2<Float>(b.cx - b.w / 2, b.cz), SIMD2<Float>(0, 1), b.d / 2),
+            (SIMD2<Float>(0, 1), SIMD2<Float>(b.cx, b.cz + b.d / 2), SIMD2<Float>(1, 0), b.w / 2),
+            (SIMD2<Float>(0, -1), SIMD2<Float>(b.cx, b.cz - b.d / 2), SIMD2<Float>(1, 0), b.w / 2)]
+        for (n, c, tdir, half) in sides {
+            let m = max(2, Int((2 * half / 0.1).rounded(.up)))
+            let offs = (0...m).map { -half + 0.02 + (2 * half - 0.04) * Float($0) / Float(m) }
+            var hit: (Float, Int, Float)? = nil              // (거리, 무엇, 면을 따라 닿은 자리)
+            var d: Float = 0
+            march: while d <= 1.5 {
+                for o in offs {
+                    let k = what(c + tdir * o + n * (d + 0.01))
+                    if k != 0 { hit = (d, k, o); break march }
+                }
+                d += 0.02
+            }
+            guard let h = hit, h.0 > 0.01 || !overlap else { continue }
+            let a = c + tdir * h.2, e = a + n * h.0
+            if h.0 > 0.015 { addGuideLine(world(a), world(e)) }
+            let cm = Int((h.0 * 100).rounded())
+            let label = h.0 < 0.025 ? (h.1 == 2 ? "벽에 붙음" : "붙음") : (h.1 == 2 ? "벽 \(cm)cm" : "\(cm)cm")
+            addGuideLabel(label, at: world(a + n * (h.0 / 2)) + SIMD3<Float>(0, 0.05, 0), warn: false)
+        }
+        if overlap {
+            let f = L.flat(SIMD2<Float>(b.cx, b.cz))
+            addGuideLabel("겹침", at: SIMD3<Float>(f.x, L.floorY + b.h + 0.1, f.y), warn: true)
+        }
+        if i < furnBoxes.count {
+            let col = overlap ? UIColor(red: 1, green: 0.25, blue: 0.2, alpha: 1) : UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
+            furnBoxes[i].model?.materials = [Self.furnMat(col, 0.55)]
+        }
+    }
+
+    private func addGuideLine(_ a: SIMD3<Float>, _ b: SIMD3<Float>) {
+        let len = simd_distance(a, b)
+        guard len > 0.005 else { return }
+        var m = UnlitMaterial(color: UIColor(red: 1, green: 1, blue: 1, alpha: 1))
+        m.writesDepth = false
+        let line = ModelEntity(mesh: .generateBox(width: len, height: 0.006, depth: 0.006), materials: [m])
+        line.position = (a + b) / 2
+        line.orientation = simd_quatf(from: SIMD3<Float>(1, 0, 0), to: (b - a) / len)
+        furnGuide.addChild(line)
+        for p in [a, b] {
+            let dot = ModelEntity(mesh: .generateSphere(radius: 0.009), materials: [m])
+            dot.position = p
+            furnGuide.addChild(dot)
+        }
+    }
+
+    private func addGuideLabel(_ s: String, at p: SIMD3<Float>, warn: Bool) {
+        let mesh: MeshResource
+        if let m = guideText[s] { mesh = m } else {
+            let m = MeshResource.generateText(s, extrusionDepth: 0.001, font: .systemFont(ofSize: 0.032, weight: .semibold))
+            guideText[s] = m
+            mesh = m
+        }
+        let holder = Entity()
+        holder.position = p
+        holder.components.set(BillboardComponent())
+        let ext = mesh.bounds.extents, ctr = mesh.bounds.center
+        var tm = UnlitMaterial(color: .white)
+        tm.blending = .transparent(opacity: .init(floatLiteral: 1))
+        tm.writesDepth = false
+        let text = ModelEntity(mesh: mesh, materials: [tm])
+        text.position = SIMD3<Float>(-ctr.x, -ctr.y, 0.002)
+        // 글자는 바탕 판 다음에 그림 (둘 다 깊이를 쓰지 않으므로 순서로)
+        let sg = ModelSortGroup(depthPass: nil)
+        text.components.set(ModelSortGroupComponent(group: sg, order: 1))
+        var pm = UnlitMaterial(color: warn ? UIColor(red: 0.75, green: 0.1, blue: 0.08, alpha: 1) : UIColor(white: 0.08, alpha: 1))
+        pm.blending = .transparent(opacity: .init(floatLiteral: 0.75))
+        pm.writesDepth = false
+        let plate = ModelEntity(mesh: .generatePlane(width: ext.x + 0.024, height: ext.y + 0.014, cornerRadius: 0.008), materials: [pm])
+        plate.components.set(ModelSortGroupComponent(group: sg, order: 0))
+        holder.addChild(plate)
+        holder.addChild(text)
+        furnGuide.addChild(holder)
     }
 
     /// 바뀐 가구를 블록(세계 쪽)에 적용하고 상자·미리보기를 다시 그림
@@ -2322,6 +2528,8 @@ final class ExploreSession {
             furnRoot.addChild(e)
             furnBoxes.append(e)
         }
+        guideBox = nil                                      // 상자를 다시 만들었음 → 거리 표시·겹침 색을 다시
+        guideAt = -9
     }
 
     /// 편집 시작: 고른 가구 하나만 고칠 수 있음 (완료·취소 전까지 다른 가구를 고르거나 끝낼 수 없음)
@@ -2521,10 +2729,7 @@ final class ExploreSession {
     // MARK: 탭
     /// 탭 하나: 열쇠·그림 버튼이면 바로 처리, 그 밖(탭 받는 상자)이면 0.4초 안에 또 오는지 기다림
     func tapped(_ e: Entity, at point: SIMD3<Float>? = nil, system: Bool = true) {
-        if system {
-            if t - lastHandTap < 0.5 { return }                    // 손 추적으로 이미 받은 같은 손짓
-            lastSysTap = t
-        }
+        if system && !claimSystemTap() { return }
         if furnMode { furnTap(e, point); return }
         var cur: Entity? = e
         while let c = cur {
@@ -2577,20 +2782,56 @@ final class ExploreSession {
                 return
             }
         }
-        // 싱글탭은 기다리지 않고 바로 반응 (탭이 먹혔는지 바로 보이게). 0.45초 안에 두 번째 탭이 오면
-        // 첫 탭이 한 일을 되돌리고 더블탭으로 처리
-        if let p = pendingTap, t - p <= 0.45, system || pendingSystem {
-            pendingTap = nil
-            if let s = beforeTap { hudMenu = s.0; hudUntil = s.1; themeOpen = s.2; hudShow = 0 }
-            beforeTap = nil
-            doubleTapped()
+        // 싱글·더블 가르기: 싱글탭은 0.45초 안에 두 번째 탭이 오지 않을 때 처리 (tapTick).
+        // 예전엔 싱글탭을 바로 처리하고 더블탭이면 되돌렸음 → 더블탭 때 메뉴판이 먼저 눈앞에 떴고, 두 번째 탭이 막 뜬 메뉴판 버튼
+        // ('현실로 돌아가기' 등)에 눌려 현실로 나가 버리기도 했음. 이제 더블탭이면 싱글탭 일은 아예 하지 않음
+        if let p = pendingTap, t - p <= 0.45 {
+            if system || pendingSystem {
+                pendingTap = nil
+                doubleTapped()
+            }
+            // 손 추적으로만 받은 탭 둘: 더블탭(현실 창)으로 치지 않고, 두 번째는 버림 (첫 탭의 싱글탭만 — 메뉴판이 열렸다 닫히지 않게)
         } else {
             pendingTap = t
             pendingSystem = system                                    // 손 추적으로만 받은 탭 둘로는 현실 창(더블탭)을 열지 않음
-            beforeTap = (hudMenu, hudUntil, themeOpen)
-            singleTapped()
         }
     }
+
+    /// 시스템 탭 하나를 손 추적 '놓기'와 짝지음. 같은 손짓을 손 추적 탭으로 이미 넣었으면 false (두 번 받지 않게).
+    /// 예전엔 '손 탭 뒤 0.5초 안의 시스템 탭은 모두 버림'이라, 더블탭의 첫 탭을 손 추적이 받으면 두 번째 시스템 탭이 버려져
+    /// 더블탭이 싱글탭 둘이 되거나 탭이 안 먹혔음 → 시간 간격이 아니라 손짓 하나하나로 짝지음
+    private func claimSystemTap() -> Bool {
+        if let k = pinchRel.lastIndex(where: { $0.state == 0 && abs(t - $0.t) < 0.2 }) {
+            pinchRel[k].state = 1
+            return true
+        }
+        // 손 추적 탭으로 이미 넣은 놓기가 가장 최근 손짓이면(그 뒤 새로 집은 적 없음) 같은 손짓 → 버림
+        if let k = pinchRel.lastIndex(where: { $0.state == 2 }), t - pinchRel[k].t < 0.6, max(pinchCloseAt[0], pinchCloseAt[1]) < pinchRel[k].t {
+            return false
+        }
+        sysTaps.append(t)                                           // 손 추적이 곧 놓기를 알아채면 그것과 짝지음
+        return true
+    }
+
+    /// 매 프레임: 시스템 탭과 짝짓지 못한 눈앞 손짓은 0.22초 뒤 손 탭으로 넣고, 기다리던 싱글탭은 0.45초가 지나면 처리
+    private func tapTick() {
+        for k in pinchRel.indices where pinchRel[k].state == 0 && t - pinchRel[k].t > 0.22 {
+            pinchRel[k].state = 2
+            if pinchRel[k].ok {
+                let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
+                tapped(tapCatcher, at: head + g * 2, system: false)
+            }
+        }
+        pinchRel.removeAll { t - $0.t > 1.5 }
+        sysTaps.removeAll { t - $0 > 0.5 }
+        if let p = pendingTap, t - p > 0.45 {
+            pendingTap = nil
+            if lastUITap < p - 0.05 { singleTapped() }              // 그 사이 안내판을 누른 탭이었으면 메뉴판을 건드리지 않음
+        }
+    }
+
+    /// 막 뜬 메뉴판의 버튼은 0.4초 동안 받지 않음 (메뉴판을 띄운 탭에 이어 바로 온 탭이 버튼에 눌리지 않게)
+    func menuReady() -> Bool { t - menuShownAt > 0.4 }
 
     /// 더블탭: 현실 창 열기/닫기 (닫힌 문 앞에서 저절로 열린 창도 닫을 수 있음)
     private func doubleTapped() {
@@ -2611,6 +2852,7 @@ final class ExploreSession {
         }
         guard !keyInView() else { return }
         hudMenu = true
+        menuShownAt = t
         themeOpen = false
         hudUntil = t + 4
         hudShow = 0                                                 // 새 자리에 바로 나타나게

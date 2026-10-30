@@ -314,6 +314,8 @@ final class VoxelWorld {
     private var editByChunk: [Int64: Set<Int64>] = [:]
     /// 손으로 넣은 상자 칸의 방 = 상자 가운데가 있는 방 (그 방 테마로 칠함). 옆 가구 덩어리와 섞어 정하지 않음
     private var editRoom: [Int64: Int] = [:]
+    /// 손으로 비운 칸 (가구 맞추기 거리 표시에서 알아낸 기둥을 뺄 때)
+    private var erased: Set<Int64> = []
     private(set) var changed = false
     var material: (Int, Int) -> RealityKit.Material = { _, _ in UnlitMaterial(color: .gray) }
     var sun: (Int) -> SIMD3<Float> = { _ in SIMD3<Float>(0, 1, 0) }
@@ -343,6 +345,7 @@ final class VoxelWorld {
     func setEdits(_ e: FurnEdits) {
         var nh: [Int64: UInt8] = [:]
         for r in e.erases { for k in Self.cells(r.x0, r.z0, r.x1, r.z1) { nh[k] = 0 } }
+        erased = Set(nh.keys)
         var nr: [Int64: Int] = [:]
         for b in e.adds {
             let h = UInt8(min(21, max(1, Int((b.h / Vox.size).rounded()))))
@@ -395,6 +398,20 @@ final class VoxelWorld {
         }
         let h = hist.max { $0.value != $1.value ? $0.value < $1.value : $0.key < $1.key }?.key ?? 4
         return (SIMD2<Float>(Float(lo.x), Float(lo.y)) * Vox.size, SIMD2<Float>(Float(hi.x + 1), Float(hi.y + 1)) * Vox.size, Float(h) * Vox.size)
+    }
+
+    /// 가구 맞추기 거리 표시용: 그 칸(평면 좌표 10cm 칸)의 '알아낸' 가구 높이(m) — 손으로 비운 칸은 0, 손으로 넣은 상자는 셈하지 않음
+    /// (넣은 상자는 가구 맞추기 쪽에서 상자 사각형으로 따로 셈 — 고치고 있는 상자 자신을 빼려고). 외톨이 기둥은 0 (shownH와 같은 규칙)
+    func scanH(_ u: Int, _ v: Int) -> Float {
+        let k = Vox.chunkKey(u, v)
+        if erased.contains(k) { return 0 }
+        guard let c = cols[k], c.shown else { return 0 }
+        var n = 0
+        for du in -1...1 { for dv in -1...1 where du != 0 || dv != 0 {
+            let nk = Vox.chunkKey(u + du, v + dv)
+            if let o = cols[nk], o.shown, !erased.contains(nk) { n += 1; if n >= 3 { return Float(c.h) * Vox.size } }
+        } }
+        return 0
     }
 
     /// 가구 맞추기 화면용: 알아낸 가구 기둥(손으로 넣은 상자 칸은 빼고)의 윗면·옆면 그물 (저장 좌표)

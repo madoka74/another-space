@@ -292,7 +292,9 @@ final class HomeCat {
                SIMD2<Float>(0, 0), SIMD2<Float>(1, 0), SIMD2<Float>(1, 1), SIMD2<Float>(0, 1))
         if let m = g.mesh("cat") { card.model = ModelComponent(mesh: m, materials: [UnlitMaterial(color: .clear)]) }
         card.name = "homecat"
-        card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.48, 0.42, 0.18]).offsetBy(translation: [0, 0.2, 0])]))
+        // 탭 판은 그림 판 두께만큼 얇게 (2cm): 예전 18cm 두께 상자는 앞면이 그림보다 9cm 앞에 있어, 앞발 곁의 털실 공을 집으려 해도
+        // 시선이 고양이 상자에 먼저 닿아 고양이 탭이 되고 공이 안 잡혔음 → 그림 판 자리 언저리의 장난감(둘레 9cm 구)이 먼저 잡힘
+        card.components.set(CollisionComponent(shapes: [ShapeResource.generateBox(size: [0.48, 0.42, 0.02]).offsetBy(translation: [0, 0.2, 0])]))
         card.components.set(InputTargetComponent())
         root.addChild(card)
         // 말풍선 판 (16cm)
