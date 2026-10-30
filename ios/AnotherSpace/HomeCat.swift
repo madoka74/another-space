@@ -1167,15 +1167,22 @@ final class HomeCat {
     }
     /// 앞발이 공에 닿는지: 옆모습 그림에서 앞발은 몸 가운데에서 보는 쪽으로 17cm 앞 (공 반지름 4.5cm + 발 크기 안)
     private func pawTouch(_ b: SIMD2<Float>) -> Bool {
-        simd_distance(pos + cardRight() * sideFor(b) * 0.17, b) < 0.12
+        // 공이 몸 바로 앞·아래(14cm 안)에 있어도 닿음 — 옆모습 앞발 자리만 보면, 좁은 틈에서 양옆 설 자리가 막혔을 때
+        // 공이 발치에 있어도 '닿지 않음'으로 포기하고 갸웃했음 (그 기준은 보는 사람 위치로 정해지는 좌우라 공간과 상관없음)
+        simd_distance(pos + cardRight() * sideFor(b) * 0.17, b) < 0.12 || simd_distance(pos, b) < 0.14
     }
     /// 앞발이 그 자리에 닿도록 몸이 설 자리: 공의 어느 쪽에 설지는 쫓기 시작할 때 한 번 정함(가는 동안 목표가 오락가락하지 않게), 막혔으면 한 번 반대쪽
     private var reachSide: Float?
     private var reachFlipped = false
-    private func pawSpot(_ b: SIMD2<Float>) -> SIMD2<Float> {
+    private func pawSpot(_ b: SIMD2<Float>, _ c: Ctx? = nil) -> SIMD2<Float> {
         let f = reachSide ?? sideFor(b)
         reachSide = f
-        return b - cardRight() * f * 0.17
+        let s = b - cardRight() * f * 0.17
+        guard let c, !c.free(s) else { return s }
+        // 그쪽 설 자리가 막힘(가구 곁·좁은 틈): 반대쪽, 그것도 막히면 공 바로 곁(몸 가운데로 닿음 — pawTouch)
+        let o = b + cardRight() * f * 0.17
+        if c.free(o) { reachSide = -f; return o }
+        return b
     }
 
     private func hitBall() {
@@ -1198,6 +1205,7 @@ final class HomeCat {
         if Int.random(in: 0...2) == 0 { chirp(-6) }
     }
 
+    private var heldGo = false
     private func stepChase(_ dt: Float, _ c: Ctx) {
         guard ball != nil else { start(.sit, 1); return }
         let v = ballPos - pos
@@ -1205,16 +1213,28 @@ final class HomeCat {
         running = d > 0.5
         if d > 0.001 { moveDir = v / d }
         if ballHeld {
-            // 손에 든 공을 노림: 60cm까지 다가와(가구는 돌아서) 엉덩이 씰룩. 더 못 다가가면 그 자리에서 씰룩
+            // 손에 든 공을 노림: 60cm까지 다가와(가구는 돌아서) 엉덩이 씰룩. 더 못 다가가면 그 자리에서 씰룩.
+            // 다가가기 시작은 80cm 넘게, 멈춤은 60cm 안 — 예전엔 60cm 한 값이라 손이 조금만 움직여도 걷기·씰룩 그림이 번갈아 번쩍였고,
+            // 공이 몸 위에 겹치면 좌우로 계속 돌아섰음 (20cm 안이면 방향 그대로)
             actT = 0
-            if d > 0.6, case .move(let np) = nav.step(from: pos, to: ballPos, reach: 0.58, speed: 1.3, dt, c) {
-                moveDir = simd_length(np - pos) > 1e-4 ? simd_normalize(np - pos) : moveDir
-                show(walkFrame(moveDir))
-                pos = np
-            } else {
-                show(loop(["cat_pounce0", "cat_pounce1"], fps: 6))
+            if d > 0.8 { heldGo = true } else if d < 0.6 { heldGo = false }
+            var walked = false
+            if heldGo {
+                switch nav.step(from: pos, to: ballPos, reach: 0.58, speed: 1.3, dt, c) {
+                case .move(let np):
+                    moveDir = simd_length(np - pos) > 1e-4 ? simd_normalize(np - pos) : moveDir
+                    show(walkFrame(moveDir))
+                    pos = np
+                    walked = true
+                case .hold:
+                    show(walkFrame(moveDir))
+                    walked = true
+                case .arrived, .blocked:
+                    heldGo = false
+                }
             }
-            faceToward(ballPos)
+            if !walked { show(loop(["cat_pounce0", "cat_pounce1"], fps: 6)) }
+            if d > 0.2 { faceToward(ballPos) }
             return
         }
         if ballAir != nil {
@@ -1239,7 +1259,7 @@ final class HomeCat {
         // 공까지 길을 찾아 돌아서 감 (공이 굴러가도 따라감). 더 다가갈 수 없으면: 가까우면 앞발을 길게 뻗어 쳐 내고, 멀면 포기하고 앉음
         let speed: Float = running ? 1.5 : 0.6
         // 몸 가운데가 아니라 앞발이 공에 닿는 자리(공 옆 17cm, 나에게 보이는 옆모습 기준)로 감
-        switch nav.step(from: pos, to: pawSpot(ballPos), reach: 0.05, far: 0.2, speed: speed, dt, c) {
+        switch nav.step(from: pos, to: pawSpot(ballPos, c), reach: 0.05, far: 0.2, speed: speed, dt, c) {
         case .move(let np):
             moveDir = simd_length(np - pos) > 1e-4 ? simd_normalize(np - pos) : moveDir
             show(walkFrame(moveDir))

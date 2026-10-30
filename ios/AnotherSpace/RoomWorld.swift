@@ -560,8 +560,17 @@ final class RoomWorld {
                     shared = true
                 }
                 let q = p - s.n * off
-                // 너머가 다른 세계 옆방이면 그 방 번호 (그 방에 있을 때 끌 울타리)
-                let toward = m > 0 && m != room.id && !groupIds.contains(m) ? m : 0
+                // 너머가 다른 세계 옆방이면 그 방 번호 (그 방에 있을 때 끌 울타리).
+                // 문 곁(문틀 옆)은 너머 칸이 문 자리라 방을 이 방·모름으로 잡기도 함 → 울타리 자리가 문 자리 30cm 안이면 그 문 건너편 방
+                // (문간을 지날 때 눈 바로 곁에 이 조각이 남아 크게 비쳤음)
+                var toward = m > 0 && m != room.id && !groupIds.contains(m) ? m : 0
+                if toward == 0 && !shared {
+                    let bq = p - s.n * (off + 0.04)
+                    for ds in L.doors where !ds.single && ds.zone(bq, margin: 0.3, side: 0.3) {
+                        let o = ds.roomA == room.id || groupIds.contains(ds.roomA) ? ds.roomB : ds.roomA
+                        if o != room.id && !groupIds.contains(o) { toward = o; break }
+                    }
+                }
                 samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0, toward: toward))
             }
         }

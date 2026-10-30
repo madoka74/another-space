@@ -719,6 +719,7 @@ final class ExploreSession {
     /// 몸(목 뒤)이 있는 방·몸이 서 있는 문 자리 (방 판정은 0.5초 늦게 바뀌므로 그 사이에도 몸이 있는 곳은 그려야 함)
     @ObservationIgnored private var bodyRoom = 0
     @ObservationIgnored private var bodyDoors: [Int] = []
+    @ObservationIgnored private var bodyNearDoors: [Int] = []
     /// 방마다 그만 그려도 되는 때 — 조건에서 빠진 뒤 0.8초 더 켜 둠 (문턱에서 켜고 끄기를 오가며 한 프레임씩 비지 않게)
     @ObservationIgnored private var shownUntil: [Int: Float] = [:]
     private func shownRooms() -> Set<Int> {
@@ -747,7 +748,8 @@ final class ExploreSession {
         // 내가 있는 방(지금 방·몸이 있는 방·몸이 선 문 양쪽 방): 다른 세계 방들이 이 방과 맞댄 벽 뒤에 세운 울타리는 이 방 자리에 있으므로 끔
         // (열린 열쇠 문 너머 옆방 포털에 내 곁의 그 울타리가 크게·엉뚱한 각도로 비쳤음 — RoomWorld.barrierToward)
         var here: Set<Int> = [current, bodyRoom]
-        if let L = layout { for i in bodyDoors where i < L.doors.count { here.insert(L.doors[i].roomA); here.insert(L.doors[i].roomB) } }
+        // 문간 35cm 안이면 그 문 양쪽 방 모두 (문간을 지나는 동안 양쪽 울타리 조각이 눈 바로 곁에 있음)
+        if let L = layout { for i in bodyNearDoors where i < L.doors.count { here.insert(L.doors[i].roomA); here.insert(L.doors[i].roomB) } }
         for (id, w) in worlds {
             let on = vis.contains(id)
             if w.local.isEnabled != on { w.local.isEnabled = on }
@@ -1360,6 +1362,7 @@ final class ExploreSession {
             let atDoor = L.doors.contains { $0.zone(pb, margin: 0.3) }
             bodyRoom = r
             bodyDoors = L.doors.indices.filter { L.doors[$0].inside(pb) }      // 문 자리 안 (닫힌 문 앞에선 켜지 않음 — 문짝 판 너머로 옆방이 비치지 않게)
+            bodyNearDoors = L.doors.indices.filter { L.doors[$0].zone(pb, margin: 0.35, side: 0.1) }      // 문간 35cm 안 (눈은 몸보다 앞서 문간에 들어감)
             outsideT = (r == 0 && !atDoor) ? outsideT + dt : 0          // 문 자리를 지나는 동안은 '방 밖'으로 치지 않음 (현실이 비치지 않게)
             handDoors(L, fit)
             updateDoors(dt, hs, bs, fit.dirToSaved(fwd), L)
@@ -1931,9 +1934,24 @@ final class ExploreSession {
     ///   정말 열렸다면 바라보는 동안 비전프로가 그물을 고쳐 보냄. 그대로라면 문은 닫혀 있는 것 (잘못 열림으로 안 것을 되돌림)
     private func closingEvidence(_ i: Int, _ ds: DoorSeg) -> Bool {
         if (coverFresh[i] ?? 0) > 0.55 { return true }
-        if let pa = planeAcrossAt[i], (t - pa) < 3, pa > (openedAt[i] ?? -100) + 1, (cover[i] ?? 0.5) > 0.45 { return true }
+        // 문 면(평면)이 지금 문 자리를 가로막고 있고(마지막 열림 뒤에 가로막은 것을 봄), 그물이 '문 자리가 비었다'고 하지 않으면 닫힘.
+        // 예전엔 '3초 안에 평면이 갱신됨 + 그물 45%'여야 해서: 가만히 있는 닫힌 문은 평면이 갱신되지 않고, 문짝 그물은 구멍이 많아
+        // 닫힘을 끝내 몰랐음 → 다른 테마 사이 닫힌 문에 열쇠 문이 나왔고, 열쇠로 연 뒤에야 닫힘을 알아 바로 현실 원이 떴음
+        if planeAcrossNow(i) && !meshSaysOpen(i) { return true }
         if (viewT[i] ?? 0) > 2.5 && coverNow(i, ds) > 0.55 { return true }
         return false
+    }
+
+    /// 문으로 분류된 평면이 지금 문 자리를 가로막고 있음 (마지막 열림 1초 뒤 넘어서 가로막은 것을 봤을 때만 — 열기 전의 평면 기록은 안 셈)
+    private func planeAcrossNow(_ i: Int) -> Bool {
+        guard let pa = planeAcrossAt[i], pa > (openedAt[i] ?? -100) + 1 else { return false }
+        return doorPlanes.values.contains { $0.0 == i && $0.1 }
+    }
+
+    /// 그물이 문 자리를 보고 '비었다'고 함 (그 문을 지나는 그물 기록이 있고 막힌 비율 30% 밑)
+    private func meshSaysOpen(_ i: Int) -> Bool {
+        guard let m = realHits[i], !m.isEmpty else { return false }
+        return (cover[i] ?? 0) < 0.3
     }
 
     /// hs: 눈(기기) 자리 — 시선 판정용, bs: 몸(목 뒤) 자리 — 문까지 거리·문 안에 섰는지·어느 쪽인지 판정용.
@@ -2038,7 +2056,8 @@ final class ExploreSession {
             else if same { shape = .open }
             else if prog != nil { shape = .opening }
             else if doorOpen.contains(i) { shape = .open }
-            else if near && !inside && !passed.contains(i) && fresh { shape = .key }
+            // 닫힘 증거가 들어와 굳히는 중(1초)이면 열쇠 문을 띄우지 않음 (곧 실제 문짝이 될 문에 열쇠 문이 잠깐 번쩍이지 않게)
+            else if near && !inside && !passed.contains(i) && fresh && closeSince[i] == nil { shape = .key }
             else { shape = .wall }
             if !same && near && !inside && !real && !fresh && !doorOpen.contains(i) && prog == nil { urgent = true }
 
@@ -2182,7 +2201,10 @@ final class ExploreSession {
             // 닫혀 있던 문의 막힌 비율이 가장 많던 때보다 15% 넘게 줄면(문짝이 움직이기 시작) 바로 열림
             if realClosed.contains(i) { coverPeak[i] = max(coverPeak[i] ?? 0, cv) }
             let dropped = realClosed.contains(i) && (coverPeak[i] ?? 0) > 0.55 && cv < (coverPeak[i] ?? 0) - 0.15
-            if realClosed.contains(i) && (cv < 0.45 || dropped) {
+            // 문 면이 지금 가로막고 있으면(평면이 닫힘을 말함) 그물 막힘이 낮다는 것만으로는 열지 않음 — 문짝 그물은 구멍이 많아
+            // 닫혀 있어도 45% 밑일 수 있음(닫힘↔열림이 번갈아 났음). 그때는 그물이 줄어듦(닫혀 있는 동안 가장 많던 때보다 15% 넘게)·거의 빔(15% 밑)일 때만
+            let lowOpen = planeAcrossNow(i) ? (cv < 0.15 || ((coverPeak[i] ?? 0) > 0.3 && cv < (coverPeak[i] ?? 0) - 0.15)) : cv < 0.45
+            if realClosed.contains(i) && (lowOpen || dropped) {
                 realOpen(i, hold: 5)
                 shelveHits(i)
                 coverFresh[i] = 0

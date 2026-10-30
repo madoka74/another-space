@@ -620,16 +620,22 @@ final class HomeDog {
     }
     /// 입이 막대에 닿는지: 옆모습 그림에서 입은 몸 가운데에서 보는 쪽으로 22cm 앞
     private func mouthTouch(_ b: SIMD2<Float>, reach: Float = 0.14) -> Bool {
-        simd_distance(pos + cardRight() * sideFor(b) * 0.22, b) < reach
+        // 막대가 몸 바로 앞·아래(발치)에 있어도 닿음 — 옆모습 입 자리만 보면 좁은 틈에서 발치의 막대를 '닿지 않음'으로 포기했음 (HomeCat.pawTouch)
+        simd_distance(pos + cardRight() * sideFor(b) * 0.22, b) < reach || simd_distance(pos, b) < reach + 0.04
     }
     /// 입이 그 자리에 닿도록 몸이 설 자리: 막대의 어느 쪽에 설지는 가지러 가기 시작할 때 한 번 정함 (가는 동안 좌우가 바뀌어 목표가 오락가락하지 않게).
     /// 그쪽이 막혔으면 한 번 반대쪽으로
     private var reachSide: Float?
     private var reachFlipped = false
-    private func mouthSpot(_ b: SIMD2<Float>) -> SIMD2<Float> {
+    private func mouthSpot(_ b: SIMD2<Float>, _ c: Ctx? = nil) -> SIMD2<Float> {
         let f = reachSide ?? sideFor(b)
         reachSide = f
-        return b - cardRight() * f * 0.22
+        let s = b - cardRight() * f * 0.22
+        guard let c, !c.free(s) else { return s }
+        // 그쪽 설 자리가 막힘: 반대쪽, 그것도 막히면 막대 바로 곁 (몸 가운데로 닿음 — mouthTouch)
+        let o = b + cardRight() * f * 0.22
+        if c.free(o) { reachSide = -f; return o }
+        return b
     }
 
     private func cardRight() -> SIMD2<Float> {
@@ -883,14 +889,25 @@ final class HomeDog {
 
     /// 막대를 든 나를 기다림: 내 앞 80cm 쯤에 와서(가구는 돌아서) 놀자 자세로 들썩, 가끔 멍.
     /// 더 다가갈 수 없으면 그 자리에서 놀자 자세 (예전엔 곧장만 가다 가구에 막히면 그 자리에서 발만 굴렀음)
+    private var waitSpot: SIMD2<Float>?
+    private var waitFrom = SIMD2<Float>(0, 0)
+    private var waitFwd = SIMD2<Float>(0, 1)
+    private var waitGo = false
     private func stepWait(_ dt: Float, _ c: Ctx) {
         guard stickHeld else { start(.sit, 1); return }
         let me = SIMD2<Float>(c.head.x, c.head.z)
-        var target = me + c.fwd * 0.85
-        if !c.free(target) { target = viewSpot(c, near: 0.9) ?? pos }
+        // 기다릴 자리는 내가 40cm 넘게 움직이거나 크게 돌아설 때만 다시 정함 — 매 화면 다시 고르면(막힌 곳이면 viewSpot) 자리가 튀어
+        // 걷기·놀자 자세가 번갈아 번쩍였음. 걷기 시작은 30cm 넘게 떨어질 때, 멈춤은 12cm 안 (경계에서 오락가락하지 않게)
+        if waitSpot == nil || simd_distance(me, waitFrom) > 0.4 || simd_dot(c.fwd, waitFwd) < 0.8 || !c.free(waitSpot!) {
+            var tg = me + c.fwd * 0.85
+            if !c.free(tg) { tg = viewSpot(c, near: 0.9) ?? pos }
+            waitSpot = tg; waitFrom = me; waitFwd = c.fwd
+        }
+        let target = waitSpot ?? pos
         let d = simd_distance(target, pos)
+        if d > 0.3 { waitGo = true } else if d < 0.12 { waitGo = false }
         var walking = false
-        if d > 0.15 {
+        if waitGo {
             running = d > 0.8
             switch nav.step(from: pos, to: target, reach: 0.12, speed: running ? 1.6 : 0.8, dt, c) {
             case .move(let np):
@@ -900,7 +917,7 @@ final class HomeDog {
             case .hold:
                 walking = true
             case .arrived, .blocked:
-                break
+                waitSpot = pos; waitGo = false          // 더 못 가면 이 자리에서 기다림 (다시 가려다 막히기를 되풀이하지 않게)
             }
         }
         if walking {
@@ -908,7 +925,9 @@ final class HomeDog {
             jingle(dt)
             faceToward(pos + moveDir)
         } else {
-            faceToward(SIMD2<Float>(heldAt.x, heldAt.z))
+            // 든 막대가 몸 위(20cm 안)에 겹쳐 있으면 방향을 바꾸지 않음 — 손이 조금만 움직여도 좌우로 번쩍 돌아섰음
+            let hp = SIMD2<Float>(heldAt.x, heldAt.z)
+            if simd_distance(hp, pos) > 0.2 { faceToward(hp) }
             let k = actT.truncatingRemainder(dividingBy: 2.4)
             show(k < 1.6 ? loop(["dog_bow0", "dog_bow1"], fps: 4) : loop(["dog_fhappy", "dog_fsit1"], fps: 4))
             panting = 2
@@ -938,7 +957,7 @@ final class HomeDog {
         }
         if actT > actDur { start(.sit, 2); return }
         // 몸 가운데가 아니라 입이 막대에 닿는 자리(막대 옆 22cm, 나에게 보이는 옆모습 기준)로 감
-        switch nav.step(from: pos, to: mouthSpot(target), reach: 0.05, far: 0.22, speed: 1.9, dt, c) {
+        switch nav.step(from: pos, to: mouthSpot(target, c), reach: 0.05, far: 0.22, speed: 1.9, dt, c) {
         case .move(let np):
             if simd_length(np - pos) > 1e-4 { moveDir = simd_normalize(np - pos) }
             pos = np

@@ -229,49 +229,87 @@ final class ValleyCreek {
         // 나가는 곳: 처음 정한 곳이 아직 물과 닿아 있으면 그대로 (벽 둑을 비운 자리·바깥 물길과 어긋나지 않게), 아니면
         // 이 방 벽(바깥벽 우선)을 30cm마다 훑어, 벽 50cm 안쪽에 물이 닿아 있는 곳 중 들어온 곳에서 가장 먼 곳 — 보통 맞은편의 넓은 쪽.
         // (v0.5.21은 '벽 너머가 트인 곳'을 크게 쳐서 들어온 곳 옆(서쪽)을 고르기도 했음 → 거리를 가장 크게 침)
+        // 물에서 빈 바닥을 따라 닿을 수 있는 칸 (물길을 새로 팔 수 있는 곳): 가구에 막혀 물이 그 벽까지 바로 닿지 않아도
+        // 가구 사이 빈 바닥으로 물길을 내어 나가는 곳과 잇기 위해 (예전엔 '벽 50cm 안에 이미 물이 있는 곳'만 나가는 곳이 될 수 있어,
+        // 가구가 조금만 달라져도 나가는 곳이 하나도 없거나, 처음 정한 나가는 곳과 물이 끊겼음)
+        var par = [Int](repeating: -2, count: nu * nv)        // -2 못 닿음, -1 물(시작), 그 밖 = 앞 칸
+        var bq: [Int] = []
+        for k in waterCells where dIn[k].isFinite { par[k] = -1; bq.append(k) }
+        var bi = 0
+        while bi < bq.count {
+            let k = bq[bi]; bi += 1
+            let i = k % nu, j = k / nu
+            for (di, dj) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+                let a = i + di, b = j + dj
+                guard a >= 0, b >= 0, a < nu, b < nv else { continue }
+                let n = b * nu + a
+                if free[n] && par[n] == -2 { par[n] = k; bq.append(n) }
+            }
+        }
+        /// 벽 점 q 에서 r 안의 닿을 수 있는 칸 중 가장 가까운 것
+        func reach(_ q: SIMD2<Float>, _ r: Float) -> Int {
+            var best = -1, bd = r
+            for k in bq {
+                let d = simd_distance(cellP(k), q)
+                if d < bd { bd = d; best = k }
+            }
+            return best
+        }
+        /// 그 칸에서 물까지 물길을 팜
+        func dig(_ k0: Int) {
+            var c = k0
+            while c >= 0 {
+                if !water[c] { water[c] = true; waterCells.append(c) }
+                c = par[c]
+            }
+        }
         var exitCell = -1
-        if let x = exitPt, let k = waterCells.filter({ dIn[$0].isFinite }).min(by: { simd_distance(cellP($0), x.0) < simd_distance(cellP($1), x.0) }),
-           simd_distance(cellP(k), x.0) < 0.8 {
-            exitCell = k
+        if let x = exitPt {
+            // 처음 정한 나가는 곳은 그대로 (바깥 물길·둑을 비운 자리가 이미 그곳에 있음) — 가구가 바뀌어도 물길을 다시 내어 이음
+            let k = reach(x.0, 0.9)
+            if k >= 0 { dig(k); exitCell = k }
         } else {
-            exitPt = nil
             let ep = entry?.0 ?? cellP(start)
-            var best: (SIMD2<Float>, SIMD2<Float>, Int, Float, Float)? = nil        // 벽 점, 안쪽 방향, 물 칸, 점수, 트인 거리
-            // 나가는 곳은 들어온 곳과 떨어진 다른 쪽이어야: 방의 긴 길이(span)의 45% 넘게 떨어지고, 들어온 벽과 같은 쪽(같은 방향의 벽)이면 60% 넘게.
-            // 그런 곳이 없으면 나가는 물길 없이 방 안에서 고이게 (예전엔 좁은 방에서 들어온 곳 바로 옆 1.5m만 넘으면 돼,
-            // 물이 들어온 쪽 벽으로 도로 나가는 것처럼 보였음)
             var lo = SIMD2<Float>(repeating: .greatestFiniteMagnitude), hi = -lo
             for r in L.rects(roomId) { lo = simd_min(lo, r.0); hi = simd_max(hi, r.1) }
             let span = lo.x < hi.x ? max(hi.x - lo.x, hi.y - lo.y) : 0
-            for s in L.walls where s.room == roomId {
-                let ab = s.b - s.a
-                let len = simd_length(ab)
-                guard len > 0.7 else { continue }
-                var k: Float = 0.35
-                while k <= len - 0.35 + 1e-3 {
-                    let q = s.a + ab / len * k
-                    let mid: Float = 0.25 * min(k, len - k)
-                    k += 0.3
-                    if L.doors.contains(where: { $0.zone(q, margin: 0.6) }) { continue }
-                    if let e = entry {
-                        let dd = simd_distance(q, e.0)
-                        if dd < max(1.5, span * 0.45) { continue }
-                        if simd_dot(s.n, e.1) > 0.7 && dd < span * 0.6 { continue }
+            // 나가는 곳은 들어온 곳과 떨어진 다른 쪽: 방의 긴 길이(span)의 45% 넘게, 들어온 벽과 같은 방향의 벽이면 60% 넘게.
+            // 그런 곳이 없으면(좁은 방·가구로 막힘) 조건을 조금씩 풀어서라도 하나는 냄 (마지막엔 들어온 곳에서 0.8m 넘게만)
+            for tier in 0..<3 where exitPt == nil {
+                var best: (SIMD2<Float>, SIMD2<Float>, Int, Float, Float)? = nil        // 벽 점, 안쪽 방향, 닿는 칸, 점수, 트인 거리
+                for s in L.walls where s.room == roomId {
+                    let ab = s.b - s.a
+                    let len = simd_length(ab)
+                    guard len > 0.7 else { continue }
+                    var k: Float = 0.35
+                    while k <= len - 0.35 + 1e-3 {
+                        let q = s.a + ab / len * k
+                        let mid: Float = 0.25 * min(k, len - k)
+                        k += 0.3
+                        if L.doors.contains(where: { $0.zone(q, margin: 0.6) }) { continue }
+                        if let e = entry {
+                            let dd = simd_distance(q, e.0)
+                            switch tier {
+                            case 0:
+                                if dd < max(1.5, span * 0.45) { continue }
+                                if simd_dot(s.n, e.1) > 0.7 && dd < span * 0.6 { continue }
+                            case 1:
+                                if dd < max(1.2, span * 0.3) { continue }
+                            default:
+                                if dd < 0.8 { continue }
+                            }
+                        }
+                        let wk = reach(q, 0.5)
+                        guard wk >= 0 else { continue }
+                        let run = openRun(q, s.n)
+                        let far: Float = simd_distance(q, ep)
+                        let bonus: Float = (s.inner ? 0 : 0.8) + 0.05 * min(run, 20)
+                        let sc: Float = far + bonus + mid - (water[wk] ? 0 : 0.5)       // 물길을 새로 파야 하는 곳은 조금 덜
+                        if best == nil || sc > best!.3 { best = (q, s.n, wk, sc, run) }
                     }
-                    var wk = -1, wd: Float = 0.5
-                    for c in waterCells where dIn[c].isFinite {
-                        let d = simd_distance(cellP(c), q)
-                        if d < wd { wd = d; wk = c }
-                    }
-                    guard wk >= 0 else { continue }
-                    let run = openRun(q, s.n)
-                    let far: Float = simd_distance(q, ep)
-                    let bonus: Float = (s.inner ? 0 : 0.8) + 0.05 * min(run, 20)
-                    let sc: Float = far + bonus + mid
-                    if best == nil || sc > best!.3 { best = (q, s.n, wk, sc, run) }
                 }
+                if let b = best { exitPt = (b.0, b.1); exitCell = b.2; exitRun = max(12, b.4); dig(b.2) }
             }
-            if let b = best { exitPt = (b.0, b.1); exitCell = b.2; exitRun = max(12, b.4) }
         }
         if let x = exitPt, exitCell >= 0 { carve(from: exitCell, to: x.0 + x.1 * 0.03) }
         // 흐름: 나가는 곳까지 물길 거리(d1)가 줄어드는 쪽 — 들어온 곳에서 나가는 곳으로, 옆 웅덩이 물은 큰 물줄기 쪽으로 모였다 나감

@@ -36,6 +36,8 @@ final class JellySea {
         var inside = true
         var up = SIMD3<Float>(0, 1, 0)
         var startle: Float = 0           // 손에 닿아 놀란 뒤 남은 시간 (그동안은 다시 놀라지 않음)
+        var escape: SIMD3<Float>?        // 가구 속에 들어 있을 때 빠져나갈 가장 가까운 빈 자리
+        var escapeAt: Float = -9         // 빈 자리를 마지막으로 찾은 때 (못 찾으면 1초 뒤 다시)
     }
 
     private var jellies: [Jelly] = []
@@ -126,6 +128,23 @@ final class JellySea {
             for o in offs where floorY + fh(SIMD2<Float>(p.x, p.z) + o) + 0.6 > p.y { return false }      // 갓 아래 촉수(약 50cm)까지 여유
         }
         return true
+    }
+
+    /// 지금 자리에서 가장 가까운 빈 자리 (같은 높이 둘레 2.5m 안, 15cm 간격 고리) — 가구 속에 들어 있을 때 빠져나갈 곳
+    private func nearestFree(_ p: SIMD3<Float>) -> SIMD3<Float>? {
+        var r: Float = 0.15
+        while r <= 2.5 {
+            let n = max(8, Int(r * 40))
+            for k in 0..<n {
+                let a = Float(k) / Float(n) * 2 * .pi
+                for y in [p.y, (lo + hi) / 2] {
+                    let q = SIMD3<Float>(p.x + cos(a) * r, min(hi, max(lo, y)), p.z + sin(a) * r)
+                    if insideOK(q) { return q }
+                }
+            }
+            r += 0.15
+        }
+        return nil
     }
 
     private func insideSpot<G: RandomNumberGenerator>(_ g: inout G) -> SIMD3<Float>? {
@@ -387,7 +406,30 @@ final class JellySea {
             j.vel += (want - j.vel) * min(1, dt * 0.9)
             var np = j.pos + j.vel * dt
             if j.inside {
-                if !insideOK(np) { j.vel.x *= -0.4; j.vel.z *= -0.4; np.x = j.pos.x; np.z = j.pos.z; j.retarget = 0 }
+                if insideOK(j.pos) {
+                    j.escape = nil
+                    // 빈 자리에서 가구·벽·문간으로 들어가려 하면 가볍게 튕겨 나옴 (반대쪽으로 밀리고 새 목표)
+                    if !insideOK(np) {
+                        j.vel.x *= -0.6; j.vel.z *= -0.6
+                        np.x = j.pos.x + j.vel.x * dt; np.z = j.pos.z + j.vel.z * dt
+                        if !insideOK(np) { np.x = j.pos.x; np.z = j.pos.z }
+                        j.retarget = 0
+                    }
+                } else {
+                    // 이미 가구 속(가구가 나중에 보였거나 높아짐, 처음 자리가 가구 위): 예전엔 모든 움직임을 막아 그 속에 계속 머묾 →
+                    // 가장 가까운 빈 자리로 곧장 헤엄쳐 나옴 (나오는 동안은 막지 않음)
+                    if (j.escape == nil || !insideOK(j.escape!)) && t - j.escapeAt > 1 { j.escapeAt = t; j.escape = nearestFree(j.pos) }
+                    if let es = j.escape {
+                        let d = es - j.pos
+                        let l = simd_length(d)
+                        if l > 0.001 {
+                            j.vel = d / l * min(0.25, l / max(dt, 0.001))
+                            np = j.pos + j.vel * dt
+                        }
+                        j.target = es
+                        j.retarget = 4
+                    }
+                }
                 if np.y < lo || np.y > hi { j.vel.y *= -0.3 }
                 np.y = min(hi, max(lo, np.y))
             } else if nearHouse(np) {
