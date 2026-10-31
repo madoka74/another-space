@@ -260,7 +260,11 @@ enum VoxStore {
 /// 손으로 고친 가구 (탐험 중 '가구 맞추기'): 스캔·그물로 알아낸 기둥보다 늘 먼저 따름.
 /// - erases: 비운 곳 (그 안의 알아낸 기둥은 없는 것으로) / adds: 넣은 상자 (그 안은 그 높이의 가구). 평면 좌표(m), 벽과 나란함
 /// furni.json 에 저장 (다시 스캔하면 지움)
-struct FurnBox: Codable, Equatable { var cx: Float; var cz: Float; var w: Float; var d: Float; var h: Float }
+struct FurnBox: Codable, Equatable {
+    var cx: Float; var cz: Float; var w: Float; var d: Float; var h: Float
+    var y: Float? = nil                 // 밑면 높이(바닥에서 m) — 다른 가구 위에 올려 둔 상자. 예전 파일엔 없음(바닥)
+    var base: Float { y ?? 0 }
+}
 struct FurnRect: Codable, Equatable { var x0: Float; var z0: Float; var x1: Float; var z1: Float }
 struct FurnEdits: Codable, Equatable {
     var adds: [FurnBox] = []
@@ -348,7 +352,7 @@ final class VoxelWorld {
         erased = Set(nh.keys)
         var nr: [Int64: Int] = [:]
         for b in e.adds {
-            let h = UInt8(min(21, max(1, Int((b.h / Vox.size).rounded()))))
+            let h = UInt8(min(25, max(1, Int(((b.base + b.h) / Vox.size).rounded()))))      // 위에 올려 둔 상자는 밑면 높이까지 더한 윗면
             let c = L.flat(SIMD2<Float>(b.cx, b.cz))
             var room = L.at(x: c.x, z: c.y).room
             if room == 0 { room = L.roomNear(x: c.x, z: c.y, radius: 0.8) }

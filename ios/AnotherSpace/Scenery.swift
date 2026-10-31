@@ -44,6 +44,8 @@ final class Scenery {
     private var planeSound: Entity?
     private var planeSoundAt: Float = 0
     private var plumes: [SmokePlume] = []
+    /// 캠핑장 바깥 모닥불 자리 (블랭키씨가 곁에 앉음)
+    private(set) var fireSpot: SIMD3<Float>?
     private var boats: [(Entity, SIMD3<Float>, Float, Float, Float)] = []     // 배, 가운데, 각도, 반지름, 각속도
     private var blinkers: [(ModelEntity, Float)] = []                       // 깜빡이는 불빛, 주기
     private var flames: [(Entity, Float)] = []                              // 흔들리는 불빛 (벽난로)
@@ -665,6 +667,7 @@ final class Scenery {
             let p = ring(R + Float.random(in: 5...10, using: &g), Float.random(in: 0...(2 * .pi), using: &g))
             guard free(p, 1.5) else { continue }
             let base = SIMD3<Float>(p.x, floorY, p.z)
+            fireSpot = base
             var fire = ParticleEmitterComponent()
             fire.mainEmitter.image = Tex.particle("smoke_puff")      // 기본 동그라미(둥근 원반) 대신 부드러운 그림
             fire.emitterShape = .sphere

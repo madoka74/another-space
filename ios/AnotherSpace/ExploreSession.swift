@@ -477,6 +477,9 @@ final class ExploreSession {
     @ObservationIgnored private var dog: HomeDog?
     @ObservationIgnored private var dogLook: LookMode?
     @ObservationIgnored private var catLook: LookMode?
+    // 블랭키씨 (방 안 — 지금 방 하나에 1명)
+    @ObservationIgnored private var blankyIn: BlankyIndoor?
+    @ObservationIgnored private var blankySeats: (room: Int, at: Float, list: [(SIMD2<Float>, SIMD2<Float>, Float)]) = (0, -100, [])
     @ObservationIgnored private var stillT: Float = 0
     @ObservationIgnored private var handPts: [SIMD3<Float>] = []        // 손바닥 가운데 (저장 좌표)
 
@@ -1518,6 +1521,8 @@ final class ExploreSession {
         diagMark("고양이")
         dogTick(dt)
         diagMark("강아지")
+        blankyTick(dt)
+        diagMark("블랭키씨")
         themeFeatures(dt)
         diagMark("테마")
     }
@@ -1741,6 +1746,94 @@ final class ExploreSession {
                               ceil: L.ceil[min(255, max(1, current))])
         g.tick(dt, ctx)
         if g.done { dog = nil }
+    }
+
+    // MARK: 블랭키씨 (방 안)
+    /// 지금 방이 카페·도시·전시관이면 그 방에 블랭키씨 1명 (Blanky.swift). 방·장소·표시 방식이 바뀌면 새로
+    private func blankyTick(_ dt: Float) {
+        guard let f = fit, let L = layout, let d = data else { return }
+        let rm = d.rec.room(current)
+        let here = ready && introDone && fade > 0.5 && ["cafe", "city", "gallery"].contains(rm?.place ?? "")
+        if let b = blankyIn, !here || b.roomId != current || b.place != rm?.place || b.look != rm?.lookMode {
+            b.remove()
+            blankyIn = nil
+        }
+        guard here, let rm else { return }
+        let rects = L.rects(current)
+        if blankyIn == nil {
+            let area = rects.reduce(Float(0)) { $0 + ($1.1.x - $1.0.x) * ($1.1.y - $1.0.y) }
+            let b = Tex.with(rm.lookMode) {
+                BlankyIndoor(roomId: rm.id, place: rm.place, look: rm.lookMode, tint: worlds[rm.id]?.tint ?? SIMD3<Float>(1, 1, 1),
+                             floorY: L.floorY, ceil: rm.ceil, area: area, seed: UInt64(rm.id * 3301 + Int(t * 10) % 997 + 7))
+            }
+            spaceRoot.addChild(b.root)
+            if furnHidden { b.root.isEnabled = false; furnHiddenList.append(b.root) }
+            blankyIn = b
+        }
+        guard let b = blankyIn else { return }
+        let hs = f.toSaved(head)
+        var fw = f.dirToSaved(fwd)
+        let gaze = simd_length(fw) > 0.01 ? simd_normalize(fw) : SIMD3<Float>(0, 0, -1)
+        fw.y = 0
+        let fwd2 = simd_length(fw) > 0.01 ? simd_normalize(SIMD2<Float>(fw.x, fw.z)) : SIMD2<Float>(0, -1)
+        let me: Set<Int> = [current]
+        let v = vox
+        let cur = current
+        let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
+                              free: { [unowned self] p in self.catFree(p, L, me, r: 0.24, wallR: 0.2) },
+                              pass: { [unowned self] p in self.catFree(p, L, me, r: 0.2, wallR: 0.16, swing: false) },
+                              top: { p in v?.flatTop(L.plane(p.x, p.y)) },
+                              height: { p in v?.heightAt(L.plane(p.x, p.y)) ?? 0 },
+                              room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },
+                              ceil: L.ceil[min(255, max(1, current))])
+        // 카페 앉을 자리: 나타나기 전에만 5초마다 다시 찾음 (탐험하며 가구가 더 보임)
+        if rm.place == "cafe" && !b.placed && (blankySeats.room != current || t - blankySeats.at > 5) {
+            blankySeats = (current, t, blankySeatSpots(L))
+        }
+        var arts: [(SIMD3<Float>, SIMD3<Float>)] = []
+        if rm.place == "gallery", let w = worlds[current] { arts = w.hungArts.map { ($0.center, $0.normal) } }
+        b.tick(dt, ctx, seats: rm.place == "cafe" ? blankySeats.list : [], sample: {
+            let total = rects.reduce(Float(0)) { $0 + ($1.1.x - $1.0.x) * ($1.1.y - $1.0.y) }
+            guard total > 0 else { return nil }
+            var x = Float.random(in: 0..<total)
+            for r in rects {
+                let a = (r.1.x - r.0.x) * (r.1.y - r.0.y)
+                if x <= a { return L.flat(SIMD2<Float>(Float.random(in: r.0.x...max(r.0.x, r.1.x)), Float.random(in: r.0.y...max(r.0.y, r.1.y)))) }
+                x -= a
+            }
+            return nil
+        }, arts: arts)
+    }
+
+    /// 카페에서 앉을 만한 자리: 평평한 가구 윗면(35~62cm, flatTop) 가운데, 한쪽 앞 25~55cm가 빈 바닥(다리 둘 곳)이고 그 바닥이 이 방 안.
+    /// (저장 좌표 xz, 바라보는 쪽, 앉는 면 높이)
+    private func blankySeatSpots(_ L: Layout) -> [(SIMD2<Float>, SIMD2<Float>, Float)] {
+        guard let v = vox else { return [] }
+        var out: [(SIMD2<Float>, SIMD2<Float>, Float)] = []
+        for (lo, hi) in L.rects(current) {
+            var x = lo.x + 0.05
+            while x < hi.x {
+                var z = lo.y + 0.05
+                while z < hi.y {
+                    let pp = SIMD2<Float>(x, z)
+                    z += 0.1
+                    guard let h = v.flatTop(pp), h >= 0.35, h <= 0.62 else { continue }
+                    for k in 0..<8 {
+                        let a = Float(k) / 8 * 2 * .pi
+                        let dd = SIMD2<Float>(cos(a), sin(a))
+                        guard v.heightAt(pp + dd * 0.25) < 0.04, v.heightAt(pp + dd * 0.4) < 0.04, v.heightAt(pp + dd * 0.55) < 0.04,
+                              v.flatTop(pp - dd * 0.1) != nil else { continue }
+                        let s = L.flat(pp), fpt = L.flat(pp + dd * 0.4)
+                        let at = L.at(x: fpt.x, z: fpt.y)
+                        guard at.room == current, at.wall > 0.2 else { continue }
+                        let dir = L.flat(pp + dd) - s
+                        out.append((s, simd_normalize(dir), h))
+                    }
+                }
+                x += 0.1
+            }
+        }
+        return out
     }
 
     // MARK: [진단용 — 원인 확인 뒤 뺄 것]
@@ -2173,7 +2266,7 @@ final class ExploreSession {
             let panelsOn = shape == .wall || shape == .key || (shape == .opening && (prog ?? 1) < 0.4)
             if !panelsOn && shape != .leaf { opened.insert(i) }
             for rid in [ds.roomA, ds.roomB] {
-                for e in worlds[rid]?.doorPanels[i] ?? [] where e.isEnabled != panelsOn { e.isEnabled = panelsOn }
+                worlds[rid]?.setDoorPanel(i, panelsOn)
             }
             let leafOn = shape == .leaf
             if let lf = worlds[ds.roomA]?.doorLeaf[i], lf.isEnabled != leafOn { lf.isEnabled = leafOn }
@@ -2211,6 +2304,7 @@ final class ExploreSession {
                 Self.pose(v, prog: rid == showRoom ? prog : nil, t: t)
             }
         }
+        for w in worlds.values { w.flushDoorPortal() }               // 바뀐 문 판을 벽 포털 그물에 한 번에 반영
         doorUrgent = urgent
         solidDoors = solid
         openDoorSet = opened
@@ -2484,6 +2578,7 @@ final class ExploreSession {
         if let c = cat { list.append(c.root); list.append(c.ballRoot) }
         if let g = dog { list.append(g.root); list.append(g.propRoot) }
         for (_, c) in cafeSets { list.append(c.1.root) }
+        if let b = blankyIn { list.append(b.root) }
         if hide {
             for e in list where e.isEnabled { e.isEnabled = false; furnHiddenList.append(e) }
         } else {
@@ -2515,11 +2610,12 @@ final class ExploreSession {
         if furnGuide.parent == nil { furnRoot.addChild(furnGuide) }
         furnGuide.children.removeAll()
         let others = furnEdits.adds.enumerated().filter { $0.offset != i }.map(\.element)
-        /// 0 = 빈 곳, 1 = 가구, 2 = 벽(걸을 수 없는 곳)
+        let bb = b.base, bt = b.base + b.h
+        /// 0 = 빈 곳, 1 = 가구, 2 = 벽(걸을 수 없는 곳). 가구 위에 올린 상자는 그 밑면 아래의 가구(받침)는 걸리지 않음
         func what(_ p: SIMD2<Float>) -> Int {
             if !L.walkable(p) { return 2 }
-            if v.scanH(Int((p.x / Vox.size).rounded(.down)), Int((p.y / Vox.size).rounded(.down))) > 0.05 { return 1 }
-            for o in others where abs(p.x - o.cx) < o.w / 2 && abs(p.y - o.cz) < o.d / 2 { return 1 }
+            if v.scanH(Int((p.x / Vox.size).rounded(.down)), Int((p.y / Vox.size).rounded(.down))) > bb + 0.02 { return 1 }
+            for o in others where abs(p.x - o.cx) < o.w / 2 && abs(p.y - o.cz) < o.d / 2 && o.base + o.h > bb + 0.02 && o.base < bt - 0.02 { return 1 }
             return 0
         }
         // 겹침: 상자 안쪽(가장자리 3cm 안) 5cm 간격
@@ -2533,7 +2629,7 @@ final class ExploreSession {
             }
             x += 0.05
         }
-        let y = L.floorY + max(0.04, min(b.h, 1.2) - 0.03)
+        let y = L.floorY + bb + max(0.04, min(b.h, 1.2) - 0.03)
         func world(_ p: SIMD2<Float>) -> SIMD3<Float> { let f = L.flat(p); return SIMD3<Float>(f.x, y, f.y) }
         // 네 옆면: (바깥 방향, 면 가운데, 면을 따라가는 방향, 면 반폭)
         let sides: [(SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, Float)] = [
@@ -2562,7 +2658,7 @@ final class ExploreSession {
         }
         if overlap {
             let f = L.flat(SIMD2<Float>(b.cx, b.cz))
-            addGuideLabel("겹침", at: SIMD3<Float>(f.x, L.floorY + b.h + 0.1, f.y), warn: true)
+            addGuideLabel("겹침", at: SIMD3<Float>(f.x, L.floorY + bt + 0.1, f.y), warn: true)
         }
         if i < furnBoxes.count {
             let col = overlap ? UIColor(red: 1, green: 0.25, blue: 0.2, alpha: 1) : UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1)
@@ -2633,7 +2729,7 @@ final class ExploreSession {
     private func furnTransform(_ b: FurnBox, _ L: Layout) -> Transform {
         let c = L.flat(SIMD2<Float>(b.cx, b.cz))
         let ex3 = simd_normalize(SIMD3<Float>(L.ex.x, 0, L.ex.y))
-        return Transform(scale: .one, rotation: simd_quatf(from: SIMD3<Float>(1, 0, 0), to: ex3), translation: SIMD3<Float>(c.x, L.floorY + b.h / 2, c.y))
+        return Transform(scale: .one, rotation: simd_quatf(from: SIMD3<Float>(1, 0, 0), to: ex3), translation: SIMD3<Float>(c.x, L.floorY + b.base + b.h / 2, c.y))
     }
 
     private func rebuildFurnView(preview: Bool) {
@@ -2687,6 +2783,8 @@ final class ExploreSession {
     func commitFurnEdit() {
         lastUITap = t
         guard furnSel != nil else { return }
+        // 받침 가구를 옮기거나 지웠으면 그 위에 올려 둔 상자도 새 받침 높이로 (낮은 것부터 — 상자 위 상자도 차례로)
+        for k in furnEdits.adds.indices.filter({ furnEdits.adds[$0].y != nil }).sorted(by: { furnEdits.adds[$0].base < furnEdits.adds[$1].base }) { settleFurn(k) }
         if let b = furnBefore, b != furnEdits { furnUndo.append(b); if furnUndo.count > 40 { furnUndo.removeFirst() } }
         furnBefore = nil
         furnSel = nil
@@ -2782,8 +2880,36 @@ final class ExploreSession {
         guard let g = furnGrab else { return }
         furnEdits.adds[i].cx = pl.x + g.x
         furnEdits.adds[i].cz = pl.y + g.y
+        settleFurn(i)
         if i < furnBoxes.count { furnBoxes[i].transform = furnTransform(furnEdits.adds[i], L) }
         if furnApplyAt == nil { furnApplyAt = t + 0.15 }
+    }
+
+    /// 상자를 아래에 있는 가구 윗면에 올려 둠: 상자 가운데 쪽(가로·세로 절반 안)에 있는 알아낸 가구·다른 상자 중 가장 높은 윗면이 밑면.
+    /// 아래가 바닥이면 바닥(밑면 0). 가구 블록은 칸마다 바닥부터의 높이라, 받침 가구보다 넓게 삐져나온 부분은 아래까지 채워져 보임
+    private func settleFurn(_ i: Int) {
+        guard let v = vox, i < furnEdits.adds.count else { return }
+        let b = furnEdits.adds[i]
+        // 이 상자 위에 올려져 있는 상자는 받침으로 치지 않음 (그걸 받침으로 치면 위로 솟음)
+        let onTop = Set(furnEdits.adds.indices.filter { k in
+            let o = furnEdits.adds[k]
+            return k != i && o.base >= b.base + b.h - 0.03 && abs(o.cx - b.cx) < (o.w + b.w) / 2 && abs(o.cz - b.cz) < (o.d + b.d) / 2
+        })
+        var top: Float = 0
+        var x = b.cx - b.w / 4
+        while x <= b.cx + b.w / 4 + 1e-3 {
+            var z = b.cz - b.d / 4
+            while z <= b.cz + b.d / 4 + 1e-3 {
+                top = max(top, v.scanH(Int((x / Vox.size).rounded(.down)), Int((z / Vox.size).rounded(.down))))
+                for (k, o) in furnEdits.adds.enumerated() where k != i && !onTop.contains(k) && abs(x - o.cx) < o.w / 2 && abs(z - o.cz) < o.d / 2 {
+                    top = max(top, o.base + o.h)
+                }
+                z += 0.05
+            }
+            x += 0.05
+        }
+        top = min(top, 2.4 - b.h)
+        furnEdits.adds[i].y = top > 0.04 ? top : nil
     }
 
     func dropFurn() {
@@ -2800,6 +2926,7 @@ final class ExploreSession {
         let k = max(0.2, min(5, mag))
         furnEdits.adds[i].w = max(0.1, min(4, b0.w * k))
         furnEdits.adds[i].d = max(0.1, min(4, b0.d * k))
+        settleFurn(i)
         if i < furnBoxes.count {
             let b = furnEdits.adds[i]
             furnBoxes[i].transform = furnTransform(b, L)
@@ -2820,6 +2947,7 @@ final class ExploreSession {
         furnEdits.adds[i].w = max(0.1, min(4, furnEdits.adds[i].w + dw))
         furnEdits.adds[i].d = max(0.1, min(4, furnEdits.adds[i].d + dd))
         furnEdits.adds[i].h = max(0.1, min(2.1, furnEdits.adds[i].h + dh))
+        settleFurn(i)
         applyFurn(preview: false)
     }
 
@@ -2829,6 +2957,7 @@ final class ExploreSession {
         let b = furnEdits.adds[i]
         furnEdits.adds[i].w = b.d
         furnEdits.adds[i].d = b.w
+        settleFurn(i)
         applyFurn(preview: false)
     }
 

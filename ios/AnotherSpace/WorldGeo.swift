@@ -12,6 +12,14 @@ struct Geo {
 
     var isEmpty: Bool { idx.isEmpty }
 
+    /// 다른 그물을 (옮기고 돌린 뒤) 이어 붙임
+    mutating func append(_ o: Geo, transform m: simd_float4x4 = matrix_identity_float4x4) {
+        let base = UInt32(pos.count)
+        pos += o.pos.map { simd_make_float3(m * SIMD4<Float>($0, 1)) }
+        uv += o.uv
+        idx += o.idx.map { $0 + base }
+    }
+
     /// 네 점 사각형 (a→b→c→d 둘레 순서, uv 같은 순서). 양면
     mutating func quad(_ a: SIMD3<Float>, _ b: SIMD3<Float>, _ c: SIMD3<Float>, _ d: SIMD3<Float>,
                        _ ua: SIMD2<Float>, _ ub: SIMD2<Float>, _ uc: SIMD2<Float>, _ ud: SIMD2<Float>, twoSided: Bool = true) {

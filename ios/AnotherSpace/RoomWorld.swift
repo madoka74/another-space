@@ -154,6 +154,15 @@ final class RoomWorld {
     private var sortGroup: ModelSortGroup { Sorting.group }       // 모든 방이 같은 묶음 (포털 0번 → 방 안 반투명 25~30번)
     /// 문 번호 → 이 방 쪽 문짝 (닫히면 이 방 벽처럼 보임). 열 때 가로로 오므라듦
     private(set) var doorPanels: [Int: [Entity]] = [:]
+    /// 바깥 장소: 벽 포털 그물 + 문 자리 판·문 위 벽 (방 바닥 기준 좌표). 문 판은 켜진 것만 벽 포털에 함께 넣어 한 엔티티로 그림.
+    /// 예전엔 문마다 판·문 위 벽이 따로 포털(문 넷이면 8개 더) → 방 하나에 포털 12개, 포털마다 세계 전체를 다시 그려
+    /// 무거운 숲에서 화면 갱신이 90→45로 떨어졌음(0.5.45 진단: 앱 계산 1ms 안팎인데 갱신 45/초) → 새가 두 겹·하늘 울렁
+    private var wallsGeo = Geo()
+    private var wallsPortal: ModelEntity?
+    private var doorPanelGeo: [Int: Geo] = [:]
+    private var doorHeaderGeo = Geo()
+    private var doorPanelOn: Set<Int> = []
+    private var doorPortalDirty = false
     /// 다른 세계 옆방과 맞댄 벽 뒤 울타리 (옆방 번호 → 엔티티). 그 울타리는 벽 너머 = 옆방 자리(또는 벽 두께 속)에 섬 →
     /// 그 옆방에 서서 열린 문 너머로 이 방을 볼 때 내 앞(옆방 쪽)에 있는 세계 것이 이 방 포털에 크게·엉뚱한 각도로 비침 (포털은 자르지 않으므로).
     /// 그래서 내가 그 옆방(또는 그 사이 문 자리)에 있는 동안은 끔 — 그때는 어차피 이 방 쪽에서 그 벽 뒤를 볼 일이 없음
@@ -267,8 +276,6 @@ final class RoomWorld {
     private var portals: [ModelEntity] = []
     /// [진단용] 이 방의 포털 엔티티 수
     var portalCount: Int { portals.count }
-    /// [진단용 — 원인 확인 뒤 false 로] 시골 울타리를 종류마다 단색으로 (addBarriers)
-    static let diagWall = true
     private var portalTierNow = -1
     private func addPortal(_ e: ModelEntity) {
         portals.append(e)
@@ -389,6 +396,7 @@ final class RoomWorld {
             if room.place == "cafe" { addCafeCeiling(rects, L, y: ceilY - 0.03) } else { addSkylightFrame(rects, L, y: ceilY - 0.06) }
         }
         addDoors(L, floorY: floorY, ceilY: ceilY)
+        flushDoorPortal()                            // 처음부터 문 판(벽)을 벽 포털에 넣어 둠
 
         let dc = Decor.of(room.place)
         if !shared {
@@ -414,7 +422,60 @@ final class RoomWorld {
         world.addChild(sc.far)
         local.addChild(sc.near)
         scenery = sc
+        if !shared { addBlanky(L, rec: rec, floorY: floorY) }        // 블랭키씨 (하늘 세계 쪽 — 대표 방만)
         setActive(sky: false, room: false)
+    }
+
+    // MARK: 블랭키씨
+    /// 하늘 세계에 블랭키씨 2~3명 (테마마다 하는 일이 다름 — Blanky.swift). 세계 것 규칙(기준서 1): 어느 방에서든 1.5m 넘게 밖에만
+    private func addBlanky(_ L: Layout, rec: SpaceRec, floorY: Float) {
+        let ground = floorY - (room.place == "cafe" ? 0.015 : 0.035)
+        blankyLayout = L
+        var env = BlankyCrowd.Env(place: room.place, center: SIMD3<Float>(center.x, ground, center.z), ground: ground, look: look, tint: tint, time: room.time,
+                                  ring: { [weak self] t, d in self?.around(t, d, rec, ground) ?? SIMD3<Float>(0, -100, 0) },
+                                  free: { [weak self] p, r in self?.blankyFree(p, r, wet: false) ?? false },
+                                  freeWet: { [weak self] p, r in self?.blankyFree(p, r, wet: true) ?? false })
+        env.fire = scenery?.fireSpot
+        env.river = riverPts
+        env.doors = houseDoors
+        env.beachR = simd_length(halfSize) + 6.5
+        env.roof = simd_length(halfSize) + 3
+        if room.place == "cafe" {
+            // 길 건너편 보도 가운데 줄 (addCafeStreet: 벽에서 10~12.6m) — 네 방향, 가게 쪽(바깥)
+            let hx = halfSize.x, hz = halfSize.y
+            let ex3 = SIMD3<Float>(rec.ex.x, 0, rec.ex.y), ez3 = SIMD3<Float>(rec.ez.x, 0, rec.ez.y)
+            let c = SIMD3<Float>(center.x, ground, center.z)
+            for (n, along, hN, hA) in [(ez3, ex3, hz, hx), (-ez3, -ex3, hz, hx), (ex3, -ez3, hx, hz), (-ex3, ez3, hx, hz)] {
+                let m = c + n * (hN + 11.3)
+                env.street.append((m - along * (hA + 6), m + along * (hA + 6), n))
+            }
+        }
+        let bc = Tex.with(look) { BlankyCrowd(env, seed: UInt64(room.id * 6151 + room.place.count * 97 + 29)) }
+        world.addChild(bc.root)
+        blanky = bc
+    }
+    private var blankyLayout: Layout?
+
+    /// 블랭키씨가 설 수 있는 바깥 자리: 어느 방(걸을 수 있는 곳)에서든 r 밖, 나무 줄기·바위·텐트·집·모닥불을 피하고, wet 가 아니면 물길도 피함
+    private func blankyFree(_ p: SIMD3<Float>, _ r: Float, wet: Bool) -> Bool {
+        guard let L = blankyLayout else { return false }
+        if L.walkable(L.plane(p.x, p.z)) { return false }
+        for k in 0..<16 {
+            let a = Float(k % 8) / 8 * 2 * .pi
+            let q = p + SIMD3<Float>(cos(a), 0, sin(a)) * (k < 8 ? r : r * 0.5)
+            if L.walkable(L.plane(q.x, q.z)) { return false }
+        }
+        let q2 = SIMD2<Float>(p.x, p.z)
+        for (t, w) in treeSpots where simd_distance(SIMD2<Float>(t.x, t.z), q2) < max(0.5, w * 0.1) + 0.45 { return false }
+        for (t, sz) in rockSpots where simd_distance(SIMD2<Float>(t.x, t.z), q2) < sz * 0.9 + 0.4 { return false }
+        for t in tentSpots where simd_distance(SIMD2<Float>(t.x, t.z), q2) < 2.8 { return false }
+        for (c, f, sd, hw, hd) in houseRects {
+            let v = p - c
+            if abs(simd_dot(v, sd)) < hw + 0.6 && abs(simd_dot(v, f)) < hd + 0.6 { return false }
+        }
+        if let f = scenery?.fireSpot, simd_distance(SIMD2<Float>(f.x, f.z), q2) < 0.9 { return false }
+        if !wet && riverGap(p) < 0.6 { return false }
+        return true
     }
 
     // MARK: 선 그림
@@ -580,7 +641,9 @@ final class RoomWorld {
                 samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0, toward: toward))
             }
         }
-        addPortalPlanes(portal, name: "walls")
+        // 벽 포털은 문 자리 판(닫힌 문·열쇠 문일 때의 벽)·문 위 벽과 한 엔티티로 (flushDoorPortal) — 포털 하나마다 세계 전체를 한 번 더 그림
+        wallsGeo = portal.geo
+        if !portal.isEmpty, let m = portal.geo.mesh("walls") { wallsPortal = portalEntity(m) }
         // 같은 방향·같은 종류의 점을 줄 자리(c)가 15cm 안인 것끼리 한 줄로: 바깥은 가장 뒤(작은 c — 모든 벽 조각의 평면 뒤), 공유 줄은 가운데(평균)
         var spans: [BarrierSpan] = []
         var keys: [String: [Sample]] = [:]
@@ -723,7 +786,7 @@ final class RoomWorld {
         for (si, sp) in spans.enumerated() {
             let L2 = simd_distance(sp.a, sp.b)
             guard L2 > 0.06 else { continue }
-            useKey(Self.diagWall && room.place == "village" ? sp.toward * 4 + sp.kind : sp.toward)
+            useKey(sp.toward)
             let dir = (sp.b - sp.a) / L2
             let out = sp.out
             let D = sp.thin ? 0.08 : min(sp.depth, 0.5)
@@ -850,21 +913,10 @@ final class RoomWorld {
             matC = Ink.paper(2)
         }
         bank[curKey] = [solidA, solidB, solidC, lumps, lines, hulls]
-        let diag = Self.diagWall && room.place == "village"
         for k in bank.keys.sorted() {
             guard let gs = bank[k] else { continue }
             var made: [Entity] = []
-            // [진단용 — 원인 확인 뒤 뺄 것] 시골 울타리를 종류마다 단색으로: 바깥 줄 돌담 빨강, 내 벽 뒤 얇은 돌담 자홍, 두 방 사이 가운데 돌담 주황,
-            // 다른 테마 옆방 쪽 돌담 파랑 / 갓돌은 노랑(옆방 쪽은 하늘색). 어른거리는 곳이 어떤 색(또는 두 색이 번갈아)인지 보면 무엇이 겹치는지 알 수 있음
-            var mA = matA, mL = lumpMat
-            if diag {
-                let tw = k / 4, kd = k % 4
-                let slab: SIMD3<Float> = tw != 0 ? [0.2, 0.4, 1] : (kd == 0 ? [1, 0.15, 0.15] : (kd == 1 ? [1, 0.2, 0.9] : [1, 0.6, 0.1]))
-                let cap: SIMD3<Float> = tw != 0 ? [0.2, 1, 1] : [1, 0.95, 0.2]
-                mA = UnlitMaterial(color: UIColor(red: CGFloat(slab.x), green: CGFloat(slab.y), blue: CGFloat(slab.z), alpha: 1))
-                mL = UnlitMaterial(color: UIColor(red: CGFloat(cap.x), green: CGFloat(cap.y), blue: CGFloat(cap.z), alpha: 1))
-            }
-            for (geo, m, nm) in [(gs[0], mA, "barrierA"), (gs[1], matB, "barrierB"), (gs[2], matC, "barrierC"), (gs[3], mL, "barrierLumps")] {
+            for (geo, m, nm) in [(gs[0], matA, "barrierA"), (gs[1], matB, "barrierB"), (gs[2], matC, "barrierC"), (gs[3], lumpMat, "barrierLumps")] {
                 if let e = geo.entity(nm, m) { layer(e, 6); world.addChild(e); made.append(e) }
             }
             if lineMode {
@@ -872,8 +924,34 @@ final class RoomWorld {
                 if let e = gs[5].entity("barrierLogLines", Ink.hullMat) { layer(e, 6); world.addChild(e); made.append(e) }
                 if let e = gs[4].entity("barrierLines", Ink.line) { layer(e, 7); world.addChild(e); made.append(e) }
             }
-            let tw = diag ? k / 4 : k
-            if tw != 0 { barrierToward[tw, default: []] += made }
+            if k != 0 { barrierToward[k, default: []] += made }
+        }
+    }
+
+    /// 문 자리 판 켜고 끄기 (바깥 장소: 벽 포털 그물에 넣고 빼기 — 바뀐 것은 flushDoorPortal 에서 한 번에 다시 만듦 / 실내: 판 엔티티)
+    func setDoorPanel(_ i: Int, _ on: Bool) {
+        if doorPanelGeo[i] != nil {
+            if on != doorPanelOn.contains(i) {
+                if on { doorPanelOn.insert(i) } else { doorPanelOn.remove(i) }
+                doorPortalDirty = true
+            }
+        }
+        for e in doorPanels[i] ?? [] where e.isEnabled != on { e.isEnabled = on }
+    }
+
+    /// 바뀐 문 판이 있으면 벽 포털 그물을 다시 만듦 (벽 + 문 위 벽 + 켜진 문 판)
+    func flushDoorPortal() {
+        guard doorPortalDirty else { return }
+        doorPortalDirty = false
+        var g = wallsGeo
+        g.append(doorHeaderGeo)
+        for i in doorPanelOn.sorted() { if let pg = doorPanelGeo[i] { g.append(pg) } }
+        guard let m = g.mesh("walls") else { wallsPortal?.isEnabled = false; return }
+        if let e = wallsPortal {
+            e.model?.mesh = m
+            if !e.isEnabled { e.isEnabled = true }
+        } else {
+            wallsPortal = portalEntity(m)
         }
     }
 
@@ -1050,30 +1128,19 @@ final class RoomWorld {
                 let front = SIMD3<Float>(0, 0, 1)
                 let pa = SIMD3<Float>(-hl, 0, 0), pb = SIMD3<Float>(hl, 0, 0)
                 if style.open {
+                    // 문 자리 판·문 위 벽은 따로 포털을 만들지 않고 벽 포털 그물에 함께 (위 wallsGeo 설명). 판은 처음엔 켜짐(벽)
+                    let tm = Transform(scale: .one, rotation: q, translation: SIMD3<Float>(mid.x, floorY, mid.y)).matrix
                     var panel = Geo()
                     panel.face(pa, pb, toward: front, y0: 0, y1: low, u0: 0, u1: 1)
-                    if let m = panel.mesh("door\(i)") {
-                        let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
-                        var pc = PortalComponent(target: world)
-                        pc.clippingMode = .plane(.positiveZ)          // 문 자리 판 앞(이 방 쪽)의 세계 것은 잘라 냄 (포털 면 참고)
-                        e.components.set(pc)
-                        place(e, 0)
-                        addPortal(e)
-                        local.addChild(e)
-                        list.append(e)
-                    }
+                    var pg = Geo()
+                    pg.append(panel, transform: tm)
+                    doorPanelGeo[i] = pg
+                    doorPanelOn.insert(i)
+                    doorPortalDirty = true
                     if header {
                         var hd = Geo()
                         hd.face(pa, pb, toward: front, y0: dh, y1: top, u0: 0, u1: 1)
-                        if let m = hd.mesh("header\(i)") {
-                            let e = ModelEntity(mesh: m, materials: [PortalMaterial()])
-                            var pc = PortalComponent(target: world)
-                            pc.clippingMode = .plane(.positiveZ)
-                            e.components.set(pc)
-                            place(e, 0)
-                            addPortal(e)
-                            local.addChild(e)
-                        }
+                        doorHeaderGeo.append(hd, transform: tm)
                     }
                 } else {
                     let l = simd_dot(zdir, sun)
@@ -1702,7 +1769,13 @@ final class RoomWorld {
     }
 
     // MARK: 시골 마을
-    private var treeSpots: [(SIMD3<Float>, Float)] = []          // 세운 나무 (자리, 폭) — 집이 나무와 겹치지 않게
+    private var treeSpots: [(SIMD3<Float>, Float)] = []
+    // 블랭키씨가 피해 다닐 것 (addThings 에서 모음)
+    private var tentSpots: [SIMD3<Float>] = []
+    private var rockSpots: [(SIMD3<Float>, Float)] = []
+    private var houseRects: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, Float, Float)] = []      // 가운데, 앞, 옆, 반폭, 반깊이
+    private var houseDoors: [(door: SIMD3<Float>, out: SIMD3<Float>)] = []
+    private var blanky: BlankyCrowd?          // 세운 나무 (자리, 폭) — 집이 나무와 겹치지 않게
     private var crowns: [(SIMD3<Float>, Float, Float)] = []      // 세운 나무 (뿌리, 높이, 폭) — 카페 가로수 낙엽
     private var villageWins: [(e: ModelEntity, next: Float, on: Bool)] = []
     private var winOnMat: RealityKit.Material?
@@ -1853,6 +1926,8 @@ final class RoomWorld {
                 lampGlass.box(base: lampP - up * 0.12, w: 0.14, d: 0.14, h: 0.22, yaw: yaw, tile: 1)
                 darkWood.box(base: lampP + up * 0.1, w: 0.2, d: 0.2, h: 0.04, yaw: yaw, tile: 1)
                 lamps.append(lampP)
+                houseRects.append((p, fwd, side, hw, hd))
+                houseDoors.append((door: SIMD3<Float>(dc.x, p.y, dc.z) + fwd * 0.06, out: fwd))
                 if lineMode {
                     let a = dc - side * (dW / 2) + up * base, b = dc + side * (dW / 2) + up * base
                     lines.stroke(a, a + up * dH, width: 0.035); lines.stroke(b, b + up * dH, width: 0.035); lines.stroke(a + up * dH, b + up * dH, width: 0.035)
@@ -2818,7 +2893,7 @@ final class RoomWorld {
                     let p = around((Float(i) + Float.random(in: 0...0.9, using: &g)) / Float(rk.count), dd, rec, floorY)
                     var size = Float.random(in: rk.size, using: &g)
                     if room.place == "valley" { size = min(size, 0.35 + dd * 0.12) }      // 계곡: 가까운 바위는 낮게 (낮춘 둑 너머 풍경을 가리지 않게)
-                    if roundFree(p, size * 1.2 + 0.15) && riverGap(p) > size * 0.7 { geo.rock(at: p, size: size, using: &g); break }
+                    if roundFree(p, size * 1.2 + 0.15) && riverGap(p) > size * 0.7 { geo.rock(at: p, size: size, using: &g); rockSpots.append((p, size)); break }
                 }
             }
             if let e = geo.entity("rocks", Tex.unlit(rk.tex, tint: Worlds.safe(tint * shades[1], min: 0.25))) { world.addChild(e) }
@@ -2860,6 +2935,7 @@ final class RoomWorld {
                     if let e = parts.poles.entity("tentPoles\(i)", pol) { layer(e, 5); world.addChild(e) }
                     if lineMode, let e = parts.lines.entity("tentLines\(i)", Ink.line) { layer(e, 6); world.addChild(e) }
                     spots.append(p)
+                    tentSpots.append(p)
                     // 텐트 앞 랜턴: 갈고리 기둥 + 매달린 랜턴 (밤엔 불빛)
                     if dc.lanterns {
                         let side = SIMD3<Float>(cos(yaw), 0, -sin(yaw)), fwdT = SIMD3<Float>(sin(yaw), 0, cos(yaw))
@@ -3521,6 +3597,7 @@ final class RoomWorld {
     func tick(_ dt: Float, active: Bool) {
         guard active else { return }
         scenery?.tick(dt)
+        blanky?.tick(dt)
         tickSpeaker(dt)
         tickVillage(dt)
         tickCafe(dt)
