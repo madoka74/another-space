@@ -776,6 +776,9 @@ final class ValleyCreek {
             let k = pool[Int(g.next() % UInt64(pool.count))]
             f.pos = L.flat(cellP(k))
             f.goal = f.pos
+            // 처음 자리를 바로 둠 (헤엄은 지금 방에서만 돌아, 옆방 개울 물고기는 원점(집 안)에 남아 있었음)
+            f.e.position = SIMD3<Float>(f.pos.x, floorY + 0.008 + f.depth, f.pos.y)
+            f.e.orientation = simd_quatf(angle: -f.head, axis: [0, 1, 0])
             let (bm, tm) = fishMesh(f.size)
             let mat = mats[Int(g.next() % 6)]
             if let bm { f.e.addChild(ModelEntity(mesh: bm, materials: [mat])) }

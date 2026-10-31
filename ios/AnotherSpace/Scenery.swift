@@ -268,7 +268,12 @@ final class Scenery {
             let a = Float.random(in: 0...(2 * .pi), using: &g)
             let w = Float.random(in: 0.6...1.4, using: &g) / rad * (Bool.random(using: &g) ? 1 : -1)
             far.addChild(b)
-            boats.append((b, SIMD3<Float>(center.x, floorY - 0.4, center.z), a, rad, w))
+            // 처음 자리를 바로 둠 (움직임은 지금 방 세계에서만 돌아, 옆방 바다의 배가 집 안 원점에 거대하게 남아 보였음)
+            let c0 = SIMD3<Float>(center.x, floorY - 0.4, center.z)
+            b.position = c0 + SIMD3<Float>(cos(a) * rad, 0, sin(a) * rad)
+            let v0 = SIMD3<Float>(-sin(a), 0, cos(a)) * (w >= 0 ? 1 : -1)
+            b.orientation = simd_quatf(angle: atan2(v0.x, v0.z), axis: [0, 1, 0])
+            boats.append((b, c0, a, rad, w))
         }
     }
 
@@ -468,8 +473,12 @@ final class Scenery {
                 let start = (dir == along ? a : a + along * len) + side * lane
                 car.orientation = simd_quatf(angle: atan2(dir.x, dir.z), axis: [0, 1, 0])
                 far.addChild(car)
+                let s0 = (Float(c) * len / 4 + Float.random(in: 0...20, using: &g)).truncatingRemainder(dividingBy: max(1, len))
+                // 처음 자리를 바로 둠: 움직임은 지금 방(과 대표 방) 세계에서만 돌아서, 옆방 세계의 차는 자리를 한 번도 못 받고
+                // 만든 자리(저장 좌표 원점 = 집 안)에 남아 열린 문 너머로 거대하게 보였음 (들어가면 그제야 도로로 옮겨짐)
+                car.position = start + dir * s0
                 movers.append(Mover(e: car, a: start, d: dir, len: len, speed: kind == 3 ? 8 : Float.random(in: 9...16, using: &g),
-                                    s: Float(c) * len / 4 + Float.random(in: 0...20, using: &g), bob: 0))
+                                    s: s0, bob: 0))
             }
         }
     }
@@ -1127,8 +1136,10 @@ final class Scenery {
                 e.components.set(ModelSortGroupComponent(group: sortGroup, order: 7))
                 let forward = k % 2 == 0
                 far.addChild(e)
+                let s0 = Float.random(in: 0...14, using: &g)
+                e.position = (forward ? a3 : b3) + (forward ? d3 : -d3) * s0             // 처음 자리를 바로 (차와 같은 까닭)
                 movers.append(Mover(e: e, a: forward ? a3 : b3, d: forward ? d3 : -d3, len: 14, speed: Float.random(in: 0.9...1.4, using: &g),
-                                    s: Float.random(in: 0...14, using: &g), bob: 0.025))
+                                    s: s0, bob: 0.025))
                 made += 1
             }
         }

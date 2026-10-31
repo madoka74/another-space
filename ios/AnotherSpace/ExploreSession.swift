@@ -293,6 +293,7 @@ final class ExploreSession {
     @ObservationIgnored private var realClosed: Set<Int> = []       // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var doorPlanes: [UUID: (Int, Bool)] = [:]   // 문으로 알아본 평면 → (문 번호, 문 자리를 가로막고 있는지)
     @ObservationIgnored private var doorPlaneS: [UUID: Float] = [:]  // 문 자리를 가로막던 평면의 가운데 (문 폭 방향 자리) — 미닫이가 밀려났는지 보려고
+    @ObservationIgnored private var passedAt: [Int: Float] = [:]     // 열린 문을 마지막으로 건너간 때
     @ObservationIgnored private var heldHits: [Int: [UUID: Set<Int>]] = [:]   // 열림 판단 때 치워 둔 그물 기록 (그 덩어리가 새로 오면 버림) — 지금 그물 전체 모양
     @ObservationIgnored private var viewT: [Int: Float] = [:]       // 실제 문이 열린 뒤(3초 넘어) 곁에서 문 자리를 바라본 시간
     @ObservationIgnored private var hands: HandTrackingProvider?
@@ -349,6 +350,7 @@ final class ExploreSession {
     @ObservationIgnored private var pinchRel: [(t: Float, ok: Bool, state: Int)] = []
     /// 시스템 탭 중 아직 손 추적 놓기와 짝짓지 못한 것 (시스템 탭이 손 추적보다 먼저 온 경우)
     @ObservationIgnored private var sysTaps: [Float] = []
+    @ObservationIgnored private var secondHandAt: Float?    // 더블탭인지 시스템 확인을 기다리는 두 번째 손 탭 (손 놓은 때)
     @ObservationIgnored private var hudPinned = false
     // 가구 맞추기 (세계를 걷고 현실 위에 가구 블록을 반투명하게 보이며, 탭·끌기·두 손 집기·판 버튼으로 넣고 빼고 줄이고 키움)
     var furnMode = false
@@ -1945,6 +1947,9 @@ final class ExploreSession {
     /// 문으로 분류된 평면이 지금 문 자리를 가로막고 있음 (마지막 열림 1초 뒤 넘어서 가로막은 것을 봤을 때만 — 열기 전의 평면 기록은 안 셈)
     private func planeAcrossNow(_ i: Int) -> Bool {
         guard let pa = planeAcrossAt[i], pa > (openedAt[i] ?? -100) + 1 else { return false }
+        // 이번 탐험에서 한 번이라도 열린 문은 평면이 3초 안에 새로 가로막아야 (열린 뒤 남아 있는 예전 평면으로 다시 닫지 않게 —
+        // 문을 건너온 뒤 닫힘↔열림이 오갔음). 한 번도 안 열린 문은 가만있는 평면도 믿음 (닫힌 문은 평면이 거의 갱신되지 않음)
+        if openedAt[i] != nil && (t - pa) > 3 { return false }
         return doorPlanes.values.contains { $0.0 == i && $0.1 }
     }
 
@@ -2004,7 +2009,9 @@ final class ExploreSession {
             if same {
                 doorOpen.remove(i)
             } else {
-                if let dur = justOpened[i], near, dur > 1.0, !doorOpen.contains(i), openProg[i] == nil {
+                // (방금 건너온 문은 아님: 건너온 뒤 닫힘↔열림 판정이 한 번 오가면 '곁에서 연 문'으로 쳐서, 돌아봐도 문이 생기지 않고
+                //  1m 밖으로 나갈 때까지 열린 채 반대편이 보였음)
+                if let dur = justOpened[i], near, dur > 1.0, !doorOpen.contains(i), openProg[i] == nil, !passed.contains(i), t - (passedAt[i] ?? -100) > 8 {
                     doorOpen.insert(i); doorSide[i] = lastSide[i] ?? side          // 곁에서 보던 닫힌 실제 문을 열었음 → 열쇠 없이 열린 공간
                 }
                 if inside {
@@ -2015,6 +2022,7 @@ final class ExploreSession {
                         doorOpen.remove(i)
                         doorShow[i] = 0
                         passed.insert(i)
+                        passedAt[i] = t
                         openHold[i] = max(openHold[i] ?? 0, t + 6)          // 방금 지나온 문은 6초 동안 '닫힘'으로 바뀌지 않음
                     } else if !near {
                         doorOpen.remove(i)
@@ -2237,7 +2245,7 @@ final class ExploreSession {
             let inView = simd_length(toH) > 0.05 && simd_dot(simd_normalize(toH), g) > 0.5 && tp.y > head.y - 0.7
             // 놓은 손짓 하나 = 기록 하나. 바로 전(0.2초 안)에 시스템 탭이 왔으면 그 탭과 같은 손짓
             var st = 0
-            if let k = sysTaps.lastIndex(where: { t - $0 < 0.2 }) { sysTaps.remove(at: k); st = 1 }
+            if let k = sysTaps.lastIndex(where: { t - $0 < 0.3 }) { sysTaps.remove(at: k); st = 1 }
             pinchRel.append((t: t, ok: inView && t - pinchCloseAt[i] < 0.5, state: st))
         }
     }
@@ -2308,6 +2316,9 @@ final class ExploreSession {
             let c = r.position(relativeTo: nil) + SIMD3<Float>(0, up, 0)
             let d = simd_distance(c, head)
             guard d > 0.1, d < 7 else { continue }
+            // 탭한 방향이 몸에서 35cm 안으로 지날 때만 (멀리 있는 아이는 8도가 70cm 넘게 넓어져, 그쪽을 보며 메뉴판을 띄우려던 탭을 가로챘음)
+            let along = simd_dot(c - head, dir)
+            guard simd_length((c - head) - dir * along) < 0.35 else { continue }
             let cs = simd_dot(simd_normalize(c - head), dir)
             if cs > best { best = cs; pick = k }
         }
@@ -2750,8 +2761,9 @@ final class ExploreSession {
 
     // MARK: 탭
     /// 탭 하나: 열쇠·그림 버튼이면 바로 처리, 그 밖(탭 받는 상자)이면 0.4초 안에 또 오는지 기다림
-    func tapped(_ e: Entity, at point: SIMD3<Float>? = nil, system: Bool = true) {
+    func tapped(_ e: Entity, at point: SIMD3<Float>? = nil, system: Bool = true, when: Float? = nil) {
         if system && !claimSystemTap() { return }
+        let now = when ?? t                                         // 손 추적 탭은 실제로 손을 놓은 때 (싱글·더블 간격을 손짓 시각으로 잼)
         if furnMode { furnTap(e, point); return }
         var cur: Entity? = e
         while let c = cur {
@@ -2807,15 +2819,21 @@ final class ExploreSession {
         // 싱글·더블 가르기: 싱글탭은 0.45초 안에 두 번째 탭이 오지 않을 때 처리 (tapTick).
         // 예전엔 싱글탭을 바로 처리하고 더블탭이면 되돌렸음 → 더블탭 때 메뉴판이 먼저 눈앞에 떴고, 두 번째 탭이 막 뜬 메뉴판 버튼
         // ('현실로 돌아가기' 등)에 눌려 현실로 나가 버리기도 했음. 이제 더블탭이면 싱글탭 일은 아예 하지 않음
-        if let p = pendingTap, t - p <= 0.45 {
+        if let p = pendingTap, now - p <= 0.45 {
             if system || pendingSystem {
                 pendingTap = nil
+                secondHandAt = nil
                 doubleTapped()
+            } else {
+                // 손 추적으로만 받은 탭 둘: 시스템이 둘 중 하나라도 늦게 알아주면(claimSystemTap) 더블탭, 끝내 안 오면 첫 탭의 싱글탭만
+                // (손 탭 둘만으로는 현실 창을 열지 않음 — 무릎 위 손가락). 예전엔 바로 버려서, 시스템 탭이 손 추적보다 늦게 오는 날엔
+                // 더블탭이 늘 싱글탭(메뉴판)으로 바뀌었음
+                secondHandAt = now
             }
-            // 손 추적으로만 받은 탭 둘: 더블탭(현실 창)으로 치지 않고, 두 번째는 버림 (첫 탭의 싱글탭만 — 메뉴판이 열렸다 닫히지 않게)
         } else {
-            pendingTap = t
+            pendingTap = now
             pendingSystem = system                                    // 손 추적으로만 받은 탭 둘로는 현실 창(더블탭)을 열지 않음
+            secondHandAt = nil
         }
     }
 
@@ -2823,12 +2841,20 @@ final class ExploreSession {
     /// 예전엔 '손 탭 뒤 0.5초 안의 시스템 탭은 모두 버림'이라, 더블탭의 첫 탭을 손 추적이 받으면 두 번째 시스템 탭이 버려져
     /// 더블탭이 싱글탭 둘이 되거나 탭이 안 먹혔음 → 시간 간격이 아니라 손짓 하나하나로 짝지음
     private func claimSystemTap() -> Bool {
-        if let k = pinchRel.lastIndex(where: { $0.state == 0 && abs(t - $0.t) < 0.2 }) {
+        if let k = pinchRel.lastIndex(where: { $0.state == 0 && abs(t - $0.t) < 0.3 }) {
             pinchRel[k].state = 1
             return true
         }
-        // 손 추적 탭으로 이미 넣은 놓기가 가장 최근 손짓이면(그 뒤 새로 집은 적 없음) 같은 손짓 → 버림
-        if let k = pinchRel.lastIndex(where: { $0.state == 2 }), t - pinchRel[k].t < 0.6, max(pinchCloseAt[0], pinchCloseAt[1]) < pinchRel[k].t {
+        // 손 추적 탭으로 이미 넣은 놓기가 가장 최근 손짓이면(그 뒤 새로 집은 적 없음) 같은 손짓 → 새 탭으로는 버리되,
+        // 그 손짓이 시스템도 알아본 '진짜 탭'임을 반영: 기다리는 두 번째 손 탭이 있으면 더블탭, 아니면 기다리는 첫 탭을 시스템 탭으로 올림
+        if let k = pinchRel.lastIndex(where: { $0.state == 2 }), t - pinchRel[k].t < 0.8, max(pinchCloseAt[0], pinchCloseAt[1]) < pinchRel[k].t {
+            if let sh = secondHandAt, pendingTap != nil, t - sh < 0.8 {
+                pendingTap = nil
+                secondHandAt = nil
+                doubleTapped()
+            } else if pendingTap != nil {
+                pendingSystem = true
+            }
             return false
         }
         sysTaps.append(t)                                           // 손 추적이 곧 놓기를 알아채면 그것과 짝지음
@@ -2837,17 +2863,20 @@ final class ExploreSession {
 
     /// 매 프레임: 시스템 탭과 짝짓지 못한 눈앞 손짓은 0.22초 뒤 손 탭으로 넣고, 기다리던 싱글탭은 0.45초가 지나면 처리
     private func tapTick() {
-        for k in pinchRel.indices where pinchRel[k].state == 0 && t - pinchRel[k].t > 0.22 {
+        for k in pinchRel.indices where pinchRel[k].state == 0 && t - pinchRel[k].t > 0.3 {
             pinchRel[k].state = 2
             if pinchRel[k].ok {
                 let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-                tapped(tapCatcher, at: head + g * 2, system: false)
+                tapped(tapCatcher, at: head + g * 2, system: false, when: pinchRel[k].t)
             }
         }
         pinchRel.removeAll { t - $0.t > 1.5 }
         sysTaps.removeAll { t - $0 > 0.5 }
-        if let p = pendingTap, t - p > 0.45 {
+        // 싱글탭: 첫 탭 뒤 0.45초 + 손 추적 탭이 손을 놓은 때로 찍히므로 그 기다림(0.3초)만큼 더. 두 번째 손 탭이 시스템 확인을 기다리는 중이면 그만큼 더
+        let wait: Float = pendingSystem ? 0.45 : 0.75
+        if let p = pendingTap, t - p > wait, t - (secondHandAt ?? -100) > 0.8 {
             pendingTap = nil
+            secondHandAt = nil
             if lastUITap < p - 0.05 { singleTapped() }              // 그 사이 안내판을 누른 탭이었으면 메뉴판을 건드리지 않음
         }
     }

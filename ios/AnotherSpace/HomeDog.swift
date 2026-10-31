@@ -864,7 +864,7 @@ final class HomeDog {
                     Sfx.play("fire_pop1", in: propRoot, at: np, gain: -24)          // 나무 막대가 바닥에 탁
                 } else {
                     stickPos = SIMD2<Float>(np.x, np.z)
-                    stickYaw = atan2(air.1.x, air.1.z)
+                    stickYaw = restYaw(stickPos, atan2(air.1.x, air.1.z), c)
                     stickAir = nil
                     s.position = np
                     return
@@ -889,6 +889,21 @@ final class HomeDog {
 
     /// 막대를 든 나를 기다림: 내 앞 80cm 쯤에 와서(가구는 돌아서) 놀자 자세로 들썩, 가끔 멍.
     /// 더 다가갈 수 없으면 그 자리에서 놀자 자세 (예전엔 곧장만 가다 가구에 막히면 그 자리에서 발만 굴렀음)
+    /// 바닥에 놓인 막대(길이 27cm)의 두 끝이 가구·벽에 묻히지 않는 방향 — 가운데만 비어 있으면 끝이 가구 속으로 들어가 보였음.
+    /// 던진 방향에서 가까운 쪽부터 15°씩 돌려 봄 (모두 묻히면 원래 방향)
+    private func restYaw(_ p: SIMD2<Float>, _ yaw: Float, _ c: Ctx) -> Float {
+        func ok(_ a: Float) -> Bool {
+            let d = SIMD2<Float>(cos(a), -sin(a)) * 0.14           // 막대 길이 방향 = y축으로 a만큼 돌린 x축
+            for q in [p + d, p - d] where !c.room(q) || c.height(q) > 0.02 { return false }
+            return true
+        }
+        for k in 0..<12 {
+            let a = yaw + Float((k + 1) / 2) * (.pi / 12) * (k % 2 == 0 ? 1 : -1)
+            if ok(a) { return a }
+        }
+        return yaw
+    }
+
     private var waitSpot: SIMD2<Float>?
     private var waitFrom = SIMD2<Float>(0, 0)
     private var waitFwd = SIMD2<Float>(0, 1)
@@ -1049,21 +1064,25 @@ final class HomeDog {
     }
 
     private func jumpDownNear(_ c: Ctx, prefer: SIMD2<Float>) {
+        // 가장 가까운 거리부터 둘레를 넓혀 가며(최대 1.8m) 내려설 바닥을 찾고, 그 거리 안에서는 prefer 쪽으로.
+        // 예전엔 70~80cm 안만 봐서, 넓은 가구(ㄱ자 조리대 등) 가운데로 건너간 뒤엔 내려설 곳이 없어 그 위에 계속 머물렀음
         var best: (SIMD2<Float>, Float)? = nil
-        for k in 0..<16 {
-            let a = Float(k) / 16 * 2 * .pi
-            for r in [Float(0.4), 0.6, 0.8] {
+        var r: Float = 0.4
+        while r <= 1.8 && best == nil {
+            for k in 0..<24 {
+                let a = Float(k) / 24 * 2 * .pi
                 let p = pos + SIMD2<Float>(cos(a), sin(a)) * r
                 guard c.free(p) else { continue }
                 let s = simd_distance(p, prefer)
                 if best == nil || s < best!.1 { best = (p, s) }
             }
+            r += 0.15
         }
         guard let b = best else { start(.onTop, 3); return }
         jumpFrom = SIMD3<Float>(pos.x, elev, pos.y)
         jumpTo = SIMD3<Float>(b.0.x, 0, b.0.y)
         faceToward(b.0)
-        start(.jumpDown, 0.5)
+        start(.jumpDown, 0.5 + max(0, simd_distance(b.0, pos) - 0.8) * 0.3)      // 멀리 뛰어내릴수록 조금 길게
     }
 
     // MARK: 무엇을 할지

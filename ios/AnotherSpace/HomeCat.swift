@@ -44,7 +44,15 @@ final class HomeCat {
     static func toyHit(_ p: SIMD3<Float>, _ c: Ctx, radius r: Float) -> Bool {
         let q = SIMD2<Float>(p.x, p.z)
         if !c.room(q) { return true }
-        return c.height(q) > p.y - c.floorY - r
+        // 가구가 '있는' 칸만 (높이 2cm 넘게) — 예전엔 가구 없는 바닥(높이 0)도 장난감 아래 끝이 바닥보다 조금만 낮으면
+        // (강아지 막대는 바닥 2cm 위에 두는데 반지름 5cm) '부딪힘'이 되어, 바닥에 닿는 순간 매 걸음 '가구 속 → 내 쪽으로 빼냄'이
+        // 되풀이되며 막대가 휘리릭 내 앞으로 끌려왔음. 가운데만 보지 않고 둘레(반지름)까지 봄 — 장난감이 가구에 반쯤 묻히지 않게
+        let bottom = p.y - c.floorY - r
+        for o in [SIMD2<Float>(0, 0), SIMD2<Float>(r, 0), SIMD2<Float>(-r, 0), SIMD2<Float>(0, r), SIMD2<Float>(0, -r)] {
+            let h = c.height(q + o)
+            if h > 0.02 && h > bottom { return true }
+        }
+        return false
     }
 
     /// 날아가는 장난감 한 걸음: 중력, 천장에서 튕겨 내려옴, 벽·가구 옆면에 부딪히면 그 면에서 튕겨 나옴(방 밖으로 나가지 않음).
@@ -1443,21 +1451,25 @@ final class HomeCat {
 
     /// 가구 위에서 내려옴: 보이는 쪽 가까운 빈 바닥으로 폴짝
     private func jumpDownNear(_ c: Ctx, prefer: SIMD2<Float>) {
+        // 가장 가까운 거리부터 둘레를 넓혀 가며(최대 1.8m) 내려설 바닥을 찾고, 그 거리 안에서는 prefer 쪽으로.
+        // 예전엔 70~80cm 안만 봐서, 넓은 가구(ㄱ자 조리대 등) 가운데로 건너간 뒤엔 내려설 곳이 없어 그 위에 계속 머물렀음
         var best: (SIMD2<Float>, Float)? = nil
-        for k in 0..<16 {
-            let a = Float(k) / 16 * 2 * .pi
-            for r in [Float(0.35), 0.5, 0.7] {
+        var r: Float = 0.35
+        while r <= 1.8 && best == nil {
+            for k in 0..<24 {
+                let a = Float(k) / 24 * 2 * .pi
                 let p = pos + SIMD2<Float>(cos(a), sin(a)) * r
                 guard c.free(p) else { continue }
                 let s = simd_distance(p, prefer)
                 if best == nil || s < best!.1 { best = (p, s) }
             }
+            r += 0.15
         }
         guard let b = best else { start(.onTop, 4); return }
         jumpFrom = SIMD3<Float>(pos.x, elev, pos.y)
         jumpTo = SIMD3<Float>(b.0.x, 0, b.0.y)
         faceToward(b.0)
-        start(.jumpDown, 0.5)
+        start(.jumpDown, 0.5 + max(0, simd_distance(b.0, pos) - 0.8) * 0.3)      // 멀리 뛰어내릴수록 조금 길게
     }
 
     /// 시야 안 가구 옆면 긁기

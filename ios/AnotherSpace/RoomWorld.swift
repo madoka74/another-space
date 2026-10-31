@@ -347,7 +347,9 @@ final class RoomWorld {
             }
         }
         func shut(_ s: WallSeg) -> Bool { sameNear.contains(s.nearRoom) || (s.behind != 0 && sameNear.contains(s.behind)) }
-        for i in mySegs.indices where mySegs[i].window && shut(mySegs[i]) { mySegs[i].window = false }
+        // 전시관은 창이 없는 공간 (실제 방의 창 자리도 벽으로 — 그림을 거는 흰 벽, 빛은 천장 채광창으로)
+        let noWindows = room.place == "gallery"
+        for i in mySegs.indices where mySegs[i].window && (shut(mySegs[i]) || noWindows) { mySegs[i].window = false }
         let segs = Self.withWindows(mySegs, place: room.place, doors: L.doors, roomId: room.id, nearSame: sameNear)
         // 계곡: 바깥 강 물길과 방 안 개울을 먼저 정함 (개울이 드나드는 벽 자리는 울타리를 비워야 해서 벽보다 먼저)
         let shared = host != nil                    // 같은 세계 무리의 다른 방: 하늘 세계 쪽은 대표 방이 이미 만들어 둠
