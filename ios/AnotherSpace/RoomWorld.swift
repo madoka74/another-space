@@ -622,12 +622,17 @@ final class RoomWorld {
                     }
                     var u0 = byU[i].u - step / 2, u1 = byU[j].u + step / 2
                     // 모서리: 바깥 줄은 다른 줄과 만나도록 띄운 거리만큼 늘림 / 문간·통로: 몸통이 걸치지 않게 줄임 (모든 줄)
+                    // 늘리는 것은 줄의 진짜 끝(모서리)에서만 — 같은 줄 위에서 종류(얇음·바깥·옆방 쪽)가 바뀌어 토막이 나뉜 자리에서도 늘려,
+                    // 이웃 토막과 같은 평면에서 최대 30cm 겹쳐 서로 앞에 그려지려 다퉜음 (시골 돌담 앞면이 평평해 거실 좌우 벽 같은 자리에서
+                    // 빨강·파랑 격자로 어른거림 — 0.5.44 진단 사진으로 확인)
                     let walk = byU[i].outside
+                    let joinL = i > 0 && byU[i].u - byU[i - 1].u <= step * 1.6
+                    let joinR = j + 1 < byU.count && byU[j + 1].u - byU[j].u <= step * 1.6
                     if walk {
                         var e: Float = 0
-                        while e < ext && clearAt(u0 - 0.025, -1, walk: true) { u0 -= 0.025; e += 0.025 }
+                        while !joinL && e < ext && clearAt(u0 - 0.025, -1, walk: true) { u0 -= 0.025; e += 0.025 }
                         e = 0
-                        while e < ext && clearAt(u1 + 0.025, 1, walk: true) { u1 += 0.025; e += 0.025 }
+                        while !joinR && e < ext && clearAt(u1 + 0.025, 1, walk: true) { u1 += 0.025; e += 0.025 }
                     }
                     while u1 - u0 > 0.1 && !clearAt(u0, -1, walk: walk) { u0 += 0.025 }
                     while u1 - u0 > 0.1 && !clearAt(u1, 1, walk: walk) { u1 -= 0.025 }

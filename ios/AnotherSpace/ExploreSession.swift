@@ -379,6 +379,10 @@ final class ExploreSession {
     @ObservationIgnored private var diagMax: Float = 0
     @ObservationIgnored private var diagLate = 0
     @ObservationIgnored private var diagLast = CACurrentMediaTime()
+    @ObservationIgnored private var diagPrev = CACurrentMediaTime()
+    @ObservationIgnored private var diagStart = CACurrentMediaTime()
+    @ObservationIgnored private var diagSec: [String: (Double, Double)] = [:]     // 이름 → (합, 최장) 초
+    @ObservationIgnored private var diagCalc: (Double, Double, Int) = (0, 0, 0)    // 앱 계산 (합, 최장, 횟수)
     @ObservationIgnored private var furnHidden = false
     @ObservationIgnored private var furnHiddenList: [Entity] = []
     var furnSel: Int?                                   // 고른 상자 (furnEdits.adds 번호)
@@ -1333,6 +1337,8 @@ final class ExploreSession {
     func tick(_ dt: Float) {
         t += dt
         diagTick(dt)
+        diagPrev = CACurrentMediaTime()
+        defer { diagEnd() }
         guard let w = world, w.state == .running,
               let dev = w.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()) else { return }
         let m = dev.originFromAnchorTransform
@@ -1403,7 +1409,9 @@ final class ExploreSession {
             buildTimer += dt
             if buildTimer > 0.05 { buildTimer = 0; buildSome(fit, I) }
         }
+        diagMark("공간·문")
         vox?.tick(now: t)
+        diagMark("가구")
         if fade > 0.95 && vox?.revealed == false { vox?.revealed = true }
         voxSaveT += dt
         if voxSaveT > 20 { voxSaveT = 0; saveVox() }
@@ -1492,19 +1500,26 @@ final class ExploreSession {
             let hs = f.toSaved(head)
             wld.avoidHead(L.plane(hs.x, hs.z))
         }
+        diagMark("안전·안내")
         // 움직임 계산은 지금 방과, 지금 방이 빌려 쓰는 하늘 세계의 대표 방만 (같은 테마 방 전체를 매 프레임 돌리지 않게)
         let hostNow = worlds[current]?.hostId ?? current
         for (id, wld) in worlds { wld.tick(dt, active: id == current || id == hostNow) }
+        diagMark("세계")
         soundTick(dt)
         placeHud(dt)
         placeDocent(dt)
         furnTick()
         syncBars()
         tapTick()
+        diagMark("판·탭")
         campTick(dt)
+        diagMark("모닥불")
         catTick(dt)
+        diagMark("고양이")
         dogTick(dt)
+        diagMark("강아지")
         themeFeatures(dt)
+        diagMark("테마")
     }
 
     // MARK: 테마마다의 특별한 것 (시골: 별자리, 카페: 재즈·테이블 차림)
@@ -1737,8 +1752,24 @@ final class ExploreSession {
     /// 앱이 받는 화면 갱신(SceneEvents.Update) 간격을 실제 시각(CACurrentMediaTime)으로 재서 0.5초마다 글로:
     /// 초당 횟수 · 가장 긴 간격(ms) · 늦은 화면 수(17ms 넘은 간격 — 90장 기준 1.5배) / 보이는 방 수 · 켜진 포털 수.
     /// 새가 두 겹으로 보이거나 울렁거리는 순간 이 숫자가 떨어지는지 보려고. (기기 화면을 그리는 쪽의 시간은 앱에서 잴 수 없음 — 앱 갱신만)
+    /// 앞 표시부터 지금까지 걸린 앱 계산 시간을 그 이름으로 모음
+    private func diagMark(_ name: String) {
+        let now = CACurrentMediaTime()
+        let d = now - diagPrev
+        diagPrev = now
+        let o = diagSec[name] ?? (0, 0)
+        diagSec[name] = (o.0 + d, max(o.1, d))
+    }
+
+    /// 한 번의 화면 갱신에서 앱이 쓴 계산 시간 전체
+    private func diagEnd() {
+        let d = CACurrentMediaTime() - diagStart
+        diagCalc = (diagCalc.0 + d, max(diagCalc.1, d), diagCalc.2 + 1)
+    }
+
     private func diagTick(_ dt: Float) {
         let now = CACurrentMediaTime()
+        diagStart = now
         let gap = Float(now - diagLast)
         diagLast = now
         diagN += 1
@@ -1748,8 +1779,12 @@ final class ExploreSession {
         if diagSum >= 0.5 {
             var rooms = 0, portals = 0
             for (_, w) in worlds where w.local.isEnabled { rooms += 1; portals += w.portalCount }
-            diagText = String(format: "갱신 %.0f/초  최장 %.0fms  늦음 %d\n보이는 방 %d  포털 %d", Float(diagN) / diagSum, diagMax * 1000, diagLate, rooms, portals)
+            // 앱 계산: 한 화면에 쓴 평균·최장 ms, 가장 오래 걸린 두 부분(최장 ms) — 이 값이 작은데도 갱신이 45로 떨어지면 기기가 그리는 쪽이 무거운 것
+            let calcAvg = diagCalc.2 > 0 ? diagCalc.0 / Double(diagCalc.2) * 1000 : 0
+            let top = diagSec.sorted { $0.value.1 > $1.value.1 }.prefix(2).map { String(format: "%@ %.1f", $0.key, $0.value.1 * 1000) }.joined(separator: " · ")
+            diagText = String(format: "갱신 %.0f/초  최장 %.0fms  늦음 %d\n보이는 방 %d  포털 %d\n앱 계산 평균 %.1fms 최장 %.1fms\n", Float(diagN) / diagSum, diagMax * 1000, diagLate, rooms, portals, calcAvg, diagCalc.1 * 1000) + top
             diagN = 0; diagSum = 0; diagMax = 0; diagLate = 0
+            diagSec = [:]; diagCalc = (0, 0, 0)
         }
         if let c = diagCard {
             let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
