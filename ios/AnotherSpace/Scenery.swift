@@ -24,7 +24,9 @@ final class Scenery {
         var phase: Float = 0
         var center = SIMD3<Float>(0, 0, 0)
         var dir: Float = 1
-        var segLeft: Float = 0          // 지금 맡긴 이동(move)이 끝나기까지 남은 시간
+        let base = Entity()             // 도는 원의 가운데 (높이 포함) — 처음 각도만큼 돌려 둠
+        let spin = Entity()             // 이것이 끝없이 돎 (새는 그 바깥 반지름 자리에)
+        var started = false
         var gliding: Bool? = nil        // 날갯짓 상태 (바뀔 때만 날개 움직임을 새로 맡김)
     }
     private var flyers: [Flyer] = []
@@ -242,11 +244,14 @@ final class Scenery {
             f.ang = Float(i) / Float(n) * 2 * .pi + Float.random(in: 0...0.6, using: &g)
             f.phase = Float.random(in: 0...6, using: &g)
             f.dir = flockDir
-            // 처음 자리 (이동은 tick 이 이어서 맡김)
-            let p0 = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
-            let v0 = SIMD3<Float>(-sin(f.ang), 0, cos(f.ang)) * f.dir
-            f.root.position = SIMD3<Float>(p0.x, f.height + 1.2 * sin(f.phase), p0.z)
-            f.root.orientation = simd_quatf(angle: atan2(-v0.x, -v0.z), axis: [0, 1, 0])
+            // 원 가운데(base) → 도는 축(spin) → 반지름 자리의 새. base를 처음 각도만큼 돌려 두면 새는 (cos a, sin a) 자리.
+            // spin 이 -dir 쪽으로 돌면(위에서 볼 때 각도가 dir 쪽으로 늚) 새의 나아가는 쪽은 처음 자리에서 dir>0 이면 +z → 머리(-z)를 반 바퀴 돌려 둠
+            f.base.position = SIMD3<Float>(f.center.x, f.height, f.center.z)
+            f.base.orientation = simd_quatf(angle: -f.ang, axis: [0, 1, 0])
+            f.base.addChild(f.spin)
+            f.root.position = SIMD3<Float>(f.radius, 1.2 * sin(f.phase), 0)
+            f.root.orientation = f.dir > 0 ? simd_quatf(angle: .pi, axis: [0, 1, 0]) : simd_quatf(angle: 0, axis: [0, 1, 0])
+            f.spin.addChild(f.root)
             f.root.addChild(ModelEntity(mesh: body, materials: [mat]))
             for s: Float in [1, -1] {
                 let w = ModelEntity(mesh: wm, materials: [wingMat])
@@ -254,7 +259,7 @@ final class Scenery {
                 f.root.addChild(w)
                 f.wings.append(w)
             }
-            far.addChild(f.root)
+            far.addChild(f.base)
             flyers.append(f)
         }
     }
@@ -1337,31 +1342,40 @@ final class Scenery {
         near.addChild(e)
     }
 
+    /// 새 한 마리의 끝없는 원 돌기 + 천천히 오르내림을 RealityKit에 맡김 (앱 갱신과 상관없이 매 화면 고르게).
+    /// 한 바퀴를 120°씩 세 토막(회전 사이 각이 180° 밑이라 돌아가는 쪽이 늘 같음)으로 이어 붙여 끝없이 되풀이 (360° = 0°라 이음새 없음)
+    private func startFlight(_ f: Flyer) {
+        f.started = true
+        let period = TimeInterval(2 * Float.pi * f.radius / max(0.5, f.speed))
+        var parts: [AnimationResource] = []
+        for k in 0..<3 {
+            let a0 = -f.dir * Float(k) * 2 * .pi / 3, a1 = -f.dir * Float(k + 1) * 2 * .pi / 3
+            let anim = FromToByAnimation<Transform>(from: Transform(rotation: simd_quatf(angle: a0, axis: [0, 1, 0])),
+                                                    to: Transform(rotation: simd_quatf(angle: a1, axis: [0, 1, 0])),
+                                                    duration: period / 3, timing: .linear, bindTarget: .transform)
+            if let r = try? AnimationResource.generate(with: anim) { parts.append(r) }
+        }
+        if parts.count == 3, let seq = try? AnimationResource.sequence(with: parts) {
+            f.spin.playAnimation(seq.repeat())
+        }
+        // 오르내림 ±1.2m (8~12초에 한 번 오갔다 돌아옴)
+        let lo = Transform(scale: f.root.scale, rotation: f.root.orientation, translation: SIMD3<Float>(f.radius, -1.2, 0))
+        let hi = Transform(scale: f.root.scale, rotation: f.root.orientation, translation: SIMD3<Float>(f.radius, 1.2, 0))
+        let bob = FromToByAnimation<Transform>(from: lo, to: hi, duration: TimeInterval(4 + f.phase / 1.5), timing: .easeInOut,
+                                               bindTarget: .transform, repeatMode: .autoReverse)
+        if let r = try? AnimationResource.generate(with: bob) { f.root.playAnimation(r) }
+    }
+
     // MARK: 매 프레임 (지금 방만)
     func tick(_ dt: Float) {
         t += dt
         tickPlane(dt)
         for p in plumes { p.tick(dt) }
         for f in flyers {
-            // 새 위치는 매 화면 직접 옮기지 않고, 짧은 구간(원호 0.2rad, 길어야 1초) 끝 자리로의 이동(move)을 RealityKit에 맡김 —
-            // 앱의 화면 갱신(SceneEvents.Update)이 화면 주사율보다 느리면 직접 옮기는 빠른 물체는 같은 자리에 두 번 그려진 뒤 건너뛰어
-            // 눈으로 따라갈 때 두 겹으로 보였음 (멈춰 있는 나무·산은 그대로인데 빠르게 나는 새만 이중으로 보인 이유)
-            f.segLeft -= dt
-            // 다음 구간은 지금 구간이 끝나기 0.4초 전에 미리 맡김 (진행 중인 이동을 지금 자리에서 이어받음) — 끝난 뒤에 맡기면
-            // 앱 갱신이 조금만 늦어도 그 사이 새가 한두 화면 멈췄다 움직여, 눈으로 따라갈 때 두 겹으로 보였음
-            let w = f.speed / max(4, f.radius)                        // 원을 도는 빠르기 (rad/s)
-            let dur = min(1, max(0.35, 0.2 / max(0.05, w)))            // 원호 0.2rad 안팎 (곧은 이동이 원에서 크게 벗어나지 않게)
-            if f.segLeft <= dur * 0.35 {
-                f.ang += f.dir * w * (dur - max(0, f.segLeft))         // 끝 자리 = 지금 시각 + dur 의 원 위 자리
-                let tt = t + dur
-                let p = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
-                let v = SIMD3<Float>(-sin(f.ang), 0, cos(f.ang)) * f.dir
-                let tr = Transform(scale: f.root.scale, rotation: simd_quatf(angle: atan2(-v.x, -v.z), axis: [0, 1, 0]),
-                                   translation: SIMD3<Float>(p.x, f.height + 1.2 * sin(tt * 0.35 + f.phase), p.z))
-                if f.root.parent != nil { _ = f.root.move(to: tr, relativeTo: f.root.parent, duration: TimeInterval(dur), timingFunction: .linear) }
-                else { f.root.transform = tr }
-                f.segLeft = dur
-            }
+            // 새가 원을 도는 움직임은 앱이 구간마다 맡기지 않고, 처음 한 번 RealityKit에 '끝없이 도는 애니메이션'으로 맡김 (startFlight).
+            // 예전 방식(짧은 이동을 이어 맡김)은 앱 갱신이 늦을 때마다 구간 사이에서 멈칫해 두 겹으로 보였고(0.5.40),
+            // 0.5.41에서 미리 맡기게 바꾸자 RealityKit의 이동이 '이미 끝 자리로 옮겨진 자리'에서 다시 시작해 가다 서다 했음
+            if !f.started && f.base.scene != nil { startFlight(f) }
             // 날갯짓 (가끔 미끄러지듯 쉼) — 날개도 매 화면 앱이 직접 돌리지 않고 되풀이 움직임(애니메이션)을 RealityKit에 맡김.
             // 앱 갱신이 화면 주사율보다 느리면 초당 8~12번 퍼덕이는 날개가 띄엄띄엄 그려져 새가 흐릿하게(초점이 안 맞는 것처럼) 보였음.
             // 앱은 쉼↔날갯짓이 바뀔 때만 손댐

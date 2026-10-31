@@ -510,7 +510,7 @@ final class RoomWorld {
     private func openWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         var portal = PortalPlanes()
         /// 울타리 줄 위 한 점 (평면 좌표): 방향 n(방 안쪽), 줄 따라 좌표 u, 줄 자리 c(= n·점), 세울 두께, 얇게, 한가운데 공유 줄인지
-        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool; let outside: Bool; let toward: Int }
+        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool; let outside: Bool; let toward: Int; let lim: Bool }
         var samples: [Sample] = []
         let base = barrierProt + 0.01                                      // 울타리 앞면이 벽 평면 1cm 뒤
         let step: Float = 0.05
@@ -531,6 +531,19 @@ final class RoomWorld {
                     if L.walkable(q) { let f = L.flat(q); let r = L.roomNear(x: f.x, z: f.y, radius: 0.05); return (r == 0 ? -1 : r, o) }
                 }
                 return (0, 0)
+            }
+            /// 이 자리 뒤(너머 50cm 안)에 마주 선 벽 면(어느 방이든, 반대 방향)까지 거리 — 울타리를 그 면과 겹치지 않게 두려고
+            func wallBehind(_ p: SIMD2<Float>) -> Float? {
+                let up = simd_dot(perp, p)
+                var best: Float? = nil
+                for o in L.walls where simd_dot(o.n, s.n) < -0.9 {
+                    let x = simd_dot(s.n, p - o.a)
+                    guard x > 0.005 && x < 0.5 else { continue }
+                    let ua = simd_dot(perp, o.a), ub = simd_dot(perp, o.b)
+                    guard up > min(ua, ub) - 0.03 && up < max(ua, ub) + 0.03 else { continue }
+                    if best == nil || x < best! { best = x }
+                }
+                return best
             }
             /// 방 m 의 벽 중 이 자리 맞은편(반대 방향, 너머 g 언저리)에 선 것이 있는지
             func facing(_ m: Int, _ p: SIMD2<Float>, _ g: Float) -> Bool {
@@ -561,6 +574,13 @@ final class RoomWorld {
                     off = (g - 0.05) / 2 - 0.04                              // 두 벽 사이 한가운데 (얇은 울타리 두께 8cm의 가운데)
                     shared = true
                 }
+                var lim = false
+                if m != 0 && !shared, let x = wallBehind(p) {
+                    // 내 벽 뒤 가까이에 다른 방(같은 방의 맞은편 포함) 벽 면이 있음: 울타리(두께 8cm)가 그 면에서 4cm 넘게 떨어지게 내 벽 쪽으로 당김.
+                    // 예전엔 늘 '내 벽 + 튀어나옴 여유(시골 11cm)' 뒤에 세워, 벽 두께가 그 값 언저리인 곳(실내 벽 10~12cm)에서
+                    // 울타리 앞면이 옆방 포털 면과 같은 평면에 놓여 어른거렸음 — 시골 거실 좌우 벽의 같은 자리 (튀어나옴 여유가 큰 시골·계곡만)
+                    if x < off + 0.08 + 0.04 { off = max(0.02, min(off, x - 0.12)); lim = true }
+                }
                 let q = p - s.n * off
                 // 너머가 다른 세계 옆방이면 그 방 번호 (그 방에 있을 때 끌 울타리).
                 // 문 곁(문틀 옆)은 너머 칸이 문 자리라 방을 이 방·모름으로 잡기도 함 → 울타리 자리가 문 자리 30cm 안이면 그 문 건너편 방
@@ -573,14 +593,15 @@ final class RoomWorld {
                         if o != room.id && !groupIds.contains(o) { toward = o; break }
                     }
                 }
-                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0, toward: toward))
+                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0, toward: toward, lim: lim))
             }
         }
         addPortalPlanes(portal, name: "walls")
         // 같은 방향·같은 종류의 점을 줄 자리(c)가 15cm 안인 것끼리 한 줄로: 바깥은 가장 뒤(작은 c — 모든 벽 조각의 평면 뒤), 공유 줄은 가운데(평균)
         var spans: [BarrierSpan] = []
         var keys: [String: [Sample]] = [:]
-        for sm in samples { keys["\(Int(sm.n.x.rounded()))_\(Int(sm.n.y.rounded()))_\(sm.shared)", default: []].append(sm) }
+        // 옆 벽 면에 맞춰 당긴 점(lim)은 따로 묶음 — 다른 점과 섞이면 가장 뒤(작은 c)로 줄이 잡혀 다시 옆방 벽 면과 겹침
+        for sm in samples { keys["\(Int(sm.n.x.rounded()))_\(Int(sm.n.y.rounded()))_\(sm.shared)_\(sm.lim)", default: []].append(sm) }
         for k in keys.keys.sorted() {
             guard let list = keys[k], let f = list.first else { continue }
             let n = f.n, perp = SIMD2<Float>(-n.y, n.x), shared = f.shared
@@ -588,7 +609,8 @@ final class RoomWorld {
             var clusters: [[Sample]] = []
             for sm in byC {
                 // 묶음의 첫 점에서 15cm 안까지만 (비스듬한 스캔 벽의 계단이 끝없이 이어 묶여 줄이 벽에서 멀어지지 않게)
-                if let first = clusters.last?.first, sm.c - first.c <= 0.15 { clusters[clusters.count - 1].append(sm) } else { clusters.append([sm]) }
+                // 옆 벽 면에 맞춰 당긴 점(lim)은 3cm 안끼리만 (자리마다 옆방 벽 면까지 거리가 달라, 한 줄로 모으면 어딘가에서 다시 그 면과 겹침)
+                if let first = clusters.last?.first, sm.c - first.c <= (f.lim ? 0.03 : 0.15) { clusters[clusters.count - 1].append(sm) } else { clusters.append([sm]) }
             }
             for cl in clusters {
                 let c = shared ? cl.map(\.c).reduce(0, +) / Float(cl.count) : cl[0].c
@@ -619,7 +641,7 @@ final class RoomWorld {
                 }
                 let byU = byKey.keys.sorted().compactMap { k -> Sample? in
                     guard let sm = byKey[k] else { return nil }
-                    return Sample(n: sm.n, u: Float(k) * step, c: sm.c, depth: sm.depth, thin: sm.thin, shared: sm.shared, outside: sm.outside, toward: sm.toward)
+                    return Sample(n: sm.n, u: Float(k) * step, c: sm.c, depth: sm.depth, thin: sm.thin, shared: sm.shared, outside: sm.outside, toward: sm.toward, lim: sm.lim)
                 }
                 var i = 0
                 while i < byU.count {
@@ -3318,10 +3340,13 @@ final class RoomWorld {
             let cell: Float = 1
             let nx = max(1, Int(((hi.x - lo.x) / cell).rounded(.up))), nz = max(1, Int(((hi.y - lo.y) / cell).rounded(.up)))
             var roofed = [Bool](repeating: false, count: nx * nz)
+            // 지붕 있는 방은 벽 밖 1m까지 처마처럼 비움: 15cm만 비우면 창 바로 밖(유리에서 20~30cm)을 지나는 큰 눈송이가
+            // 창틀 안쪽에 겹쳐 보여 방 안으로 떨어지는 것처럼 보였음 (집 테마 창 앞)
+            let eave: Float = 1.0
             for r in rec.rooms where !Worlds.style(r.place, time: r.time).open {
                 for q in L.rects(r.id) {
-                    let i0 = max(0, Int(((q.0.x - 0.15 - lo.x) / cell).rounded(.down))), i1 = min(nx - 1, Int(((q.1.x + 0.15 - lo.x) / cell).rounded(.down)))
-                    let j0 = max(0, Int(((q.0.y - 0.15 - lo.y) / cell).rounded(.down))), j1 = min(nz - 1, Int(((q.1.y + 0.15 - lo.y) / cell).rounded(.down)))
+                    let i0 = max(0, Int(((q.0.x - eave - lo.x) / cell).rounded(.down))), i1 = min(nx - 1, Int(((q.1.x + eave - lo.x) / cell).rounded(.down)))
+                    let j0 = max(0, Int(((q.0.y - eave - lo.y) / cell).rounded(.down))), j1 = min(nz - 1, Int(((q.1.y + eave - lo.y) / cell).rounded(.down)))
                     guard i0 <= i1, j0 <= j1 else { continue }
                     for j in j0...j1 { for i in i0...i1 { roofed[j * nx + i] = true } }
                 }
