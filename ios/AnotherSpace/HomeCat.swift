@@ -928,7 +928,9 @@ final class HomeCat {
         let fade: Float = k > bubbleDur - 0.3 ? max(0, (bubbleDur - k) / 0.3) : 1
         bubble.scale = SIMD3<Float>(repeating: max(0.01, pop * fade))
         let top: Float = (act == .sleep || act == .flop || act == .loaf || act == .knead) ? 0.32 : 0.48
-        bubble.position = [0.08 * face, top + 0.02 * sin(t * 3), 0]
+        // 그림 판과 같이 돌리고 젖힌 자리 (판 기준 머리 위·보는 쪽 살짝 옆). 예전엔 판의 방향을 무시한 세계 좌표 옆으로 밀어,
+        // 보는 방향에 따라 머리 위가 아니라 내 쪽(앞)이나 뒤로 떠 보였음
+        bubble.position = card.position + card.orientation.act(SIMD3<Float>(0.08 * face, top + 0.02 * sin(t * 3), 0.01))
         if k > bubbleDur { bubble.isEnabled = false; bubbleT = -1 }
     }
 
@@ -1190,8 +1192,27 @@ final class HomeCat {
         // 그쪽 설 자리가 막힘(가구 곁·좁은 틈): 반대쪽, 그것도 막히면 공 바로 곁(몸 가운데로 닿음 — pawTouch)
         let o = b + cardRight() * f * 0.17
         if c.free(o) { reachSide = -f; return o }
+        return standNear(b, c)
+    }
+    /// 장난감 곁에서 설 수 있는 가장 가까운 바닥 (장난감 자리가 가구·벽 곁이라 몸이 못 서는 경우 — 둘레 50cm까지 5cm씩)
+    private func standNear(_ b: SIMD2<Float>, _ c: Ctx) -> SIMD2<Float> {
+        if c.free(b) { return b }
+        var r: Float = 0.05
+        while r <= 0.5 {
+            var best: (SIMD2<Float>, Float)? = nil
+            for k in 0..<16 {
+                let a = Float(k) / 16 * 2 * .pi
+                let q = b + SIMD2<Float>(cos(a), sin(a)) * r
+                guard c.free(q) else { continue }
+                let d = simd_distance(q, pos)
+                if best == nil || d < best!.1 { best = (q, d) }
+            }
+            if let bb = best { return bb.0 }
+            r += 0.05
+        }
         return b
     }
+
 
     private func hitBall() {
         guard ball != nil else { return }
@@ -1278,7 +1299,8 @@ final class HomeCat {
             show(walkFrame(moveDir))
         case .arrived, .blocked:
             // 더 다가갈 수 없음: 앞발이 닿으면 치고, 닿지 않으면(가구 틈 등) 갸웃하고 포기 — 닿지 않는데 공이 튀지 않게
-            if pawTouch(ballPos) { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else if !reachFlipped {
+            // 가구·벽 곁의 공: 몸이 더 못 다가가도 35cm 안이면 앞발을 길게 뻗어 침 (예전엔 '?' 하고 포기 — 벽·가구 곁 공을 못 알아보는 것처럼 보였음)
+            if pawTouch(ballPos) || simd_distance(pos, ballPos) < 0.35 { faceToward(ballPos); hitBall(); start(.swat, 0.45) } else if !reachFlipped {
                 reachFlipped = true                                 // 이쪽이 막혔으면 공 반대쪽으로 돌아가 봄
                 reachSide = -(reachSide ?? face)
                 nav.reset()

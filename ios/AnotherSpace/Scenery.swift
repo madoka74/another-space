@@ -1347,10 +1347,12 @@ final class Scenery {
             // 앱의 화면 갱신(SceneEvents.Update)이 화면 주사율보다 느리면 직접 옮기는 빠른 물체는 같은 자리에 두 번 그려진 뒤 건너뛰어
             // 눈으로 따라갈 때 두 겹으로 보였음 (멈춰 있는 나무·산은 그대로인데 빠르게 나는 새만 이중으로 보인 이유)
             f.segLeft -= dt
-            if f.segLeft <= 0 {
-                let w = f.speed / max(4, f.radius)                    // 원을 도는 빠르기 (rad/s)
-                let dur = min(1, 0.2 / max(0.05, w))
-                f.ang += f.dir * w * dur
+            // 다음 구간은 지금 구간이 끝나기 0.4초 전에 미리 맡김 (진행 중인 이동을 지금 자리에서 이어받음) — 끝난 뒤에 맡기면
+            // 앱 갱신이 조금만 늦어도 그 사이 새가 한두 화면 멈췄다 움직여, 눈으로 따라갈 때 두 겹으로 보였음
+            let w = f.speed / max(4, f.radius)                        // 원을 도는 빠르기 (rad/s)
+            let dur = min(1, max(0.35, 0.2 / max(0.05, w)))            // 원호 0.2rad 안팎 (곧은 이동이 원에서 크게 벗어나지 않게)
+            if f.segLeft <= dur * 0.35 {
+                f.ang += f.dir * w * (dur - max(0, f.segLeft))         // 끝 자리 = 지금 시각 + dur 의 원 위 자리
                 let tt = t + dur
                 let p = f.center + SIMD3<Float>(cos(f.ang) * f.radius, 0, sin(f.ang) * f.radius)
                 let v = SIMD3<Float>(-sin(f.ang), 0, cos(f.ang)) * f.dir

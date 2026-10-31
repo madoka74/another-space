@@ -607,7 +607,9 @@ final class HomeDog {
         let fade: Float = k > bubbleDur - 0.3 ? max(0, (bubbleDur - k) / 0.3) : 1
         bubble.scale = SIMD3<Float>(repeating: max(0.01, pop * fade))
         let top: Float = (act == .sleep || act == .lie || act == .onTop) ? Self.size * 0.5 : Self.size * 0.82     // 머리 위 (강아지 크기에 맞게)
-        bubble.position = [0.11 * face, top + hop + 0.02 * sin(t * 3), 0]
+        // 그림 판과 같이 돌리고 젖힌 자리 (판 기준 머리 위). 뛰어오름(hop)은 뿌리 자리에 이미 들어 있음 — 예전엔 판 방향을 무시한
+        // 세계 좌표 옆으로 밀고 hop을 두 번 더해, 머리 위가 아니라 내 쪽(앞)에 떠 보였음
+        bubble.position = card.position + card.orientation.act(SIMD3<Float>(0.11 * face, top + 0.02 * sin(t * 3), 0.01))
         if k > bubbleDur { bubble.isEnabled = false; bubbleT = -1 }
     }
 
@@ -635,8 +637,27 @@ final class HomeDog {
         // 그쪽 설 자리가 막힘: 반대쪽, 그것도 막히면 막대 바로 곁 (몸 가운데로 닿음 — mouthTouch)
         let o = b + cardRight() * f * 0.22
         if c.free(o) { reachSide = -f; return o }
+        return standNear(b, c)
+    }
+    /// 장난감 곁에서 설 수 있는 가장 가까운 바닥 (장난감 자리가 가구·벽 곁이라 몸이 못 서는 경우 — 둘레 50cm까지 5cm씩)
+    private func standNear(_ b: SIMD2<Float>, _ c: Ctx) -> SIMD2<Float> {
+        if c.free(b) { return b }
+        var r: Float = 0.05
+        while r <= 0.5 {
+            var best: (SIMD2<Float>, Float)? = nil
+            for k in 0..<16 {
+                let a = Float(k) / 16 * 2 * .pi
+                let q = b + SIMD2<Float>(cos(a), sin(a)) * r
+                guard c.free(q) else { continue }
+                let d = simd_distance(q, pos)
+                if best == nil || d < best!.1 { best = (q, d) }
+            }
+            if let bb = best { return bb.0 }
+            r += 0.05
+        }
         return b
     }
+
 
     private func cardRight() -> SIMD2<Float> {
         let d = SIMD2<Float>(lastHead.x - pos.x, lastHead.z - pos.y)
@@ -985,7 +1006,7 @@ final class HomeDog {
             if stickAir != nil {                                   // 아직 날아가는 중: 떨어질 때까지 지켜봄
                 faceToward(target)
                 show(loop(["dog_fhappy", "dog_fsit1"], fps: 4))
-            } else if mouthTouch(target, reach: 0.2) {
+            } else if mouthTouch(target, reach: 0.2) || simd_distance(pos, target) < 0.42 {      // 가구·벽 곁 막대: 몸이 더 못 다가가도 42cm 안이면 고개를 내밀어 묾
                 pickT = dt                                         // 고개를 내밀어 물기 (입이 20cm 안일 때만 — 닿지 않는데 물지 않게)
             } else if !reachFlipped {
                 reachFlipped = true                                // 이쪽이 막혔으면 막대 반대쪽으로 돌아가 봄

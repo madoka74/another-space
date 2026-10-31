@@ -292,6 +292,7 @@ final class ExploreSession {
     @ObservationIgnored private var openHold: [Int: Float] = [:]    // 이때까지는 다시 닫힘으로 치지 않음 (방금 문 자리를 지남)
     @ObservationIgnored private var realClosed: Set<Int> = []       // 실제 문이 닫혀 있는 문
     @ObservationIgnored private var doorPlanes: [UUID: (Int, Bool)] = [:]   // 문으로 알아본 평면 → (문 번호, 문 자리를 가로막고 있는지)
+    @ObservationIgnored private var doorPlaneW: [UUID: Float] = [:]  // 그때 그 평면의 폭
     @ObservationIgnored private var doorPlaneS: [UUID: Float] = [:]  // 문 자리를 가로막던 평면의 가운데 (문 폭 방향 자리) — 미닫이가 밀려났는지 보려고
     @ObservationIgnored private var passedAt: [Int: Float] = [:]     // 열린 문을 마지막으로 건너간 때
     @ObservationIgnored private var heldHits: [Int: [UUID: Set<Int>]] = [:]   // 열림 판단 때 치워 둔 그물 기록 (그 덩어리가 새로 오면 버림) — 지금 그물 전체 모양
@@ -1087,7 +1088,10 @@ final class ExploreSession {
                     let sNow: Float = ds.alongU ? pp.y : pp.x
                     if ds.zone(pp, margin: 0.9, side: 0.3) {
                         if across < 0.7 { moved = true }                                            // 젖혀짐 (45° 넘게)
-                        else if let s0 = doorPlaneS[a.id], abs(sNow - s0) > 0.25 { moved = true }   // 미닫이처럼 옆으로 밀림
+                        // 미닫이처럼 옆으로 밀림: 면 크기는 그대로인데 자리만 25cm 넘게 (처음 작게 잡힌 평면이 커지며 가운데가 옮겨 가는 것은 아님 —
+                        // 예전엔 그것도 '밀림'으로 쳐서 닫힌 문 앞에서 열림·닫힘이 오갔음)
+                        else if let s0 = doorPlaneS[a.id], abs(sNow - s0) > 0.25, let w0 = doorPlaneW[a.id],
+                                abs(a.geometry.extent.width - w0) < 0.2 * w0 { moved = true }
                     }
                 }
                 if moved {
@@ -1114,6 +1118,7 @@ final class ExploreSession {
                 let c = f.toSaved(simd_make_float3(m.columns.3))
                 let pp = L.plane(c.x, c.z)
                 doorPlaneS[a.id] = L.doors[n.0].alongU ? pp.y : pp.x
+                doorPlaneW[a.id] = a.geometry.extent.width
             }
         }
     }
@@ -1989,7 +1994,11 @@ final class ExploreSession {
             if !inside { lastSide[i] = side }
 
             // ── ① 실제 문
-            let standing = ds.zone(p, margin: 0.05, side: -0.1)              // 문 자리 한가운데 = 실제 문은 열려 있음 (닫힌 문 자리엔 설 수 없음)
+            // 문 자리 한가운데 = 실제 문은 열려 있음 (닫힌 문 자리엔 설 수 없음). 몸(목 뒤)이 벽 두께 안 깊숙이(앞뒤 2cm 안쪽) 들어서야 —
+            // 예전엔 벽 면 5cm 밖까지 쳐서, 닫힌 문 바로 앞에서 고개를 숙이거나 스캔 오차가 조금만 있어도 '문 자리에 섬 → 열림'이 되어
+            // 같은 테마에서 닫힌 문과 열린 공간이 오갔음. 얇은 벽(10cm 밑)은 문 면 앞뒤 3cm 안
+            let thick = abs(ds.pA - ds.pB)
+            let standing = ds.zone(p, margin: thick >= 0.1 ? -0.02 : (0.1 - thick) / 2 - 0.02, side: -0.1)
             if standing { realOpen(i, hold: 2) }
             // 열린 뒤 3초 넘어 곁(1m)에서 문 자리를 바라본 시간 (지금 그물이 정말 열린 모양으로 바뀌었는지 볼 수 있었던 시간)
             if !realClosed.contains(i) && near && t - (openedAt[i] ?? -100) > 3 && gazeHitsDoor(ds, pe, fs, headY: hs.y - L.floorY, L) {

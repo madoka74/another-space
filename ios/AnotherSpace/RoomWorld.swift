@@ -607,7 +607,20 @@ final class RoomWorld {
                     return true
                 }
                 let ext = base + 0.04
-                let byU = cl.sorted { $0.u < $1.u }
+                // 같은 줄 자리(u, 5cm 칸)에 점이 둘 이상이면 하나만 (스캔 벽이 5cm 계단이라 비스듬한 벽 조각 둘이 같은 자리에 점을 내고,
+                // 종류(얇음·바깥·옆방)가 엇갈리면 짧은 토막이 같은 자리에 겹쳐 서서 앞면이 한 평면에서 겹쳐 어른거렸음 — 거실 좌우 벽 돌담)
+                var byKey: [Int: Sample] = [:]
+                for sm in cl {
+                    let k = Int((sm.u / step).rounded())
+                    if let o = byKey[k] {
+                        let better = (sm.outside && !o.outside) || (sm.outside == o.outside && (!sm.thin && o.thin || (sm.thin == o.thin && sm.depth > o.depth)))
+                        if better { byKey[k] = sm }
+                    } else { byKey[k] = sm }
+                }
+                let byU = byKey.keys.sorted().compactMap { k -> Sample? in
+                    guard let sm = byKey[k] else { return nil }
+                    return Sample(n: sm.n, u: Float(k) * step, c: sm.c, depth: sm.depth, thin: sm.thin, shared: sm.shared, outside: sm.outside, toward: sm.toward)
+                }
                 var i = 0
                 while i < byU.count {
                     var j = i
@@ -719,7 +732,7 @@ final class RoomWorld {
             let D = sp.thin ? 0.08 : min(sp.depth, 0.5)
             // 겹치는 두 줄(모서리·안쪽으로 들어간 벽)의 같은 높이 윗면이 깜빡이지 않게, 줄마다 높이를 4mm씩 다르게 (바깥 방향 넷 × 3)
             let dirK = (Int(((atan2(out.z, out.x) + .pi) / (.pi / 2)).rounded()) % 4 + 4) % 4
-            let lift = Float(dirK * 3 + si % 3) * 0.004
+            let lift = Float(dirK) * 0.012 + Float(si % 6) * 0.002          // 같은 방향 줄끼리도 여섯 단계로 (셋이면 겹친 줄 높이가 같아지는 일이 잦았음)
             switch room.place {
             case "camp":
                 // 통나무 울타리: 1.8m 안팎마다 굵은 말뚝 + 가로 통나무 둘 (조금 처짐)
@@ -2735,7 +2748,9 @@ final class RoomWorld {
                     // 머리 위(눈높이에서 55도 넘게)는 나무가 덮지 않게: 꼭대기까지 높이 × 0.7 보다 집에서 멀리.
                     // 가까이 선 10~20m 나무의 잎 판이 머리 위를 가득 덮으면, 올려다보며 고개를 돌릴 때 가까운 만큼 크게 움직여
                     // 그림이 조금만 늦어도 흔들리고 초점이 안 맞는 것처럼 보였고(울렁거림), 겹친 잎 판이 화면을 가득 채워 그리기도 무거웠음
-                    dd = max(dd, (h - 1.6) * 0.7)
+                    // 숲은 하늘을 올려다보게 하는 테마: 눈높이에서 40도 넘는 하늘(나무는 꼭대기 높이 × 1.2 밖)은 비워 둠 — 0.7배(55도)로도 올려다보며
+                    // 고개를 돌리면 가까운 큰 나무의 잎 판(포털마다 다시 그림)이 화면을 채워 울렁거림·새 이중으로 보임이 남았음
+                    dd = max(dd, (h - 1.6) * (room.place == "forest" ? 1.2 : 0.7))
                     let p = around((Float(i) + Float.random(in: 0...0.8, using: &g)) / Float(set.count), dd, rec, floorY - 0.1)
                     let w = h * set.aspect * Float.random(in: 0.85...1.15, using: &g)
                     let yaw = Float.random(in: 0...3.14, using: &g)
@@ -3498,7 +3513,9 @@ final class RoomWorld {
         // 하늘에서 움직이는 구름이 띄엄띄엄 옮겨져 흐릿하게(초점이 안 맞는 것처럼) 보였음 (새와 같은 까닭)
         for i in clouds.indices {
             cloudLeft[i] -= dt
-            guard cloudLeft[i] <= 0, let par = clouds[i].0.parent else { continue }
+            // 끝나기 1초 전에 다음 구간을 미리 맡김 (끝난 뒤 맡기면 앱 갱신이 늦을 때 구름이 잠깐 멈췄다 움직임) — 남은 만큼 길게 잡아 빠르기는 같게
+            guard cloudLeft[i] <= 1, let par = clouds[i].0.parent else { continue }
+            let lead = max(0, cloudLeft[i])
             let (e, v) = clouds[i]
             var p = cloudAt[i] ?? e.position
             let off = p - center
@@ -3509,9 +3526,9 @@ final class RoomWorld {
             let dur: Float = 20
             var tr = e.transform
             tr.translation = p + v * dur
-            _ = e.move(to: tr, relativeTo: par, duration: TimeInterval(dur), timingFunction: .linear)
+            _ = e.move(to: tr, relativeTo: par, duration: TimeInterval(dur + (jump ? 0 : lead)), timingFunction: .linear)
             cloudAt[i] = tr.translation
-            cloudLeft[i] = dur
+            cloudLeft[i] = dur + (jump ? 0 : lead)
         }
         if let w = water {
             let speed: Float = room.weather == "storm" ? 0.8 : (room.weather == "wind" ? 0.5 : 0.22)
