@@ -23,6 +23,7 @@ struct ExploreView: View {
             if let tp = attachments.entity(for: "theme") { s.attachTheme(tp) }
             if let sc = attachments.entity(for: "stars") { s.attachStars(sc) }
             if let fp = attachments.entity(for: "furn") { s.attachFurn(fp) }
+            if let dg = attachments.entity(for: "diag") { s.attachDiag(dg) }
             s.updateSub = content.subscribe(to: SceneEvents.Update.self) { e in s.tick(Float(e.deltaTime)) }
         } attachments: {
             Attachment(id: "hud") { ExploreHud(s: s) }
@@ -30,6 +31,7 @@ struct ExploreView: View {
             Attachment(id: "theme") { ThemePanel(s: s) }
             Attachment(id: "stars") { StarCard(s: s) }
             Attachment(id: "furn") { FurnPanel(s: s) }
+            Attachment(id: "diag") { DiagPanel(s: s) }
         }
         // 탭은 손짓 하나에 한 번씩만 받고(시스템 탭·손 추적 짝짓기), 싱글·더블은 앱이 가름: 두 번째 탭이 0.45초 안에 오면 더블탭, 안 오면 그때 싱글탭.
         // 보는 곳 어디든 받도록 머리 둘레에 보이지 않는 '탭 받는 상자'를 둠. 열쇠·그림 버튼은 바로 처리
@@ -149,6 +151,20 @@ struct FurnTag: Component { var index: Int = 0 }
 /// - 고르기: 하는 법 · 되돌리기 · 처음 스캔대로(확인) · 끝내기. 가구·빈 바닥을 탭하면 그 가구 편집을 시작
 /// - 편집 중(가구 하나): 폭·깊이·높이 · 돌리기 · 이 가구 완료 / 취소. 완료나 취소를 눌러야 다른 가구를 고르거나 끝낼 수 있음.
 ///   지우기는 판 맨 위 오른쪽에 따로, 한 번 더 확인
+/// [진단용 — 원인 확인 뒤 뺄 것] 시선 왼쪽 아래 작은 글: 앱 화면 갱신 간격·보이는 방·포털 수
+private struct DiagPanel: View {
+    let s: ExploreSession
+    var body: some View {
+        Text(s.diagText)
+            .font(.system(size: 13, weight: .medium, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+            .fixedSize()
+            .allowsHitTesting(false)
+    }
+}
+
 private struct FurnPanel: View {
     let s: ExploreSession
 
@@ -355,6 +371,14 @@ final class ExploreSession {
     @ObservationIgnored private var hudPinned = false
     // 가구 맞추기 (세계를 걷고 현실 위에 가구 블록을 반투명하게 보이며, 탭·끌기·두 손 집기·판 버튼으로 넣고 빼고 줄이고 키움)
     var furnMode = false
+    /// [진단용] 화면 왼쪽 아래에 띄우는 글
+    var diagText = ""
+    @ObservationIgnored private var diagCard: Entity?
+    @ObservationIgnored private var diagN = 0
+    @ObservationIgnored private var diagSum: Float = 0
+    @ObservationIgnored private var diagMax: Float = 0
+    @ObservationIgnored private var diagLate = 0
+    @ObservationIgnored private var diagLast = CACurrentMediaTime()
     @ObservationIgnored private var furnHidden = false
     @ObservationIgnored private var furnHiddenList: [Entity] = []
     var furnSel: Int?                                   // 고른 상자 (furnEdits.adds 번호)
@@ -1308,6 +1332,7 @@ final class ExploreSession {
     // MARK: 매 프레임
     func tick(_ dt: Float) {
         t += dt
+        diagTick(dt)
         guard let w = world, w.state == .running,
               let dev = w.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()) else { return }
         let m = dev.originFromAnchorTransform
@@ -1701,6 +1726,38 @@ final class ExploreSession {
                               ceil: L.ceil[min(255, max(1, current))])
         g.tick(dt, ctx)
         if g.done { dog = nil }
+    }
+
+    // MARK: [진단용 — 원인 확인 뒤 뺄 것]
+    func attachDiag(_ e: Entity) {
+        diagCard = e
+        root.addChild(e)
+    }
+
+    /// 앱이 받는 화면 갱신(SceneEvents.Update) 간격을 실제 시각(CACurrentMediaTime)으로 재서 0.5초마다 글로:
+    /// 초당 횟수 · 가장 긴 간격(ms) · 늦은 화면 수(17ms 넘은 간격 — 90장 기준 1.5배) / 보이는 방 수 · 켜진 포털 수.
+    /// 새가 두 겹으로 보이거나 울렁거리는 순간 이 숫자가 떨어지는지 보려고. (기기 화면을 그리는 쪽의 시간은 앱에서 잴 수 없음 — 앱 갱신만)
+    private func diagTick(_ dt: Float) {
+        let now = CACurrentMediaTime()
+        let gap = Float(now - diagLast)
+        diagLast = now
+        diagN += 1
+        diagSum += gap
+        diagMax = max(diagMax, gap)
+        if gap > 0.017 { diagLate += 1 }
+        if diagSum >= 0.5 {
+            var rooms = 0, portals = 0
+            for (_, w) in worlds where w.local.isEnabled { rooms += 1; portals += w.portalCount }
+            diagText = String(format: "갱신 %.0f/초  최장 %.0fms  늦음 %d\n보이는 방 %d  포털 %d", Float(diagN) / diagSum, diagMax * 1000, diagLate, rooms, portals)
+            diagN = 0; diagSum = 0; diagMax = 0; diagLate = 0
+        }
+        if let c = diagCard {
+            let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
+            let up = simd_length(headUp) > 0.01 ? simd_normalize(headUp) : SIMD3<Float>(0, 1, 0)
+            let right = simd_normalize(simd_cross(g, up))
+            c.position = head + g * 0.9 - up * 0.3 - right * 0.28
+            faceDocent(c)
+        }
     }
 
     /// 사용법 알림 (탐험마다 한 번씩, 5초)

@@ -234,19 +234,14 @@ final class Scenery {
         // 새마다 도는 반지름·높이를 3m·2.5m씩 벌리고 모두 같은 방향으로 — 예전엔 반지름·높이를 아무렇게나 고르고 셋 중 하나는 거꾸로 돌아,
         // 두 마리가 같은 거리·높이에서 마주 지나가며 겹쳤다 갈라져 한 마리가 이중으로 보이는 것 같았음. 빠르기도 낮춤(눈으로 따라가기 편하게)
         let flockDir: Float = Bool.random(using: &g) ? 1 : -1
-        // 무리 전체가 같은 각속도로 돎 (한 덩어리처럼) — 예전엔 새마다 빠르기를 따로 골라(반지름도 달라) 각속도가 제각각이라,
-        // 안쪽 새가 바깥 새를 수십 초마다 따라잡아 지나가며 내 시선에서 두 마리가 한 자리에 겹쳤다 갈라짐 → '새가 두 겹으로 보임'.
-        // 각도도 고르게 나눠(무리 수만큼) 서로 앞지르지도, 같은 각도에 모이지도 않게
-        let meanR: Float = big ? R + 30 + Float(n - 1) * 6 + 3 : 8 + Float(n - 1) * 1.5 + 0.75
-        let omega: Float = (big ? 4.2 : 5.2) / meanR
         for i in 0..<n {
             let f = Flyer()
             f.center = big ? center : flock
             f.radius = big ? R + 30 + Float(i) * 12 + Float.random(in: 0...6, using: &g) : 8 + Float(i) * 3 + Float.random(in: 0...1.5, using: &g)
             f.height = floorY + (big ? 30 + Float(i) * 6 + Float.random(in: 0...3, using: &g) : 11 + Float(i) * 2.5 + Float.random(in: 0...1, using: &g))
-            f.speed = omega * f.radius                                  // 한 바퀴 시간이 무리 전체 같음
+            f.speed = big ? Float.random(in: 3.5...5, using: &g) : Float.random(in: 4...6.5, using: &g)
             f.flap = big ? 2.5 : Float.random(in: 8...12, using: &g)
-            f.ang = Float(i) / Float(n) * 2 * .pi + Float.random(in: 0...0.15, using: &g)
+            f.ang = Float(i) / Float(n) * 2 * .pi + Float.random(in: 0...0.6, using: &g)
             f.phase = Float.random(in: 0...6, using: &g)
             f.dir = flockDir
             // 원 가운데(base) → 도는 축(spin) → 반지름 자리의 새. base를 처음 각도만큼 돌려 두면 새는 (cos a, sin a) 자리.

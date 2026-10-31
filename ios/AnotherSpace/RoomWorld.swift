@@ -265,6 +265,10 @@ final class RoomWorld {
     /// 다른 테마 방에 들어가 문 쪽을 돌아보면 지금 방의 문 자리 판(지금 방 풍경)보다 지나온 방의 벽·천장 포털이 나중에 그려져
     /// 지나온 방 풍경이 그대로 보이곤 했음
     private var portals: [ModelEntity] = []
+    /// [진단용] 이 방의 포털 엔티티 수
+    var portalCount: Int { portals.count }
+    /// [진단용 — 원인 확인 뒤 false 로] 시골 울타리를 종류마다 단색으로 (addBarriers)
+    static let diagWall = true
     private var portalTierNow = -1
     private func addPortal(_ e: ModelEntity) {
         portals.append(e)
@@ -510,7 +514,7 @@ final class RoomWorld {
     private func openWalls(_ segs: [WallSeg], _ L: Layout, floorY: Float, ceilY: Float) {
         var portal = PortalPlanes()
         /// 울타리 줄 위 한 점 (평면 좌표): 방향 n(방 안쪽), 줄 따라 좌표 u, 줄 자리 c(= n·점), 세울 두께, 얇게, 한가운데 공유 줄인지
-        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool; let outside: Bool; let toward: Int; let lim: Bool }
+        struct Sample { let n: SIMD2<Float>; let u: Float; let c: Float; let depth: Float; let thin: Bool; let shared: Bool; let outside: Bool; let toward: Int }
         var samples: [Sample] = []
         let base = barrierProt + 0.01                                      // 울타리 앞면이 벽 평면 1cm 뒤
         let step: Float = 0.05
@@ -532,42 +536,35 @@ final class RoomWorld {
                 }
                 return (0, 0)
             }
-            /// 이 자리 뒤(너머 50cm 안)에 마주 선 벽 면(어느 방이든, 반대 방향)까지 거리 — 울타리를 그 면과 겹치지 않게 두려고
-            func wallBehind(_ p: SIMD2<Float>) -> Float? {
+            /// 방 m 의 벽 중 이 자리 맞은편(반대 방향, 너머 g 언저리)에 선 것이 있는지
+            func facing(_ m: Int, _ p: SIMD2<Float>, _ g: Float) -> Bool {
                 let up = simd_dot(perp, p)
-                var best: Float? = nil
-                for o in L.walls where simd_dot(o.n, s.n) < -0.9 {
+                return L.walls.contains { o in
+                    guard o.room == m, simd_dot(o.n, s.n) < -0.9 else { return false }
                     let x = simd_dot(s.n, p - o.a)
-                    guard x > 0.005 && x < 0.5 else { continue }
+                    guard x > g - 0.1 && x < g + 0.05 else { return false }
                     let ua = simd_dot(perp, o.a), ub = simd_dot(perp, o.b)
-                    guard up > min(ua, ub) - 0.03 && up < max(ua, ub) + 0.03 else { continue }
-                    if best == nil || x < best! { best = x }
+                    return up > min(ua, ub) - 0.03 && up < max(ua, ub) + 0.03
                 }
-                return best
             }
             var t = step / 2
             while t < len {
                 let p = s.a + pd * t
                 t += step
                 if waterGaps.contains(where: { simd_distance($0, p) < 0.6 }) { continue }
-                let (m, _) = across(p)
+                let (m, g) = across(p)
                 var off = base, depth: Float = 0.08, thin = true, shared = false
                 if m == 0 {
                     let q = p - s.n * base
                     var d: Float = 0
                     while d < 0.55 && !L.walkable(q - s.n * (d + 0.05)) { d += 0.05 }
                     depth = max(d, 0.08); thin = d < 0.1
-                } else if m > 0 && (m == room.id || groupIds.contains(m)), let x = wallBehind(p) {
-                    // 같은 세계 옆방과의 사이(맞은편 벽 면이 50cm 안): 그 사이엔 울타리를 '하나만' — 작은 번호 방(같은 방이면 방향으로)이
-                    // 두 벽 면 한가운데에. 맞은편 벽은 실제 면까지 거리(wallBehind)로 찾음.
-                    // 예전엔 맞은편 벽을 '너머 첫 걸을 수 있는 칸(5cm 걸음) 언저리'로만 찾아 계단진 스캔 벽에선 점마다 됐다 안 됐다 했고,
-                    // 안 된 점은 양쪽 방이 각자 '내 벽 뒤'에 세움 → 한 틈에 울타리 둘(가운데 줄 + 내 벽 뒤 줄, 또는 양쪽 벽 뒤 줄)이 서서
-                    // 벽 두께 25~30cm(시골·계곡의 '벽 뒤 11cm'과 맞물리는 값)에서 두 돌담 면이 한 평면에 겹쳐 어른거렸고, 짧은 토막(기둥처럼 보임)이 섞였음
+                } else if m > 0 && (m == room.id || groupIds.contains(m)) && facing(m, p, g) {
+                    // 맞은편 벽(같은 세계)이 있으면 한쪽만(작은 번호 방, 같은 방이면 방향으로) 한가운데에 — 맞은편 벽이 없으면(문 칸 등) 내 벽 뒤에
                     if m < room.id || (m == room.id && !(s.n.x > 0.5 || s.n.y > 0.5)) { continue }
-                    off = x / 2 - 0.04                                       // 두 벽 면 한가운데 (얇은 울타리 두께 8cm의 가운데)
+                    off = (g - 0.05) / 2 - 0.04                              // 두 벽 사이 한가운데 (얇은 울타리 두께 8cm의 가운데)
                     shared = true
                 }
-                let lim = false
                 let q = p - s.n * off
                 // 너머가 다른 세계 옆방이면 그 방 번호 (그 방에 있을 때 끌 울타리).
                 // 문 곁(문틀 옆)은 너머 칸이 문 자리라 방을 이 방·모름으로 잡기도 함 → 울타리 자리가 문 자리 30cm 안이면 그 문 건너편 방
@@ -580,15 +577,14 @@ final class RoomWorld {
                         if o != room.id && !groupIds.contains(o) { toward = o; break }
                     }
                 }
-                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0, toward: toward, lim: lim))
+                samples.append(Sample(n: s.n, u: simd_dot(q, perp), c: simd_dot(q, s.n), depth: depth, thin: thin, shared: shared, outside: m == 0, toward: toward))
             }
         }
         addPortalPlanes(portal, name: "walls")
         // 같은 방향·같은 종류의 점을 줄 자리(c)가 15cm 안인 것끼리 한 줄로: 바깥은 가장 뒤(작은 c — 모든 벽 조각의 평면 뒤), 공유 줄은 가운데(평균)
         var spans: [BarrierSpan] = []
         var keys: [String: [Sample]] = [:]
-        // 옆 벽 면에 맞춰 당긴 점(lim)은 따로 묶음 — 다른 점과 섞이면 가장 뒤(작은 c)로 줄이 잡혀 다시 옆방 벽 면과 겹침
-        for sm in samples { keys["\(Int(sm.n.x.rounded()))_\(Int(sm.n.y.rounded()))_\(sm.shared)_\(sm.lim)", default: []].append(sm) }
+        for sm in samples { keys["\(Int(sm.n.x.rounded()))_\(Int(sm.n.y.rounded()))_\(sm.shared)", default: []].append(sm) }
         for k in keys.keys.sorted() {
             guard let list = keys[k], let f = list.first else { continue }
             let n = f.n, perp = SIMD2<Float>(-n.y, n.x), shared = f.shared
@@ -596,8 +592,7 @@ final class RoomWorld {
             var clusters: [[Sample]] = []
             for sm in byC {
                 // 묶음의 첫 점에서 15cm 안까지만 (비스듬한 스캔 벽의 계단이 끝없이 이어 묶여 줄이 벽에서 멀어지지 않게)
-                // 옆 벽 면에 맞춰 당긴 점(lim)은 3cm 안끼리만 (자리마다 옆방 벽 면까지 거리가 달라, 한 줄로 모으면 어딘가에서 다시 그 면과 겹침)
-                if let first = clusters.last?.first, sm.c - first.c <= (f.lim ? 0.03 : 0.15) { clusters[clusters.count - 1].append(sm) } else { clusters.append([sm]) }
+                if let first = clusters.last?.first, sm.c - first.c <= 0.15 { clusters[clusters.count - 1].append(sm) } else { clusters.append([sm]) }
             }
             for cl in clusters {
                 let c = shared ? cl.map(\.c).reduce(0, +) / Float(cl.count) : cl[0].c
@@ -616,20 +611,7 @@ final class RoomWorld {
                     return true
                 }
                 let ext = base + 0.04
-                // 같은 줄 자리(u, 5cm 칸)에 점이 둘 이상이면 하나만 (스캔 벽이 5cm 계단이라 비스듬한 벽 조각 둘이 같은 자리에 점을 내고,
-                // 종류(얇음·바깥·옆방)가 엇갈리면 짧은 토막이 같은 자리에 겹쳐 서서 앞면이 한 평면에서 겹쳐 어른거렸음 — 거실 좌우 벽 돌담)
-                var byKey: [Int: Sample] = [:]
-                for sm in cl {
-                    let k = Int((sm.u / step).rounded())
-                    if let o = byKey[k] {
-                        let better = (sm.outside && !o.outside) || (sm.outside == o.outside && (!sm.thin && o.thin || (sm.thin == o.thin && sm.depth > o.depth)))
-                        if better { byKey[k] = sm }
-                    } else { byKey[k] = sm }
-                }
-                let byU = byKey.keys.sorted().compactMap { k -> Sample? in
-                    guard let sm = byKey[k] else { return nil }
-                    return Sample(n: sm.n, u: Float(k) * step, c: sm.c, depth: sm.depth, thin: sm.thin, shared: sm.shared, outside: sm.outside, toward: sm.toward, lim: sm.lim)
-                }
+                let byU = cl.sorted { $0.u < $1.u }
                 var i = 0
                 while i < byU.count {
                     var j = i
@@ -653,7 +635,8 @@ final class RoomWorld {
                         let wa = L.flat(pt(u0)), wb = L.flat(pt(u1))
                         let o2 = L.flat(-n) - L.flat(SIMD2<Float>(0, 0))
                         spans.append(BarrierSpan(a: SIMD3<Float>(wa.x, floorY, wa.y), b: SIMD3<Float>(wb.x, floorY, wb.y),
-                                                 out: simd_normalize(SIMD3<Float>(o2.x, 0, o2.y)), depth: max(0.08, dep), thin: byU[i].thin, toward: byU[i].toward))
+                                                 out: simd_normalize(SIMD3<Float>(o2.x, 0, o2.y)), depth: max(0.08, dep), thin: byU[i].thin, toward: byU[i].toward,
+                                                 kind: byU[i].outside ? 0 : (shared ? 2 : 1)))
                     }
                     i = j + 1
                 }
@@ -678,7 +661,7 @@ final class RoomWorld {
     }
 
     /// 울타리 한 토막: 바닥 a→b (벽에서 off 뒤), 바깥 방향 out, 세울 수 있는 두께, 방과 방 사이(얇게)인지
-    struct BarrierSpan { let a: SIMD3<Float>; let b: SIMD3<Float>; let out: SIMD3<Float>; let depth: Float; let thin: Bool; var toward: Int = 0 }
+    struct BarrierSpan { let a: SIMD3<Float>; let b: SIMD3<Float>; let out: SIMD3<Float>; let depth: Float; let thin: Bool; var toward: Int = 0; var kind: Int = 0 }   // kind: 0 바깥 줄, 1 내 벽 뒤 얇은 줄, 2 두 방 사이 가운데 줄
 
     /// 테마마다 입체 울타리 (선 그림: 흰 면 + 같은 펜 굵기 외곽선, 흑백: 무늬 색을 뺌 — Tex 가 표시 방식대로)
     private func addBarriers(_ spans: [BarrierSpan]) {
@@ -735,13 +718,13 @@ final class RoomWorld {
         for (si, sp) in spans.enumerated() {
             let L2 = simd_distance(sp.a, sp.b)
             guard L2 > 0.06 else { continue }
-            useKey(sp.toward)
+            useKey(Self.diagWall && room.place == "village" ? sp.toward * 4 + sp.kind : sp.toward)
             let dir = (sp.b - sp.a) / L2
             let out = sp.out
             let D = sp.thin ? 0.08 : min(sp.depth, 0.5)
             // 겹치는 두 줄(모서리·안쪽으로 들어간 벽)의 같은 높이 윗면이 깜빡이지 않게, 줄마다 높이를 4mm씩 다르게 (바깥 방향 넷 × 3)
             let dirK = (Int(((atan2(out.z, out.x) + .pi) / (.pi / 2)).rounded()) % 4 + 4) % 4
-            let lift = Float(dirK) * 0.012 + Float(si % 6) * 0.002          // 같은 방향 줄끼리도 여섯 단계로 (셋이면 겹친 줄 높이가 같아지는 일이 잦았음)
+            let lift = Float(dirK * 3 + si % 3) * 0.004
             switch room.place {
             case "camp":
                 // 통나무 울타리: 1.8m 안팎마다 굵은 말뚝 + 가로 통나무 둘 (조금 처짐)
@@ -862,10 +845,21 @@ final class RoomWorld {
             matC = Ink.paper(2)
         }
         bank[curKey] = [solidA, solidB, solidC, lumps, lines, hulls]
+        let diag = Self.diagWall && room.place == "village"
         for k in bank.keys.sorted() {
             guard let gs = bank[k] else { continue }
             var made: [Entity] = []
-            for (geo, m, nm) in [(gs[0], matA, "barrierA"), (gs[1], matB, "barrierB"), (gs[2], matC, "barrierC"), (gs[3], lumpMat, "barrierLumps")] {
+            // [진단용 — 원인 확인 뒤 뺄 것] 시골 울타리를 종류마다 단색으로: 바깥 줄 돌담 빨강, 내 벽 뒤 얇은 돌담 자홍, 두 방 사이 가운데 돌담 주황,
+            // 다른 테마 옆방 쪽 돌담 파랑 / 갓돌은 노랑(옆방 쪽은 하늘색). 어른거리는 곳이 어떤 색(또는 두 색이 번갈아)인지 보면 무엇이 겹치는지 알 수 있음
+            var mA = matA, mL = lumpMat
+            if diag {
+                let tw = k / 4, kd = k % 4
+                let slab: SIMD3<Float> = tw != 0 ? [0.2, 0.4, 1] : (kd == 0 ? [1, 0.15, 0.15] : (kd == 1 ? [1, 0.2, 0.9] : [1, 0.6, 0.1]))
+                let cap: SIMD3<Float> = tw != 0 ? [0.2, 1, 1] : [1, 0.95, 0.2]
+                mA = UnlitMaterial(color: UIColor(red: CGFloat(slab.x), green: CGFloat(slab.y), blue: CGFloat(slab.z), alpha: 1))
+                mL = UnlitMaterial(color: UIColor(red: CGFloat(cap.x), green: CGFloat(cap.y), blue: CGFloat(cap.z), alpha: 1))
+            }
+            for (geo, m, nm) in [(gs[0], mA, "barrierA"), (gs[1], matB, "barrierB"), (gs[2], matC, "barrierC"), (gs[3], mL, "barrierLumps")] {
                 if let e = geo.entity(nm, m) { layer(e, 6); world.addChild(e); made.append(e) }
             }
             if lineMode {
@@ -873,7 +867,8 @@ final class RoomWorld {
                 if let e = gs[5].entity("barrierLogLines", Ink.hullMat) { layer(e, 6); world.addChild(e); made.append(e) }
                 if let e = gs[4].entity("barrierLines", Ink.line) { layer(e, 7); world.addChild(e); made.append(e) }
             }
-            if k != 0 { barrierToward[k, default: []] += made }
+            let tw = diag ? k / 4 : k
+            if tw != 0 { barrierToward[tw, default: []] += made }
         }
     }
 
@@ -3529,9 +3524,7 @@ final class RoomWorld {
         // 하늘에서 움직이는 구름이 띄엄띄엄 옮겨져 흐릿하게(초점이 안 맞는 것처럼) 보였음 (새와 같은 까닭)
         for i in clouds.indices {
             cloudLeft[i] -= dt
-            // 끝나기 1초 전에 다음 구간을 미리 맡김 (끝난 뒤 맡기면 앱 갱신이 늦을 때 구름이 잠깐 멈췄다 움직임) — 남은 만큼 길게 잡아 빠르기는 같게
-            guard cloudLeft[i] <= 1, let par = clouds[i].0.parent else { continue }
-            let lead = max(0, cloudLeft[i])
+            guard cloudLeft[i] <= 0, let par = clouds[i].0.parent else { continue }
             let (e, v) = clouds[i]
             var p = cloudAt[i] ?? e.position
             let off = p - center
@@ -3542,9 +3535,9 @@ final class RoomWorld {
             let dur: Float = 20
             var tr = e.transform
             tr.translation = p + v * dur
-            _ = e.move(to: tr, relativeTo: par, duration: TimeInterval(dur + (jump ? 0 : lead)), timingFunction: .linear)
+            _ = e.move(to: tr, relativeTo: par, duration: TimeInterval(dur), timingFunction: .linear)
             cloudAt[i] = tr.translation
-            cloudLeft[i] = dur + (jump ? 0 : lead)
+            cloudLeft[i] = dur
         }
         if let w = water {
             let speed: Float = room.weather == "storm" ? 0.8 : (room.weather == "wind" ? 0.5 : 0.22)
