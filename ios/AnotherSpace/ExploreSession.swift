@@ -155,13 +155,16 @@ struct FurnTag: Component { var index: Int = 0 }
 private struct DiagPanel: View {
     let s: ExploreSession
     var body: some View {
-        Text(s.diagText)
-            .font(.system(size: 13, weight: .medium, design: .monospaced))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 8).padding(.vertical, 5)
-            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
-            .fixedSize()
-            .allowsHitTesting(false)
+        // 누르면 나뭇잎 → 나무·띠를 차례로 꺼서 갱신 수가 오르는지 봄 (숲 새 이중 원인 확인용)
+        Button { s.diagCycle() } label: {
+            Text(s.diagText)
+                .font(.system(size: 13, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
+                .fixedSize()
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -373,6 +376,13 @@ final class ExploreSession {
     var furnMode = false
     /// [진단용] 화면 왼쪽 아래에 띄우는 글
     var diagText = ""
+    @ObservationIgnored private var diagMode = 0
+    /// 진단판 누름: 지금 세계들의 나뭇잎·나무를 차례로 끔 (0 모두 보임 → 1 잎 끔 → 2 나무·띠 끔)
+    func diagCycle() {
+        lastUITap = t
+        diagMode = (diagMode + 1) % 3
+        for w in worlds.values { w.setDiagFoliage(diagMode) }
+    }
     @ObservationIgnored private var diagCard: Entity?
     @ObservationIgnored private var diagN = 0
     @ObservationIgnored private var diagSum: Float = 0
@@ -1780,8 +1790,8 @@ final class ExploreSession {
         let v = vox
         let cur = current
         let ctx = HomeCat.Ctx(head: hs, fwd: fwd2, gaze: gaze, floorY: L.floorY, userSpeed: speed, still: stillT, seated: seated, hands: handPts,
-                              free: { [unowned self] p in self.catFree(p, L, me, r: 0.24, wallR: 0.2) },
-                              pass: { [unowned self] p in self.catFree(p, L, me, r: 0.2, wallR: 0.16, swing: false) },
+                              free: { [unowned self] p in self.catFree(p, L, me, r: 0.3, wallR: 0.24) },                 // 설 곳: 팔을 늘어뜨린 몸 폭(키의 27%)보다 넉넉히
+                              pass: { [unowned self] p in self.catFree(p, L, me, r: 0.24, wallR: 0.2, swing: false) },
                               top: { p in v?.flatTop(L.plane(p.x, p.y)) },
                               height: { p in v?.heightAt(L.plane(p.x, p.y)) ?? 0 },
                               room: { p in let a = L.at(x: p.x, z: p.y); return a.room != 0 && a.room == cur && a.wall > 0.06 },
@@ -1805,11 +1815,19 @@ final class ExploreSession {
         }, arts: arts)
     }
 
-    /// 카페에서 앉을 만한 자리: 평평한 가구 윗면(35~62cm, flatTop) 가운데, 한쪽 앞 25~55cm가 빈 바닥(다리 둘 곳)이고 그 바닥이 이 방 안.
-    /// (저장 좌표 xz, 바라보는 쪽, 앉는 면 높이)
+    /// 카페에서 앉을 만한 자리 (저장 좌표 xz = 엉덩이 자리, 바라보는 쪽, 앉는 면 높이).
+    /// 앉는 면: 평평한 가구 윗면(36~56cm, flatTop — 둘레 30cm가 고름)이 엉덩이 뒤 10cm·양옆 15cm까지 이어지고, 앞 모서리에서
+    /// 다리 둘 곳(모서리 앞 50cm × 폭 30cm)이 모두 빈 바닥(가구·탁자 없음)이고 이 방 안. 엉덩이는 앞 모서리에서 15cm 안쪽,
+    /// 등 뒤 12cm가 앉는 면보다 높지 않아야 (등받이·벽에 몸이 묻히지 않게). 0.5.46은 다리 앞에 탁자·가구가 있어도 골라 다리·몸이 가구에 묻혔음
     private func blankySeatSpots(_ L: Layout) -> [(SIMD2<Float>, SIMD2<Float>, Float)] {
         guard let v = vox else { return [] }
         var out: [(SIMD2<Float>, SIMD2<Float>, Float)] = []
+        func floorAt(_ q: SIMD2<Float>) -> Bool {
+            guard v.heightAt(q) < 0.03 else { return false }
+            let f = L.flat(q)
+            let a = L.at(x: f.x, z: f.y)
+            return a.room == current && a.wall > 0.12
+        }
         for (lo, hi) in L.rects(current) {
             var x = lo.x + 0.05
             while x < hi.x {
@@ -1817,17 +1835,28 @@ final class ExploreSession {
                 while z < hi.y {
                     let pp = SIMD2<Float>(x, z)
                     z += 0.1
-                    guard let h = v.flatTop(pp), h >= 0.35, h <= 0.62 else { continue }
+                    guard let h = v.flatTop(pp), h >= 0.36, h <= 0.56 else { continue }
                     for k in 0..<8 {
                         let a = Float(k) / 8 * 2 * .pi
-                        let dd = SIMD2<Float>(cos(a), sin(a))
-                        guard v.heightAt(pp + dd * 0.25) < 0.04, v.heightAt(pp + dd * 0.4) < 0.04, v.heightAt(pp + dd * 0.55) < 0.04,
-                              v.flatTop(pp - dd * 0.1) != nil else { continue }
-                        let s = L.flat(pp), fpt = L.flat(pp + dd * 0.4)
-                        let at = L.at(x: fpt.x, z: fpt.y)
-                        guard at.room == current, at.wall > 0.2 else { continue }
-                        let dir = L.flat(pp + dd) - s
-                        out.append((s, simd_normalize(dir), h))
+                        let dd = SIMD2<Float>(cos(a), sin(a)), sd = SIMD2<Float>(-dd.y, dd.x)
+                        // 앞 모서리까지 거리 (10~30cm)
+                        var edge: Float = -1
+                        var t: Float = 0.1
+                        while t <= 0.3 + 1e-3 { if v.heightAt(pp + dd * t) < 0.03 { edge = t; break }; t += 0.05 }
+                        guard edge > 0 else { continue }
+                        let hip = pp + dd * (edge - 0.15)
+                        func seatOK(_ q: SIMD2<Float>) -> Bool { guard let hq = v.flatTop(q) else { return false }; return abs(hq - h) < 0.05 }
+                        guard seatOK(hip - dd * 0.1), seatOK(hip + sd * 0.15), seatOK(hip - sd * 0.15) else { continue }
+                        guard v.heightAt(hip - dd * 0.12) <= h + 0.04 else { continue }
+                        var clear = true
+                        var f: Float = edge + 0.05
+                        while clear && f <= edge + 0.5 + 1e-3 {
+                            for o: Float in [-0.15, 0, 0.15] where !floorAt(pp + dd * f + sd * o) { clear = false; break }
+                            f += 0.05
+                        }
+                        guard clear else { continue }
+                        let s = L.flat(hip)
+                        out.append((s, simd_normalize(L.flat(hip + dd) - s), h))
                     }
                 }
                 x += 0.1
@@ -1876,6 +1905,7 @@ final class ExploreSession {
             let calcAvg = diagCalc.2 > 0 ? diagCalc.0 / Double(diagCalc.2) * 1000 : 0
             let top = diagSec.sorted { $0.value.1 > $1.value.1 }.prefix(2).map { String(format: "%@ %.1f", $0.key, $0.value.1 * 1000) }.joined(separator: " · ")
             diagText = String(format: "갱신 %.0f/초  최장 %.0fms  늦음 %d\n보이는 방 %d  포털 %d\n앱 계산 평균 %.1fms 최장 %.1fms\n", Float(diagN) / diagSum, diagMax * 1000, diagLate, rooms, portals, calcAvg, diagCalc.1 * 1000) + top
+                + "\n나무: " + ["모두 보임", "잎 끔", "나무·띠 끔"][diagMode] + " (눌러서 바꿈)"
             diagN = 0; diagSum = 0; diagMax = 0; diagLate = 0
             diagSec = [:]; diagCalc = (0, 0, 0)
         }

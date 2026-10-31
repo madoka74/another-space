@@ -363,9 +363,9 @@ final class BlankyLimb {
                                            indexCapacity: idx.count)
         guard let m = try? LowLevelMesh(descriptor: desc) else { return nil }
         mesh = m
+        let ids = idx
         m.withUnsafeMutableIndices { raw in
-            let p = raw.bindMemory(to: UInt32.self)
-            for (k, v) in idx.enumerated() { p[k] = v }
+            ids.withUnsafeBytes { src in raw.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[0..<min(src.count, raw.count)])) }
         }
         // 그리기에서 빼지 않게 넉넉한 범위 (키 1 기준 — 팔다리가 어디로 휘어도 들어감)
         m.parts.replaceAll([LowLevelMesh.Part(indexCount: idx.count, topology: .triangle,
@@ -408,35 +408,37 @@ final class BlankyLimb {
         let (pe, Re, _) = frames[M]
         let Rh = arm ? Re * simd_matrix3x3(simd_quatf(angle: -side * 0.1, axis: [0, 0, 1])) : Re
         endP = pe + Rh * SIMD3<Float>(0, arm ? -0.05 : 0, 0)
-        let grow = self.grow
+        // 점은 여기(메인 액터)에서 다 계산해 두고, 그물 버퍼에는 복사만 — 버퍼를 여는 클로저는 액터 밖이라 그 안에서 앱 함수·속성을 쓰면 빌드 오류(0.5.48)
+        let gw = grow
+        var verts: [BKVert] = []
+        verts.reserveCapacity(tubeCount + endPos.count)
+        func ring(_ c: SIMD3<Float>, _ R: simd_float3x3, _ rr: Float, _ ny: Float) {
+            // ny: 끝 반구에서 법선이 위·아래로 기우는 정도
+            let axisV = R * SIMD3<Float>(0, 1, 0)
+            for j in 0..<sides {
+                let radial = R * SIMD3<Float>(cosT[j], 0, sinT[j])
+                let n = simd_normalize(radial * sqrt(max(0, 1 - ny * ny)) + axisV * ny)
+                verts.append(BKVert(p: c + radial * rr, uv: SIMD2<Float>(min(0.98, max(0.02, BlankyMesh.shade(n))), 0.5)))
+            }
+        }
+        let (p0, R0, r0) = frames[0]
+        for c in 0..<3 {
+            let a = Float.pi / 2 * (1 - Float(c) / 3)
+            ring(p0 + R0 * SIMD3<Float>(0, r0 * sin(a), 0), R0, r0 * cos(a), sin(a))
+        }
+        for (fp, fR, fr) in frames { ring(fp, fR, fr, 0) }
+        let (pz, Rz, rz) = frames[M]
+        for c in 1...3 {
+            let a = Float.pi / 2 * Float(c) / 3
+            ring(pz + Rz * SIMD3<Float>(0, -rz * sin(a) * 0.6, 0), Rz, rz * cos(a), -sin(a))
+        }
+        for (q, n) in zip(endPos, endNrm) {
+            verts.append(BKVert(p: pe + Rh * (q + n * gw), uv: SIMD2<Float>(min(0.98, max(0.02, BlankyMesh.shade(Rh * n))), 0.5)))
+        }
+        let vs = verts
         mesh.withUnsafeMutableBytes(bufferIndex: 0) { raw in
-            let v = raw.bindMemory(to: BKVert.self)
-            var k = 0
-            func ring(_ c: SIMD3<Float>, _ R: simd_float3x3, _ rr: Float, _ ny: Float) {
-                // ny: 끝 반구에서 법선이 위·아래로 기우는 정도
-                for j in 0..<sides {
-                    let radial = R * SIMD3<Float>(cosT[j], 0, sinT[j])
-                    let axisV = R * SIMD3<Float>(0, 1, 0)
-                    let n = simd_normalize(radial * sqrt(max(0, 1 - ny * ny)) + axisV * ny)
-                    v[k] = BKVert(p: c + radial * rr, uv: SIMD2<Float>(min(0.98, max(0.02, BlankyMesh.shade(n))), 0.5))
-                    k += 1
-                }
-            }
-            let (p0, R0, r0) = frames[0]
-            for c in 0..<3 {
-                let a = Float.pi / 2 * (1 - Float(c) / 3)
-                ring(p0 + R0 * SIMD3<Float>(0, r0 * sin(a), 0), R0, r0 * cos(a), sin(a))
-            }
-            for (fp, fR, fr) in frames { ring(fp, fR, fr, 0) }
-            let (pz, Rz, rz) = frames[M]
-            for c in 1...3 {
-                let a = Float.pi / 2 * Float(c) / 3
-                ring(pz + Rz * SIMD3<Float>(0, -rz * sin(a) * 0.6, 0), Rz, rz * cos(a), -sin(a))
-            }
-            for (q, n) in zip(endPos, endNrm) {
-                let nw = Rh * n
-                v[k] = BKVert(p: pe + Rh * (q + n * grow), uv: SIMD2<Float>(min(0.98, max(0.02, BlankyMesh.shade(nw))), 0.5))
-                k += 1
+            vs.withUnsafeBytes { src in
+                raw.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[0..<min(src.count, raw.count)]))
             }
         }
     }
@@ -468,7 +470,7 @@ final class BlankyFigure {
         var pelvisYaw: Float = 0, pelvisRoll: Float = 0
         var lean: Float = 0, twist: Float = 0, side: Float = 0          // 몸 숙임(앞 +)·비틂·옆 기울임
         var headPitch: Float = 0, headYaw: Float = 0, headRoll: Float = 0  // 머리가 몸과 한 덩어리 → 몸을 조금 더 숙이고·돌리고·기울여 나타냄
-        var arm: [SIMD3<Float>] = [SIMD3<Float>(0, 0, 0.1), SIMD3<Float>(0, 0, 0.1)]   // 앞으로·바깥으로·팔꿈치 굽힘
+        var arm: [SIMD3<Float>] = [SIMD3<Float>(0, 0, 0.03), SIMD3<Float>(0, 0, 0.03)]   // 앞으로·바깥으로·팔꿈치 굽힘
         var armTwist: [Float] = [0, 0]                                                  // 팔 굽는 면 돌림
         var leg: [SIMD3<Float>] = [SIMD3<Float>(0, 0, 0), SIMD3<Float>(0, 0, 0)]      // 엉덩이 앞으로·옆으로·무릎 굽힘
 
@@ -523,7 +525,7 @@ final class BlankyFigure {
             }
         }
         spine.addChild(hand)
-        chest.position = SIMD3<Float>(0, 0.2, 0.15)
+        chest.position = SIMD3<Float>(0, 0.225, 0.115)                  // 책: 읽는 자세(몸 0.33 숙임)에서 두 손(armBook)이 양쪽 가장자리를 쥐는 자리
         chest.orientation = BK.rx(0.9)
         spine.addChild(chest)
         // 배 구멍 속 빛 구슬: 저마다 다른 빛깔, 천천히 떠오르내림. 둘레 은은한 빛무리(반투명, 깊이 안 씀 — 몸에 가려 구멍 안만 보임)
@@ -589,9 +591,11 @@ final class BlankyFigure {
         let k = 1 / H
         let holder = Entity()
         hand.addChild(holder)
-        _ = prop(.generateCylinder(height: 0.095 * k, radius: 0.04 * k), propMat([0.93, 0.91, 0.87]), holder, at: SIMD3<Float>(0.012, 0.01, 0.02))
+        // 잔 옆면이 손바닥에 닿게: 손(오른손)보다 몸 안쪽(+x)으로 잔 반지름 + 손바닥 두께만큼 — 0.5.46은 잔 가운데를 손 자리에 둬 손이 잔에 파묻혔음
+        holder.position = SIMD3<Float>(0.04 * k + 0.013, 0.008, 0.004)
+        _ = prop(.generateCylinder(height: 0.095 * k, radius: 0.04 * k), propMat([0.93, 0.91, 0.87]), holder, at: .zero)
         let coffee: RealityKit.Material = look == .line ? Ink.paper(1) : Tex.with(look) { UnlitMaterial(color: Tex.color(SIMD3<Float>(0.24, 0.14, 0.07) * Worlds.safe(tint, min: 0.5))) }
-        _ = prop(.generateCylinder(height: 0.004 * k, radius: 0.034 * k), coffee, holder, at: SIMD3<Float>(0.012, 0.01 + 0.048 * k, 0.02))
+        _ = prop(.generateCylinder(height: 0.004 * k, radius: 0.034 * k), coffee, holder, at: SIMD3<Float>(0, 0.046 * k, 0))
         return holder
     }
 
@@ -670,7 +674,6 @@ final class BlankyFigure {
     static let armKnee = SIMD4<Float>(0.222, -0.209, 0.776, 0)        // 앉아서 손을 무릎에
     static let armBook = SIMD4<Float>(-0.361, -0.282, 2.959, 0)       // 가슴 앞 책 (몸 0.33 숙임)
     static let armWarm = SIMD4<Float>(0.333, -0.5, 1.966, 0)          // 모닥불에 손 쬠 (몸 0.33 숙임)
-    static let armBehind = SIMD4<Float>(-1.0, -0.264, 1.655, 0)       // 뒷짐
     static let armWaist = SIMD4<Float>(-0.5, -0.082, 1.897, 0)        // 담배 든 손을 허리 앞에
     static let armGround = SIMD4<Float>(-1.2, 0.055, 1.241, 0)        // 뒤로 바닥 짚음 (몸 0.55 젖힘)
     static func setArm(_ p: inout Pose, _ k: Int, _ a: SIMD4<Float>) {
@@ -693,8 +696,8 @@ final class BlankyFigure {
         p.lean = 0.05
         p.side = -0.06 * s + 0.035 * sin(t * 0.37)
         let la = sin(ph - 0.6)
-        p.arm[0] = SIMD3<Float>(-0.28 * la, 0.02 * s, 0.12 + 0.3 * (0.5 + 0.5 * sin(ph - 1.6)))
-        p.arm[1] = SIMD3<Float>(0.28 * la, -0.02 * s, 0.12 + 0.3 * (0.5 - 0.5 * sin(ph - 1.6)))
+        p.arm[0] = SIMD3<Float>(-0.28 * la, 0.02 * s, 0.06 + 0.2 * (0.5 + 0.5 * sin(ph - 1.6)))
+        p.arm[1] = SIMD3<Float>(0.28 * la, -0.02 * s, 0.06 + 0.2 * (0.5 - 0.5 * sin(ph - 1.6)))
         p.headPitch = 0.04 * sin(2 * ph - 0.9)
         p.headRoll = 0.1 * sin(t * 0.31) + 0.03 * s
         p.headYaw = 0.12 * sin(t * 0.23)
@@ -712,8 +715,9 @@ final class BlankyFigure {
         p.lift = -0.004 - 0.006 * abs(w)
         p.side = -0.05 * w + 0.03 * sin(t * 0.19)
         p.lean = 0.03 + 0.02 * sin(t * 0.21)
-        p.arm[0] = SIMD3<Float>(0.04 * sin(t * 0.6 + 1), 0.02 * sin(t * 0.4), 0.1 + 0.08 * sin(t * 0.5))
-        p.arm[1] = SIMD3<Float>(0.04 * sin(t * 0.6 + 2.2), 0.02 * sin(t * 0.4 + 1), 0.1 + 0.08 * sin(t * 0.5 + 1))
+        // 팔은 편하게 펴서 늘어뜨림 (굽힘은 아주 조금 흔들릴 만큼만 — 서 있는데 팔꿈치를 굽히고 있으면 어색함)
+        p.arm[0] = SIMD3<Float>(0.04 * sin(t * 0.6 + 1), 0.02 * sin(t * 0.4), 0.03 + 0.025 * sin(t * 0.5))
+        p.arm[1] = SIMD3<Float>(0.04 * sin(t * 0.6 + 2.2), 0.02 * sin(t * 0.4 + 1), 0.03 + 0.025 * sin(t * 0.5 + 1))
         p.headYaw = 0.45 * sin(t * 0.13)
         p.headPitch = 0.05 * sin(t * 0.17)
         p.headRoll = 0.13 * sin(t * 0.11)
@@ -758,6 +762,7 @@ final class BlankyCrowd {
         var doors: [(door: SIMD3<Float>, out: SIMD3<Float>)] = []           // 시골 집 문 (문간 바닥, 바깥쪽)
         var street: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)] = []       // 카페 맞은편 보도 (시작, 끝, 가게 쪽)
         var beachR: Float = 0
+        var stars = false                                       // 숲 별자리가 보이는 하늘
         var roof: Float = 0                                     // 도시 옥상 반지름
     }
     private enum Kind { case wander(ClosedRange<Float>), beach, river, visitor, fire, gaze, smoker, street(Int) }
@@ -796,8 +801,9 @@ final class BlankyCrowd {
             addFireSitter()
             addWanderers(2, 3...13)
         case "forest":
-            addGazer()
-            addWanderers(2, 4...14)
+            // 별자리가 보이는 하늘(밤·새벽·해질녘, 맑음·흐림·바람)이면 한 명은 앉아서 별자리를 봄, 아니면 모두 숲을 거닒
+            if env.stars { addGazer() }
+            addWanderers(env.stars ? 2 : 3, 4...14)
         case "valley":
             addWader()
             addWanderers(agents.isEmpty ? 2 : 1, 4...16)
@@ -880,7 +886,7 @@ final class BlankyCrowd {
         }
     }
 
-    /// 숲: 풀밭에 앉아 몸을 뒤로 젖히고 하늘(밤엔 별자리)을 올려다봄
+    /// 숲: 별자리가 보일 때 풀밭에 앉아 몸을 뒤로 젖히고 별자리를 올려다봄
     private func addGazer() {
         guard let p = spot(5...10, r: margin) else { return }
         var to = env.center - p
@@ -1244,8 +1250,10 @@ final class BlankyIndoor {
     private var g: SeededRNG
     private var pos = SIMD2<Float>(0, 0)
     private var yaw: Float = 0
-    private var nav = PetNav()
     private var target: SIMD2<Float>?
+    private var path: [SIMD2<Float>] = []         // 찾아 둔 길 (경유점 — 곧장 가도 막히지 않는 데까지 건너뛴 점들)
+    private var startTurn = false                 // 길을 떠나기 전 그 자리에서 먼저 돌아섬 (가는 중엔 멈추지 않고 돌면서 감)
+    private var replans = 0
     private var face: Float?
     private var wait: Float = 0
     private var t: Float = 0
@@ -1329,38 +1337,48 @@ final class BlankyIndoor {
             var walking = false
             if dMe < 0.7 && target != nil {                                 // 내가 가로막음 → 멈춰서 나를 봄
                 target = nil
-                nav.reset()
+                path = []
                 stopT = 2
             }
             if stopT > 0 {
                 stopT -= dt
                 face = atan2(toMe.x, toMe.y)
             }
-            if let tg = target {
-                switch nav.step(from: pos, to: tg, reach: 0.12, speed: 0.36, dt, c) {
-                case .move(let np):
-                    let v = np - pos
-                    let d = simd_length(v)
-                    if d > 1e-5 {
-                        let want = atan2(v.x, v.y)
-                        let diff = BK.adiff(want, yaw)
-                        yaw += max(-1.6 * dt, min(1.6 * dt, diff))
-                        if abs(diff) < 0.8 {
+            // 길 따라 걷기: 길은 떠날 때 한 번 찾고(동물과 같은 길찾기 — 가구·벽·모서리를 돌아 곧장 갈 수 있는 점만 경유),
+            // 걷는 동안은 멈추지 않고 몸을 천천히 돌리며 꺾인 곳에서만 느려짐. 예전엔 매 순간 다음 한 걸음을 다시 받아
+            // 방향이 크게 바뀔 때마다 서서 돌고 다시 걸어 구석·가구 곁에서 움찔움찔했음
+            if let tg = target, let w = path.first {
+                let v = w - pos
+                let d = simd_length(v)
+                if d < 0.03 {
+                    pos = w
+                    path.removeFirst()
+                    if path.isEmpty { target = nil; arrivedIn(arts) }
+                } else {
+                    let dir = v / d
+                    let want = atan2(dir.x, dir.y)
+                    let diff = BK.adiff(want, yaw)
+                    yaw += max(-1.8 * dt, min(1.8 * dt, diff))
+                    if startTurn && abs(diff) > 0.35 {
+                        phase += dt * 1.6                                   // 떠나기 전 제자리에서 천천히 돌아섬
+                    } else {
+                        startTurn = false
+                        let sp: Float = 0.36 * max(0.35, cos(min(abs(diff), 1.2)))
+                        let stepLen = min(d, sp * dt)
+                        let np = pos + dir * stepLen
+                        if c.pass(np) || !c.pass(pos) {
                             pos = np
-                            phase += 2 * .pi * d / (0.62 * H)
+                            phase += 2 * .pi * stepLen / (0.62 * H)
+                        } else if replans < 2, let pth = HomeCat.plan(from: pos, to: tg, reach: 0.12, c), !pth.isEmpty {
+                            replans += 1                                    // 그새 가구가 보여 길이 막힘 → 한 번 다시 찾음
+                            path = pth
                         } else {
-                            phase += dt * 2
+                            target = nil
+                            path = []
+                            wait = 1
                         }
-                        walking = true
                     }
-                case .hold:
                     walking = true
-                case .arrived:
-                    target = nil
-                    arrivedIn(arts)
-                case .blocked:
-                    target = nil
-                    wait = 1.5
                 }
             } else {
                 if let fc = face { yaw += max(-1.3 * dt, min(1.3 * dt, BK.adiff(fc, yaw))) }
@@ -1370,9 +1388,7 @@ final class BlankyIndoor {
             blend = min(1, max(0, blend + (walking ? dt : -dt) * 2.5))
             p = BlankyFigure.Pose.mix(BlankyFigure.idle(t: t), BlankyFigure.walk(phase, t: t), blend)
             if place == "gallery" && !walking && art >= 0 {
-                // 그림 감상: 뒷짐 지고 그림 높이를 봄, 고개를 천천히 갸웃
-                BlankyFigure.setArm(&p, 0, BlankyFigure.armBehind)
-                BlankyFigure.setArm(&p, 1, BlankyFigure.armBehind)
+                // 그림 감상: 팔은 편하게 늘어뜨리고 그림 높이를 봄, 고개(몸)를 천천히 갸웃
                 p.headPitch = artLook + 0.03 * sin(t * 0.2)
                 p.headRoll = 0.16 * sin(t * 0.13)
                 p.headYaw = 0.1 * sin(t * 0.09)
@@ -1448,7 +1464,7 @@ final class BlankyIndoor {
                 let (ac, n) = arts[k]
                 for d: Float in [1.2, 1.5, 0.95] {
                     let q = SIMD2<Float>(ac.x + n.x * d, ac.z + n.z * d)
-                    if c.free(q) && simd_distance(q, me) > 0.9 { art = k; target = q; nav.reset(); return }
+                    if c.free(q) && simd_distance(q, me) > 0.9 && go(q, c) { art = k; return }
                 }
             }
         }
@@ -1457,8 +1473,18 @@ final class BlankyIndoor {
         for _ in 0..<10 {
             guard let q = sample() else { continue }
             let d = simd_distance(q, pos)
-            if d > 1.2 && d < 3.2 && c.free(q) && simd_distance(q, me) > 0.9 { target = q; nav.reset(); return }
+            if d > 1.2 && d < 3.2 && c.free(q) && simd_distance(q, me) > 0.9 && go(q, c) { return }
         }
         wait = 2
+    }
+
+    /// q 까지 길이 있으면 떠남 (없으면 다른 곳을 고르게 false)
+    private func go(_ q: SIMD2<Float>, _ c: HomeCat.Ctx) -> Bool {
+        guard let pth = HomeCat.plan(from: pos, to: q, reach: 0.12, c), !pth.isEmpty else { return false }
+        target = q
+        path = pth
+        startTurn = true
+        replans = 0
+        return true
     }
 }
