@@ -545,42 +545,29 @@ final class RoomWorld {
                 }
                 return best
             }
-            /// 방 m 의 벽 중 이 자리 맞은편(반대 방향, 너머 g 언저리)에 선 것이 있는지
-            func facing(_ m: Int, _ p: SIMD2<Float>, _ g: Float) -> Bool {
-                let up = simd_dot(perp, p)
-                return L.walls.contains { o in
-                    guard o.room == m, simd_dot(o.n, s.n) < -0.9 else { return false }
-                    let x = simd_dot(s.n, p - o.a)
-                    guard x > g - 0.1 && x < g + 0.05 else { return false }
-                    let ua = simd_dot(perp, o.a), ub = simd_dot(perp, o.b)
-                    return up > min(ua, ub) - 0.03 && up < max(ua, ub) + 0.03
-                }
-            }
             var t = step / 2
             while t < len {
                 let p = s.a + pd * t
                 t += step
                 if waterGaps.contains(where: { simd_distance($0, p) < 0.6 }) { continue }
-                let (m, g) = across(p)
+                let (m, _) = across(p)
                 var off = base, depth: Float = 0.08, thin = true, shared = false
                 if m == 0 {
                     let q = p - s.n * base
                     var d: Float = 0
                     while d < 0.55 && !L.walkable(q - s.n * (d + 0.05)) { d += 0.05 }
                     depth = max(d, 0.08); thin = d < 0.1
-                } else if m > 0 && (m == room.id || groupIds.contains(m)) && facing(m, p, g) {
-                    // 맞은편 벽(같은 세계)이 있으면 한쪽만(작은 번호 방, 같은 방이면 방향으로) 한가운데에 — 맞은편 벽이 없으면(문 칸 등) 내 벽 뒤에
+                } else if m > 0 && (m == room.id || groupIds.contains(m)), let x = wallBehind(p) {
+                    // 같은 세계 옆방과의 사이(맞은편 벽 면이 50cm 안): 그 사이엔 울타리를 '하나만' — 작은 번호 방(같은 방이면 방향으로)이
+                    // 두 벽 면 한가운데에. 맞은편 벽은 실제 면까지 거리(wallBehind)로 찾음.
+                    // 예전엔 맞은편 벽을 '너머 첫 걸을 수 있는 칸(5cm 걸음) 언저리'로만 찾아 계단진 스캔 벽에선 점마다 됐다 안 됐다 했고,
+                    // 안 된 점은 양쪽 방이 각자 '내 벽 뒤'에 세움 → 한 틈에 울타리 둘(가운데 줄 + 내 벽 뒤 줄, 또는 양쪽 벽 뒤 줄)이 서서
+                    // 벽 두께 25~30cm(시골·계곡의 '벽 뒤 11cm'과 맞물리는 값)에서 두 돌담 면이 한 평면에 겹쳐 어른거렸고, 짧은 토막(기둥처럼 보임)이 섞였음
                     if m < room.id || (m == room.id && !(s.n.x > 0.5 || s.n.y > 0.5)) { continue }
-                    off = (g - 0.05) / 2 - 0.04                              // 두 벽 사이 한가운데 (얇은 울타리 두께 8cm의 가운데)
+                    off = x / 2 - 0.04                                       // 두 벽 면 한가운데 (얇은 울타리 두께 8cm의 가운데)
                     shared = true
                 }
-                var lim = false
-                if m != 0 && !shared, let x = wallBehind(p) {
-                    // 내 벽 뒤 가까이에 다른 방(같은 방의 맞은편 포함) 벽 면이 있음: 울타리(두께 8cm)가 그 면에서 4cm 넘게 떨어지게 내 벽 쪽으로 당김.
-                    // 예전엔 늘 '내 벽 + 튀어나옴 여유(시골 11cm)' 뒤에 세워, 벽 두께가 그 값 언저리인 곳(실내 벽 10~12cm)에서
-                    // 울타리 앞면이 옆방 포털 면과 같은 평면에 놓여 어른거렸음 — 시골 거실 좌우 벽의 같은 자리 (튀어나옴 여유가 큰 시골·계곡만)
-                    if x < off + 0.08 + 0.04 { off = max(0.02, min(off, x - 0.12)); lim = true }
-                }
+                let lim = false
                 let q = p - s.n * off
                 // 너머가 다른 세계 옆방이면 그 방 번호 (그 방에 있을 때 끌 울타리).
                 // 문 곁(문틀 옆)은 너머 칸이 문 자리라 방을 이 방·모름으로 잡기도 함 → 울타리 자리가 문 자리 30cm 안이면 그 문 건너편 방
@@ -3375,7 +3362,11 @@ final class RoomWorld {
                 }
                 return out
             }
-            for (want, bottom) in [(false, floorY), (true, ceilY)] {
+            // 실내 장소(지붕 있음 — 카페·집·전시관) 세계는 지붕 위로도 내리지 않음: 천장(채광창)으로 올려다보면 머리 위로 떨어지는 눈이
+            // 보이지 않는 천장 면에서 사라지는데, 그 자리가 내 시야에선 벽 위 끝까지 내려오는 것처럼 보여 방 안으로 내리는 것처럼 느껴졌음.
+            // 지붕 둘레 1m 밖(처마 밖)의 눈은 그대로 — 창·채광창 너머로 벽 바깥에 내리는 눈은 보임. 바깥 장소 세계는 예전 그대로
+            let passes: [(Bool, Float)] = style.open ? [(false, floorY), (true, ceilY)] : [(false, floorY)]
+            for (want, bottom) in passes {
                 for r in merge(want) {
                     let c = L.flat((r.0 + r.1) / 2)
                     let e = Self.precip(w, size: SIMD3<Float>(r.1.x - r.0.x, 0.05, r.1.y - r.0.y), height: top - bottom, look: look, density: dens)
