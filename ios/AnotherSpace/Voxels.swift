@@ -150,15 +150,35 @@ enum Skin {
             var inDoor = false
             let np = SIMD2<Float>(simd_dot(SIMD2<Float>(ns.x, ns.z), L.ex), simd_dot(SIMD2<Float>(ns.x, ns.z), L.ez))
             if hgt > 0.12 && Skin.inSwing(L, pp) { inDoor = true }
-            for (di, ds) in L.doors.enumerated() where ds.zone(pp, margin: 0.3, side: 0.15) {
-                guard !saved else { continue }
-                if hgt > 0.3 && hgt < 1.9 { out.doorTouched.insert(di) }
-                let across = abs(ds.alongU ? np.x : np.y)
-                let sx = ds.alongU ? pp.y : pp.x
-                if cls != MeshClass.floor && cls != MeshClass.ceiling && hgt > 0.3 && hgt < 1.9 && across > 0.75
-                    && sx > ds.s0 + 0.08 && sx < ds.s1 - 0.08 && ds.zone(pp, margin: 0.12) {
-                    let col = Int((sx - ds.s0 - 0.08) / 0.1), row = Int((hgt - 0.3) / 0.1)
-                    out.doorHits[di, default: []].insert(row * 1000 + col)
+            // 문 칸 세기: 삼각형 가운데 한 점이 아니라 삼각형 넓이 전체(4cm 간격 점)로 — 평평한 닫힌 문짝은 비전프로 그물이 큰 삼각형
+            // 몇 개로 줄여 보내서, 가운데 점만 세면 문틀이 막혀 있어도 10cm 칸이 듬성듬성(30~50%)만 차 '닫힘'(55%)에 못 미치고
+            // 오히려 '문 자리가 비었다'(30% 밑)로 읽혀 평면이 가로막고 있어도 닫힘을 무시했음 (0.5.38부터 — 같은 테마 닫힌 문을 못 알아봄)
+            if !saved {
+                let pa = L.plane(sa.x, sa.z), pb = L.plane(sb.x, sb.z), pc = L.plane(sc.x, sc.z)
+                let lo2 = simd_min(pa, simd_min(pb, pc)), hi2 = simd_max(pa, simd_max(pb, pc))
+                let hLo = min(sa.y, min(sb.y, sc.y)) - L.floorY, hHi = max(sa.y, max(sb.y, sc.y)) - L.floorY
+                for (di, ds) in L.doors.enumerated() {
+                    // 삼각형이 문 자리(앞뒤 30cm·양옆 15cm 여유)에 걸치는지 — 큰 삼각형은 가운데가 밖이어도 걸칠 수 있음
+                    let zlo = ds.lo - SIMD2<Float>(ds.alongU ? 0.3 : 0.15, ds.alongU ? 0.15 : 0.3)
+                    let zhi = ds.hi + SIMD2<Float>(ds.alongU ? 0.3 : 0.15, ds.alongU ? 0.15 : 0.3)
+                    guard hi2.x > zlo.x, lo2.x < zhi.x, hi2.y > zlo.y, lo2.y < zhi.y else { continue }
+                    if hHi > 0.3 && hLo < 1.9 && ds.zone(pp, margin: 0.3, side: 0.15) { out.doorTouched.insert(di) }
+                    let across = abs(ds.alongU ? np.x : np.y)
+                    guard cls != MeshClass.floor && cls != MeshClass.ceiling && across > 0.75, hHi > 0.3, hLo < 1.9 else { continue }
+                    let edge = max(simd_distance(sa, sb), max(simd_distance(sb, sc), simd_distance(sc, sa)))
+                    let n = min(60, max(1, Int((edge / 0.04).rounded(.up))))
+                    for i in 0...n {
+                        for j in 0...(n - i) {
+                            let q = sa + (sb - sa) * (Float(i) / Float(n)) + (sc - sa) * (Float(j) / Float(n))
+                            let pq = L.plane(q.x, q.z)
+                            let hq = q.y - L.floorY
+                            let sx = ds.alongU ? pq.y : pq.x
+                            guard hq > 0.3 && hq < 1.9 && sx > ds.s0 + 0.08 && sx < ds.s1 - 0.08 && ds.zone(pq, margin: 0.12) else { continue }
+                            out.doorTouched.insert(di)
+                            let col = Int((sx - ds.s0 - 0.08) / 0.1), row = Int((hq - 0.3) / 0.1)
+                            out.doorHits[di, default: []].insert(row * 1000 + col)
+                        }
+                    }
                 }
             }
             if inDoor { continue }

@@ -2055,6 +2055,19 @@ def misc_sounds(r):
         for k in range(r.integers(1, 3)):
             _place(buf, _bell(r.uniform(2400, 3400), 0.5, 14, partials=((1, 1), (2.32, 0.5), (4.1, 0.25))), k * r.uniform(0.08, 0.2))
         save_wav(f'cup_clink{i}', buf, -24)
+    blanky_steps(r)
+
+
+def blanky_steps(r):
+    """블랭키씨 발소리: 말랑한 발바닥이 바닥에 닿는 낮고 부드러운 '툭' + 아주 옅게 끌리는 소리 (4가지, 조용히)"""
+    for i in range(1, 5):
+        dur = 0.22
+        t = _t(dur)
+        n = r.standard_normal(len(t))
+        thump = _lowpass(n, r.uniform(380, 520)) * np.exp(-t * r.uniform(38, 50))
+        body = np.sin(2 * np.pi * r.uniform(70, 95) * t) * np.exp(-t * 45) * 0.6
+        scuff = _lowpass(n - _lowpass(n, 700), 2200) * np.interp(t, [0, 0.02, 0.09, dur], [0, 0.08, 0.03, 0])
+        save_wav(f'blanky_step{i}', thump + body + scuff, -27)
 
 
 def scan_grid():

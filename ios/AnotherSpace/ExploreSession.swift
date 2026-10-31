@@ -23,7 +23,6 @@ struct ExploreView: View {
             if let tp = attachments.entity(for: "theme") { s.attachTheme(tp) }
             if let sc = attachments.entity(for: "stars") { s.attachStars(sc) }
             if let fp = attachments.entity(for: "furn") { s.attachFurn(fp) }
-            if let dg = attachments.entity(for: "diag") { s.attachDiag(dg) }
             s.updateSub = content.subscribe(to: SceneEvents.Update.self) { e in s.tick(Float(e.deltaTime)) }
         } attachments: {
             Attachment(id: "hud") { ExploreHud(s: s) }
@@ -31,7 +30,6 @@ struct ExploreView: View {
             Attachment(id: "theme") { ThemePanel(s: s) }
             Attachment(id: "stars") { StarCard(s: s) }
             Attachment(id: "furn") { FurnPanel(s: s) }
-            Attachment(id: "diag") { DiagPanel(s: s) }
         }
         // 탭은 손짓 하나에 한 번씩만 받고(시스템 탭·손 추적 짝짓기), 싱글·더블은 앱이 가름: 두 번째 탭이 0.45초 안에 오면 더블탭, 안 오면 그때 싱글탭.
         // 보는 곳 어디든 받도록 머리 둘레에 보이지 않는 '탭 받는 상자'를 둠. 열쇠·그림 버튼은 바로 처리
@@ -151,22 +149,6 @@ struct FurnTag: Component { var index: Int = 0 }
 /// - 고르기: 하는 법 · 되돌리기 · 처음 스캔대로(확인) · 끝내기. 가구·빈 바닥을 탭하면 그 가구 편집을 시작
 /// - 편집 중(가구 하나): 폭·깊이·높이 · 돌리기 · 이 가구 완료 / 취소. 완료나 취소를 눌러야 다른 가구를 고르거나 끝낼 수 있음.
 ///   지우기는 판 맨 위 오른쪽에 따로, 한 번 더 확인
-/// [진단용 — 원인 확인 뒤 뺄 것] 시선 왼쪽 아래 작은 글: 앱 화면 갱신 간격·보이는 방·포털 수
-private struct DiagPanel: View {
-    let s: ExploreSession
-    var body: some View {
-        // 누르면 나뭇잎 → 나무·띠를 차례로 꺼서 갱신 수가 오르는지 봄 (숲 새 이중 원인 확인용)
-        Button { s.diagCycle() } label: {
-            Text(s.diagText)
-                .font(.system(size: 13, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 6))
-                .fixedSize()
-        }
-        .buttonStyle(.plain)
-    }
-}
 
 private struct FurnPanel: View {
     let s: ExploreSession
@@ -375,24 +357,6 @@ final class ExploreSession {
     // 가구 맞추기 (세계를 걷고 현실 위에 가구 블록을 반투명하게 보이며, 탭·끌기·두 손 집기·판 버튼으로 넣고 빼고 줄이고 키움)
     var furnMode = false
     /// [진단용] 화면 왼쪽 아래에 띄우는 글
-    var diagText = ""
-    @ObservationIgnored private var diagMode = 0
-    /// 진단판 누름: 지금 세계들의 나뭇잎·나무를 차례로 끔 (0 모두 보임 → 1 잎 끔 → 2 나무·띠 끔)
-    func diagCycle() {
-        lastUITap = t
-        diagMode = (diagMode + 1) % 3
-        for w in worlds.values { w.setDiagFoliage(diagMode) }
-    }
-    @ObservationIgnored private var diagCard: Entity?
-    @ObservationIgnored private var diagN = 0
-    @ObservationIgnored private var diagSum: Float = 0
-    @ObservationIgnored private var diagMax: Float = 0
-    @ObservationIgnored private var diagLate = 0
-    @ObservationIgnored private var diagLast = CACurrentMediaTime()
-    @ObservationIgnored private var diagPrev = CACurrentMediaTime()
-    @ObservationIgnored private var diagStart = CACurrentMediaTime()
-    @ObservationIgnored private var diagSec: [String: (Double, Double)] = [:]     // 이름 → (합, 최장) 초
-    @ObservationIgnored private var diagCalc: (Double, Double, Int) = (0, 0, 0)    // 앱 계산 (합, 최장, 횟수)
     @ObservationIgnored private var furnHidden = false
     @ObservationIgnored private var furnHiddenList: [Entity] = []
     var furnSel: Int?                                   // 고른 상자 (furnEdits.adds 번호)
@@ -1349,9 +1313,6 @@ final class ExploreSession {
     // MARK: 매 프레임
     func tick(_ dt: Float) {
         t += dt
-        diagTick(dt)
-        diagPrev = CACurrentMediaTime()
-        defer { diagEnd() }
         guard let w = world, w.state == .running,
               let dev = w.queryDeviceAnchor(atTimestamp: CACurrentMediaTime()) else { return }
         let m = dev.originFromAnchorTransform
@@ -1422,9 +1383,7 @@ final class ExploreSession {
             buildTimer += dt
             if buildTimer > 0.05 { buildTimer = 0; buildSome(fit, I) }
         }
-        diagMark("공간·문")
         vox?.tick(now: t)
-        diagMark("가구")
         if fade > 0.95 && vox?.revealed == false { vox?.revealed = true }
         voxSaveT += dt
         if voxSaveT > 20 { voxSaveT = 0; saveVox() }
@@ -1513,28 +1472,20 @@ final class ExploreSession {
             let hs = f.toSaved(head)
             wld.avoidHead(L.plane(hs.x, hs.z))
         }
-        diagMark("안전·안내")
         // 움직임 계산은 지금 방과, 지금 방이 빌려 쓰는 하늘 세계의 대표 방만 (같은 테마 방 전체를 매 프레임 돌리지 않게)
         let hostNow = worlds[current]?.hostId ?? current
         for (id, wld) in worlds { wld.tick(dt, active: id == current || id == hostNow) }
-        diagMark("세계")
         soundTick(dt)
         placeHud(dt)
         placeDocent(dt)
         furnTick()
         syncBars()
         tapTick()
-        diagMark("판·탭")
         campTick(dt)
-        diagMark("모닥불")
         catTick(dt)
-        diagMark("고양이")
         dogTick(dt)
-        diagMark("강아지")
         blankyTick(dt)
-        diagMark("블랭키씨")
         themeFeatures(dt)
-        diagMark("테마")
     }
 
     // MARK: 테마마다의 특별한 것 (시골: 별자리, 카페: 재즈·테이블 차림)
@@ -1863,59 +1814,6 @@ final class ExploreSession {
             }
         }
         return out
-    }
-
-    // MARK: [진단용 — 원인 확인 뒤 뺄 것]
-    func attachDiag(_ e: Entity) {
-        diagCard = e
-        root.addChild(e)
-    }
-
-    /// 앱이 받는 화면 갱신(SceneEvents.Update) 간격을 실제 시각(CACurrentMediaTime)으로 재서 0.5초마다 글로:
-    /// 초당 횟수 · 가장 긴 간격(ms) · 늦은 화면 수(17ms 넘은 간격 — 90장 기준 1.5배) / 보이는 방 수 · 켜진 포털 수.
-    /// 새가 두 겹으로 보이거나 울렁거리는 순간 이 숫자가 떨어지는지 보려고. (기기 화면을 그리는 쪽의 시간은 앱에서 잴 수 없음 — 앱 갱신만)
-    /// 앞 표시부터 지금까지 걸린 앱 계산 시간을 그 이름으로 모음
-    private func diagMark(_ name: String) {
-        let now = CACurrentMediaTime()
-        let d = now - diagPrev
-        diagPrev = now
-        let o = diagSec[name] ?? (0, 0)
-        diagSec[name] = (o.0 + d, max(o.1, d))
-    }
-
-    /// 한 번의 화면 갱신에서 앱이 쓴 계산 시간 전체
-    private func diagEnd() {
-        let d = CACurrentMediaTime() - diagStart
-        diagCalc = (diagCalc.0 + d, max(diagCalc.1, d), diagCalc.2 + 1)
-    }
-
-    private func diagTick(_ dt: Float) {
-        let now = CACurrentMediaTime()
-        diagStart = now
-        let gap = Float(now - diagLast)
-        diagLast = now
-        diagN += 1
-        diagSum += gap
-        diagMax = max(diagMax, gap)
-        if gap > 0.017 { diagLate += 1 }
-        if diagSum >= 0.5 {
-            var rooms = 0, portals = 0
-            for (_, w) in worlds where w.local.isEnabled { rooms += 1; portals += w.portalCount }
-            // 앱 계산: 한 화면에 쓴 평균·최장 ms, 가장 오래 걸린 두 부분(최장 ms) — 이 값이 작은데도 갱신이 45로 떨어지면 기기가 그리는 쪽이 무거운 것
-            let calcAvg = diagCalc.2 > 0 ? diagCalc.0 / Double(diagCalc.2) * 1000 : 0
-            let top = diagSec.sorted { $0.value.1 > $1.value.1 }.prefix(2).map { String(format: "%@ %.1f", $0.key, $0.value.1 * 1000) }.joined(separator: " · ")
-            diagText = String(format: "갱신 %.0f/초  최장 %.0fms  늦음 %d\n보이는 방 %d  포털 %d\n앱 계산 평균 %.1fms 최장 %.1fms\n", Float(diagN) / diagSum, diagMax * 1000, diagLate, rooms, portals, calcAvg, diagCalc.1 * 1000) + top
-                + "\n나무: " + ["모두 보임", "잎 끔", "나무·띠 끔"][diagMode] + " (눌러서 바꿈)"
-            diagN = 0; diagSum = 0; diagMax = 0; diagLate = 0
-            diagSec = [:]; diagCalc = (0, 0, 0)
-        }
-        if let c = diagCard {
-            let g = simd_length(fwd) > 0.01 ? simd_normalize(fwd) : SIMD3<Float>(0, 0, -1)
-            let up = simd_length(headUp) > 0.01 ? simd_normalize(headUp) : SIMD3<Float>(0, 1, 0)
-            let right = simd_normalize(simd_cross(g, up))
-            c.position = head + g * 0.9 - up * 0.3 - right * 0.28
-            faceDocent(c)
-        }
     }
 
     /// 사용법 알림 (탐험마다 한 번씩, 5초)
@@ -2291,7 +2189,9 @@ final class ExploreSession {
             // 닫힘 증거가 들어와 굳히는 중(1초)이면 열쇠 문을 띄우지 않음 (곧 실제 문짝이 될 문에 열쇠 문이 잠깐 번쩍이지 않게)
             else if near && !inside && !passed.contains(i) && fresh && closeSince[i] == nil { shape = .key }
             else { shape = .wall }
-            if !same && near && !inside && !real && !fresh && !doorOpen.contains(i) && prog == nil { urgent = true }
+            // 문 자리 그물을 자주(0.05초) 다시 봄: 다른 테마는 열쇠를 띄우기 전까지, 같은 테마는 곁에서 닫힌 문으로 알아보기 전까지 늘.
+            // (예전엔 다른 테마만 — 같은 테마는 곁에 가도 문 자리 그물이 0.3초마다만 갱신되어, 열린 공간으로 보이는 채 닫힌 문에 다가가 부딪힘)
+            if near && !inside && !real && prog == nil && (same || (!fresh && !doorOpen.contains(i))) { urgent = true }
 
             let panelsOn = shape == .wall || shape == .key || (shape == .opening && (prog ?? 1) < 0.4)
             if !panelsOn && shape != .leaf { opened.insert(i) }

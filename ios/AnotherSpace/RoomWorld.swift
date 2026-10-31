@@ -274,8 +274,6 @@ final class RoomWorld {
     /// 다른 테마 방에 들어가 문 쪽을 돌아보면 지금 방의 문 자리 판(지금 방 풍경)보다 지나온 방의 벽·천장 포털이 나중에 그려져
     /// 지나온 방 풍경이 그대로 보이곤 했음
     private var portals: [ModelEntity] = []
-    /// [진단용] 이 방의 포털 엔티티 수
-    var portalCount: Int { portals.count }
     private var portalTierNow = -1
     private func addPortal(_ e: ModelEntity) {
         portals.append(e)
@@ -456,13 +454,6 @@ final class RoomWorld {
         blanky = bc
     }
     private var blankyLayout: Layout?
-
-    // MARK: [진단용 — 숲 새 이중(갱신 45/초) 원인 확인 뒤 뺄 것]
-    /// 나뭇잎 판(1)·나무 줄기·지평선 띠(2). 진단판을 누르면 0 모두 보임 → 1 잎 끔 → 2 나무·띠 모두 끔 → 0
-    private var diagFoliage: [(Entity, Int)] = []
-    func setDiagFoliage(_ mode: Int) {
-        for (e, lv) in diagFoliage { let on = mode < lv; if e.isEnabled != on { e.isEnabled = on } }
-    }
 
     /// 블랭키씨가 설 수 있는 바깥 자리: 어느 방(걸을 수 있는 곳)에서든 r 밖, 나무 줄기·바위·텐트·집·모닥불을 피하고, wet 가 아니면 물길도 피함
     private func blankyFree(_ p: SIMD3<Float>, _ r: Float, wet: Bool) -> Bool {
@@ -1638,7 +1629,6 @@ final class RoomWorld {
             if let e = geo.entity("band_\(b.tex)", Tex.cutout(tex, tint: k)) {
                 layer(e, 2 + b.layer)
                 world.addChild(e)
-                diagFoliage.append((e, 2))
             }
         }
     }
@@ -2859,9 +2849,9 @@ final class RoomWorld {
                 for (p, h, w, _) in list {
                     Geo.inkTree(set.tex, &paperG, &hullG, at: p, height: h, width: w, pen: inkW(p + SIMD3<Float>(0, h * 0.5, 0)), using: &g)
                 }
-                if let e = paperG.entity("inkTrees_\(set.tex)", Ink.paper(0)) { layer(e, 5); world.addChild(e); diagFoliage.append((e, 1)) }
-                if let e = hullG.entity("inkTreeTrunkLines_\(set.tex)", Ink.hullMat) { layer(e, 5); world.addChild(e); diagFoliage.append((e, 2)) }
-                if let e = paperG.inkHull("inkTreeLines_\(set.tex)", width: { inkW($0) }) { layer(e, 5); world.addChild(e); diagFoliage.append((e, 1)) }
+                if let e = paperG.entity("inkTrees_\(set.tex)", Ink.paper(0)) { layer(e, 5); world.addChild(e) }
+                if let e = hullG.entity("inkTreeTrunkLines_\(set.tex)", Ink.hullMat) { layer(e, 5); world.addChild(e) }
+                if let e = paperG.inkHull("inkTreeLines_\(set.tex)", width: { inkW($0) }) { layer(e, 5); world.addChild(e) }
                 continue
             }
             // 입체 나무: 둥근 줄기·가지(나무껍질 무늬) + 사방으로 꽂은 잎 판 (어느 쪽에서 봐도 부피가 있음)
@@ -2882,12 +2872,10 @@ final class RoomWorld {
             if let e = trunks.entity("trunks_\(set.tex)", lineMode ? Ink.line : Tex.unlit("bark", tint: Worlds.safe(tint * 0.8, min: 0.2))) {      // 선 그림: 줄기는 먹으로 채움
                 layer(e, 5)
                 world.addChild(e)
-                diagFoliage.append((e, 2))
             }
             if let e = leaves.entity("leaves_\(set.tex)", Tex.cutout(leafTex, tint: Worlds.safe(tint, min: 0.22), sampler: Tex.clamp)) {
                 layer(e, 5)
                 world.addChild(e)
-                diagFoliage.append((e, 1))
             }
         }
         if room.place == "cafe" {

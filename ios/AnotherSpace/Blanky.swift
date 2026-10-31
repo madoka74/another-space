@@ -35,43 +35,33 @@ enum BK {
         if x <= x2 { return 1 }
         return 1 - ss((x - x2) / max(1e-3, x3 - x2))
     }
-    /// 빛 구슬 개수 (비어 있음 0개도 — 공허함)
-    static func orbCount<G: RandomNumberGenerator>(_ g: inout G) -> Int {
-        let r = Float.random(in: 0...1, using: &g)
-        return r < 0.12 ? 0 : (r < 0.42 ? 1 : (r < 0.75 ? 2 : 3))
-    }
+    /// 배 구멍 속 빛: 모두 하나씩 (빛깔만 저마다)
+    static func orbCount<G: RandomNumberGenerator>(_ g: inout G) -> Int { 1 }
 }
 
 // MARK: - 그물
-/// 블랭키씨 모양 (키 1 기준 — 엔티티 크기로 키를 맞춤). 몸 윤곽·구멍·팔다리 굵기는 사용자가 준 블랭키씨 정면 그림에서 줄마다 잰 값
-/// (그림 키 3363픽셀 = 1, 가운데 x = 0). 머리~몸통은 한 덩어리 그물(모든 블랭키씨가 같이 씀), 팔다리는 매 화면 휘는 그물(BlankyLimb)
+/// 블랭키씨 모양 (키 1 기준 — 엔티티 크기로 키를 맞춤).
+/// 몸·팔·다리·손·발이 하나로 이어진 매끈한 껍데기(Resources/tex/blanky_mesh.bin)를 씀 — 사용자가 준 정면 그림에서 줄마다 잰 윤곽으로
+/// 몸통(구멍 포함)·팔·다리를 부드럽게 녹여 붙인 모양을 앱 밖(tools 의 계산)에서 한 번 만들어 둔 것. 0.5.48 까지는 몸통과 팔다리를 따로 만들어
+/// 붙여 이음매(구분선)가 보였고 어깨 비탈 옆이 불룩했음.
+/// 껍데기 점마다 '어느 팔다리를 얼마나 따르는지'(무게)가 있어, 팔다리를 휘면 그 곡선을 따라 점이 옮겨 감 (마디 없이 둥글게 휨, 이음매 없음).
+/// 팔다리를 전혀 따르지 않는 점(몸 대부분)은 움직이지 않는 그물 하나로 모든 블랭키씨가 같이 씀
 @MainActor
 enum BlankyMesh {
     static let hipY: Float = 0.44                               // 엉덩이 마디 (다리 뿌리, 몸 아래 끝 0.40 위)
-    static let legX: Float = 0.0455                             // 다리 가운데 (그림: 가랑이에서 두 다리가 거의 붙어 내려와 곧게)
+    static let legX: Float = 0.0455                             // 다리 가운데
     static let armRoot = SIMD2<Float>(0.046, 0.765)             // 팔 뿌리 (어깨 비탈 속 — 바닥에서)
     static let hollowY: Float = 0.199                           // 배 구멍 가운데 (등뼈 = 엉덩이 마디 기준, 바닥에서 0.639)
-    // 정면 반폭 (팔 포함 바깥 윤곽, 바닥에서 높이 y): 머리 0.0645(곧은 기둥) → 0.83부터 어깨 비탈로 퍼져 0.6에서 0.127
-    private static let outer: [(Float, Float)] = [(0.6, 0.127), (0.6075, 0.1252), (0.6164, 0.1234), (0.6253, 0.1213), (0.6343, 0.1192), (0.6432, 0.1172),
-        (0.6521, 0.1148), (0.661, 0.1124), (0.6699, 0.1097), (0.6789, 0.107), (0.6878, 0.1041), (0.6967, 0.1011), (0.7056, 0.0978), (0.7145, 0.0946),
-        (0.7235, 0.091), (0.7324, 0.0874), (0.7413, 0.0839), (0.7502, 0.0803), (0.7591, 0.0767), (0.7681, 0.074), (0.777, 0.0717), (0.7859, 0.0699),
-        (0.7948, 0.0684), (0.8037, 0.0669), (0.8127, 0.066), (0.8216, 0.0651), (0.8305, 0.0645), (0.92, 0.0645), (0.9286, 0.0642), (0.9376, 0.0633),
-        (0.9465, 0.0616), (0.9554, 0.0586), (0.9643, 0.0544), (0.9732, 0.0491), (0.9822, 0.0413), (0.9911, 0.0303), (1.0, 0)]
-    // 팔 사이 몸통 반폭 (0.604 아래 — 그림에서 팔과 몸통이 갈라지는 틈 안쪽), 다리 사이로 둥글게 끝남
-    private static let torso: [(Float, Float)] = [(0.40, 0), (0.405, 0.05), (0.42, 0.072), (0.45, 0.081), (0.5, 0.086), (0.604, 0.0853)]
-    // 앞뒤 반두께 (그림에 없음 — 피규어 사진처럼 머리는 둥글고 몸은 조금 납작, 아래 끝은 다리 굵기로 좁아져 다리와 이어짐)
-    private static let depth: [(Float, Float)] = [(0.40, 0), (0.405, 0.03), (0.42, 0.04), (0.45, 0.048), (0.5, 0.058), (0.55, 0.065), (0.68, 0.066), (0.8, 0.061), (0.92, 0.059)]
-    private static let holeC = SIMD2<Float>(0, 0.639), holeA = SIMD2<Float>(0.0535, 0.104)       // 배 구멍 (그림에서 잼)
-    // 팔: 뿌리에서 손목까지 길이 s 마다 몸 바깥쪽 기울기(라디안)와 반지름 — 그림처럼 어깨 비탈을 따라 벌어졌다 손 쪽에서 살짝 안으로
+    // 머리 쪽 정면 반폭·앞뒤 두께 (눈·일자를 앞면에 붙일 때만 씀 — 껍데기와 같은 식)
+    private static let head: [(Float, Float)] = [(0.8305, 0.0645), (0.92, 0.0645), (0.9286, 0.0642), (0.9376, 0.0633), (0.9465, 0.0616),
+                                                 (0.9554, 0.0586), (0.9643, 0.0544), (0.9732, 0.0491), (0.9822, 0.0413), (0.9911, 0.0303), (1.0, 0)]
+    // 팔: 뿌리에서 손목까지 길이 s 마다 몸 바깥쪽 기울기(라디안) — 그림처럼 어깨 비탈을 따라 벌어졌다 손 쪽에서 살짝 안으로 (껍데기 계산과 같은 표)
     static let armLen: Float = 0.357
     static let armS: [Float] = [0, 0.072, 0.176, 0.227, 0.277, 0.317, 0.357]
-    static let armTh: [Float] = [0.42, 0.33, 0.285, 0.2, 0.09, 0.04, 0.005]
-    static let armR: [Float] = [0.024, 0.023, 0.0198, 0.0164, 0.014, 0.0136, 0.0143]
-    // 다리: 엉덩이 마디에서 발목까지, 허벅지는 굵게 몸에 묻히고 발목으로 가늘어졌다 발 쪽에서 조금 굵어짐
+    static let armTh: [Float] = [0.44, 0.355, 0.31, 0.225, 0.115, 0.065, 0.03]
     static let legLen: Float = 0.405
-    static let legS: [Float] = [0, 0.04, 0.06, 0.09, 0.111, 0.167, 0.223, 0.279, 0.334, 0.405]
-    static let legR: [Float] = [0.042, 0.039, 0.0326, 0.0284, 0.0262, 0.0207, 0.0167, 0.015, 0.0153, 0.019]
     static let thigh: Float = 0.21, shin: Float = 0.23           // 앉기 계산용 (무릎이 휘는 곳 가운데까지 / 그 아래 발바닥까지)
+    static let M = 24                                            // 팔다리 곡선 점 수
 
     static func lerp(_ t: [(Float, Float)], _ y: Float) -> Float {
         guard let f = t.first, let l = t.last else { return 0 }
@@ -89,36 +79,158 @@ enum BlankyMesh {
         return vs[i] + (vs[i + 1] - vs[i]) * min(1, (x - xs[i]) / max(1e-6, xs[i + 1] - xs[i]))
     }
     static func ss(_ t: Float) -> Float { let c = min(1, max(0, t)); return c * c * (3 - 2 * c) }
-    /// 몸 정면 반폭: 0.604 위는 바깥 윤곽에서 팔 굵기만큼 뺀 몸 (팔은 따로, 그 비탈에 반쯤 묻힘), 아래는 팔 사이 몸통
-    static func bodyW(_ y: Float) -> Float {
-        if y <= 0.40 || y >= 1.0 { return 0 }
-        if y < 0.604 { return lerp(torso, y) }
-        return lerp(outer, y) - 0.036 * ss((0.78 - y) / 0.16)
-    }
-    static func bodyD(_ y: Float) -> Float { y > 0.92 ? 0.059 * bodyW(y) / 0.0645 : lerp(depth, y) }
-    /// 몸 앞면 깊이 (정면 x, y) — 단면은 모서리가 둥근 네모(초타원 3제곱)
+    /// 머리 앞면 깊이 (정면 x, y) — 단면은 모서리가 둥근 네모(초타원 3제곱), 껍데기와 같은 식
     static func zf(_ x: Float, _ y: Float) -> Float {
-        let w = bodyW(y)
+        let w = lerp(head, y)
         guard w > 1e-6 else { return 0 }
-        return bodyD(y) * pow(max(0, 1 - pow(abs(x / w), 3)), 1 / 3)
+        let d: Float = y > 0.92 ? 0.059 * w / 0.0645 : 0.059
+        return d * pow(max(0, 1 - pow(abs(x / w), 3)), 1 / 3)
     }
 
-    struct Parts { let body: MeshResource, face: MeshResource }
-    private static var cache: Parts?
-    private static var tried = false
-    static var parts: Parts? {
-        if !tried { tried = true; cache = build() }
-        return cache
-    }
-
-    static func shade(_ n: SIMD3<Float>) -> Float {
-        let l = simd_dot(n, light)
-        return 0.14 + 0.86 * pow(max(0, (l + 0.4) / 1.4), 1.25)
-    }
     static let light = simd_normalize(SIMD3<Float>(0.35, 0.85, 0.45))
+    /// 빛 받는 정도 (몸 기준 법선) — 움직이지 않는 그물과 휘는 그물이 같은 식이어야 이음매가 안 보임
+    nonisolated static func shadeOf(_ n: SIMD3<Float>, _ lt: SIMD3<Float>) -> Float {
+        let x = max(0, (simd_dot(n, lt) + 0.4) / 1.4)
+        return min(0.98, max(0.02, 0.14 + 0.86 * x * sqrt(sqrt(x))))
+    }
+    static func shade(_ n: SIMD3<Float>) -> Float { shadeOf(n, light) }
 
-    /// 격자 점(줄 × 칸, 칸은 둘레로 이어짐)을 삼각형으로. 점마다 바깥 방향(inside 에서 멀어지는 쪽) 법선을 맞추고 빛 받는 정도를 uv.x 에 구움.
-    /// 삼각형 감김은 법선 쪽이 앞면이 되게 하나씩 맞춤. nOut: 점마다 법선 (손·발처럼 매 화면 다시 돌려 그늘을 다시 낼 때)
+    /// 팔다리 곡선 (뿌리 기준 M+1 점의 자리·돌림). f: 뿌리에서 앞으로, o: 몸 바깥으로, bend: 팔꿈치(앞으로)·무릎(뒤로) 굽힘, twist: 굽는 면 돌림.
+    /// 굽힘은 한 점이 아니라 구간(팔 0.13~0.23 — 팔이 몸에서 떨어져 나오는 곳 아래, 다리 0.14~0.28)에 나눠 둥글게
+    static func frames(arm: Bool, side: Float, f: Float, o: Float, bend: Float, twist: Float) -> ([SIMD3<Float>], [simd_float3x3]) {
+        let L = arm ? armLen : legLen
+        let base = simd_quatf(angle: side * o, axis: [0, 0, 1]) * simd_quatf(angle: -f, axis: [1, 0, 0]) * simd_quatf(angle: side * twist, axis: [0, 1, 0])
+        var P: [SIMD3<Float>] = [], R: [simd_float3x3] = []
+        P.reserveCapacity(M + 1); R.reserveCapacity(M + 1)
+        var p = SIMD3<Float>(0, 0, 0)
+        var prev = SIMD3<Float>(0, -1, 0)
+        for i in 0...M {
+            let s = L * Float(i) / Float(M)
+            let q: simd_quatf
+            if arm {
+                q = base * simd_quatf(angle: side * lerp(armS, armTh, s), axis: [0, 0, 1]) * simd_quatf(angle: -bend * ss((s - 0.13) / 0.10), axis: [1, 0, 0])
+            } else {
+                q = base * simd_quatf(angle: bend * ss((s - 0.14) / 0.14), axis: [1, 0, 0])
+            }
+            let m = simd_matrix3x3(q)
+            let d = m * SIMD3<Float>(0, -1, 0)
+            if i > 0 { p += (prev + d) * (0.5 * L / Float(M)) }
+            prev = d
+            P.append(p); R.append(m)
+        }
+        return (P, R)
+    }
+    static let limbArm: [Bool] = [true, true, false, false]
+    static let limbSide: [Float] = [1, -1, 1, -1]
+    /// 팔다리 뿌리 (등뼈·골반 기준 = 엉덩이 마디 원점)
+    static func limbRoot(_ k: Int) -> SIMD3<Float> {
+        limbArm[k] ? SIMD3<Float>(limbSide[k] * armRoot.x, armRoot.y - hipY, 0) : SIMD3<Float>(limbSide[k] * legX, 0, 0)
+    }
+
+    /// 껍데기 (모든 블랭키씨가 같이 씀)
+    final class Skin {
+        let still: MeshResource                     // 움직이지 않는 몸 (등뼈 기준)
+        let stillPos: [SIMD3<Float>], stillNrm: [SIMD3<Float>], stillIdx: [UInt32]
+        let face: MeshResource
+        // 휘는 쪽 (점마다)
+        let idx: [UInt32]
+        let limb: [Int8]                            // -1 몸만, 0 왼팔·1 오른팔·2 왼다리·3 오른다리
+        let w: [Float]                              // 그 팔다리를 따르는 정도
+        let seg: [Int32], segT: [Float]             // 곡선 칸 번호·사이
+        let rel: [SIMD3<Float>], nrm: [SIMD3<Float>]    // 몸 기준 자리·법선 (등뼈 원점)
+        let loc: [SIMD3<Float>], locN: [SIMD3<Float>]   // 쉬는 곡선 기준 자리·법선
+        init(still: MeshResource, stillPos: [SIMD3<Float>], stillNrm: [SIMD3<Float>], stillIdx: [UInt32], face: MeshResource, idx: [UInt32], limb: [Int8], w: [Float],
+             seg: [Int32], segT: [Float], rel: [SIMD3<Float>], nrm: [SIMD3<Float>], loc: [SIMD3<Float>], locN: [SIMD3<Float>]) {
+            self.still = still; self.stillPos = stillPos; self.stillNrm = stillNrm; self.stillIdx = stillIdx; self.face = face
+            self.idx = idx; self.limb = limb; self.w = w; self.seg = seg; self.segT = segT; self.rel = rel; self.nrm = nrm; self.loc = loc; self.locN = locN
+        }
+    }
+    private static var skinCache: Skin?
+    private static var tried = false
+    static var skin: Skin? {
+        if !tried { tried = true; skinCache = load() }
+        return skinCache
+    }
+
+    /// 곡선 칸 사이 자리·돌림 (쉬는 곡선과 지금 곡선 모두 같은 식)
+    static func at(_ P: [SIMD3<Float>], _ R: [simd_float3x3], _ i: Int, _ t: Float) -> (SIMD3<Float>, simd_float3x3) {
+        let p = P[i] + (P[i + 1] - P[i]) * t
+        let a = R[i], b = R[i + 1]
+        return (p, simd_float3x3(a.columns.0 + (b.columns.0 - a.columns.0) * t, a.columns.1 + (b.columns.1 - a.columns.1) * t, a.columns.2 + (b.columns.2 - a.columns.2) * t))
+    }
+
+    private static func load() -> Skin? {
+        guard let url = Bundle.main.url(forResource: "blanky_mesh", withExtension: "bin", subdirectory: "tex"),
+              let data = try? Foundation.Data(contentsOf: url), data.count > 20 else { return nil }
+        return data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Skin? in
+            guard raw.count > 20, raw.load(fromByteOffset: 0, as: UInt32.self) == 0x314D_4B42 else { return nil }     // 'BKM1'
+            func u32(_ o: Int) -> Int { Int(UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: o, as: UInt32.self))) }
+            func f32(_ o: Int) -> Float { Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: o, as: UInt32.self))) }
+            let ns = u32(4), fs = u32(8), nd = u32(12), fd = u32(16)
+            var o = 20
+            guard raw.count >= 20 + ns * 24 + fs * 12 + nd * 36 + fd * 12 else { return nil }
+            let off = SIMD3<Float>(0, hipY, 0)
+            var sp: [SIMD3<Float>] = [], sn: [SIMD3<Float>] = []
+            sp.reserveCapacity(ns); sn.reserveCapacity(ns)
+            for _ in 0..<ns {
+                sp.append(SIMD3<Float>(f32(o), f32(o + 4), f32(o + 8)) - off)
+                sn.append(SIMD3<Float>(f32(o + 12), f32(o + 16), f32(o + 20)))
+                o += 24
+            }
+            var si: [UInt32] = []
+            si.reserveCapacity(fs * 3)
+            for _ in 0..<(fs * 3) { si.append(UInt32(u32(o))); o += 4 }
+            // 쉬는 자세 곡선
+            var restP: [[SIMD3<Float>]] = [], restR: [[simd_float3x3]] = []
+            for k in 0..<4 {
+                let (P, R) = frames(arm: limbArm[k], side: limbSide[k], f: 0, o: 0, bend: 0, twist: 0)
+                restP.append(P); restR.append(R)
+            }
+            var lim: [Int8] = [], ww: [Float] = [], sg: [Int32] = [], st: [Float] = []
+            var rl: [SIMD3<Float>] = [], rn: [SIMD3<Float>] = [], lc: [SIMD3<Float>] = [], ln: [SIMD3<Float>] = []
+            for _ in 0..<nd {
+                let p = SIMD3<Float>(f32(o), f32(o + 4), f32(o + 8)) - off
+                let n = SIMD3<Float>(f32(o + 12), f32(o + 16), f32(o + 20))
+                let k = Int(f32(o + 24).rounded()), s = f32(o + 28), wv = f32(o + 32)
+                o += 36
+                rl.append(p); rn.append(n)
+                if k >= 0 && k < 4 && wv > 0 {
+                    let L = limbArm[k] ? armLen : legLen
+                    let u = min(Float(M), max(0, s / L * Float(M)))
+                    let i = min(M - 1, Int(u))
+                    let t = u - Float(i)
+                    let (P0, R0) = at(restP[k], restR[k], i, t)
+                    let RT = R0.transpose
+                    lim.append(Int8(k)); ww.append(wv); sg.append(Int32(i)); st.append(t)
+                    lc.append(RT * (p - limbRoot(k) - P0)); ln.append(RT * n)
+                } else {
+                    lim.append(-1); ww.append(0); sg.append(0); st.append(0)
+                    lc.append(.zero); ln.append(.zero)
+                }
+            }
+            var di: [UInt32] = []
+            di.reserveCapacity(fd * 3)
+            for _ in 0..<(fd * 3) { di.append(UInt32(u32(o))); o += 4 }
+            // 움직이지 않는 몸 그물 (그늘 구움)
+            var g = Geo()
+            g.pos = sp
+            g.uv = sn.map { SIMD2<Float>(shade($0), 0.5) }
+            g.idx = si
+            // 얼굴: 머리 앞면에 점 눈 둘 + 두 눈 사이 작은 일자 (그림에서 잰 자리)
+            var face = Geo()
+            var nn: [SIMD3<Float>] = []
+            for sx: Float in [1, -1] {
+                let x = sx * 0.0268, y: Float = 0.9097
+                ellipsoid(&face, c: SIMD3<Float>(x, y, zf(x, y) - 0.002) - off, r: SIMD3<Float>(0.0055, 0.0055, 0.0035), lat: 6, lon: 10, nOut: &nn)
+            }
+            ellipsoid(&face, c: SIMD3<Float>(0, 0.9097, zf(0, 0.9097) - 0.0006) - off, r: SIMD3<Float>(0.0065, 0.0011, 0.0022), lat: 4, lon: 10, nOut: &nn)
+            guard let still = g.mesh("bkStill"), let fc = face.mesh("bkFace") else { return nil }
+            return Skin(still: still, stillPos: sp, stillNrm: sn, stillIdx: si, face: fc, idx: di, limb: lim, w: ww, seg: sg, segT: st,
+                        rel: rl, nrm: rn, loc: lc, locN: ln)
+        }
+    }
+
+    /// 격자 점(줄 × 칸, 칸은 둘레로 이어짐)을 삼각형으로 (눈 같은 작은 타원체용). 법선 쪽이 앞면이 되게 감음
     static func emit(_ g: inout Geo, _ rows: [[SIMD3<Float>]], wrapRows: Bool, inside: (Int, Int) -> SIMD3<Float>,
                      dim: (Int, Int) -> Float = { _, _ in 1 }, nOut: inout [SIMD3<Float>]) {
         let nr = rows.count
@@ -139,7 +251,7 @@ enum BlankyMesh {
                 if simd_dot(n, out) < 0 { n = -n }
                 nrm[i * nc + j] = n
                 g.pos.append(p)
-                g.uv.append(SIMD2<Float>(min(0.98, max(0.02, shade(n) * dim(i, j))), 0.5))
+                g.uv.append(SIMD2<Float>(shade(n) * dim(i, j), 0.5))
             }
         }
         nOut += nrm
@@ -161,111 +273,18 @@ enum BlankyMesh {
         }
     }
 
-    /// 타원체 (rot: 돌림)
-    static func ellipsoid(_ g: inout Geo, c: SIMD3<Float>, r: SIMD3<Float>, lat: Int = 12, lon: Int = 20,
-                          rot: simd_quatf = simd_quatf(angle: 0, axis: [0, 1, 0]), nOut: inout [SIMD3<Float>]) {
+    static func ellipsoid(_ g: inout Geo, c: SIMD3<Float>, r: SIMD3<Float>, lat: Int = 12, lon: Int = 20, nOut: inout [SIMD3<Float>]) {
         var rows: [[SIMD3<Float>]] = []
         for i in 0...lat {
             let v = Float.pi / 2 - Float.pi * Float(i) / Float(lat)
             var row: [SIMD3<Float>] = []
             for j in 0..<lon {
                 let u = 2 * Float.pi * Float(j) / Float(lon)
-                row.append(c + rot.act(SIMD3<Float>(r.x * cos(v) * cos(u), r.y * sin(v), r.z * cos(v) * sin(u))))
+                row.append(c + SIMD3<Float>(r.x * cos(v) * cos(u), r.y * sin(v), r.z * cos(v) * sin(u)))
             }
             rows.append(row)
         }
         emit(&g, rows, wrapRows: false, inside: { _, _ in c }, nOut: &nOut)
-    }
-
-    /// 아래(-y)로 뻗은 끝이 둥근 막대 (손 — 앞뒤로 납작 fz). prof: (y, 반지름, 옆 어긋남 x) 위에서 아래로
-    static func tube(_ g: inout Geo, _ prof: [(Float, Float, Float)], sides: Int, fz: Float, nOut: inout [SIMD3<Float>]) {
-        guard let top = prof.first, let bot = prof.last else { return }
-        var ring: [(Float, Float, Float)] = []
-        for k in 0..<3 {
-            let a = Float.pi / 2 * (1 - Float(k) / 3)
-            ring.append((top.0 + top.1 * sin(a) * fz, top.1 * cos(a), top.2))
-        }
-        ring += prof
-        for k in 1...3 {
-            let a = Float.pi / 2 * Float(k) / 3
-            ring.append((bot.0 - bot.1 * sin(a) * 0.8, bot.1 * cos(a), bot.2))
-        }
-        var rows: [[SIMD3<Float>]] = []
-        for (y, r, x0) in ring {
-            rows.append((0..<sides).map { j in
-                let u = 2 * Float.pi * Float(j) / Float(sides)
-                return SIMD3<Float>(x0 + r * cos(u), y, r * fz * sin(u))
-            })
-        }
-        emit(&g, rows, wrapRows: false, inside: { i, _ in SIMD3<Float>(ring[i].2, min(top.0, max(bot.0, ring[i].0)), 0) }, nOut: &nOut)
-    }
-
-    private static func build() -> Parts? {
-        // 머리~몸통 한 덩어리 + 배 구멍: 정면 몸 윤곽 둘레를 고르게 112칸으로 나누고, 칸마다 구멍 가운데에서 윤곽 점으로 그은 줄 위에
-        // 구멍 가장자리 → 윤곽을 잇는 앞면·뒷면(깊이 zf, 구멍 가까이는 둥근 비탈로 들어감)과 구멍 속 벽을 하나로 감싼 고리 그물
-        let half = 4000
-        var poly: [SIMD2<Float>] = []
-        for k in 0..<half {
-            let y = 0.40 + 0.6 * Float(k) / Float(half - 1)
-            poly.append(SIMD2<Float>(bodyW(y), y))
-        }
-        for k in stride(from: half - 2, through: 1, by: -1) { poly.append(SIMD2<Float>(-poly[k].x, poly[k].y)) }
-        var cum: [Float] = [0]
-        for k in 0..<poly.count { cum.append(cum[k] + simd_distance(poly[k], poly[(k + 1) % poly.count])) }
-        let nC = 112
-        var O: [SIMD2<Float>] = [], Hp: [SIMD2<Float>] = [], Rd: [SIMD2<Float>] = [], sr: [Float] = []
-        var seg = 0
-        for k in 0..<nC {
-            let d = cum[poly.count] * Float(k) / Float(nC)
-            while seg + 1 < poly.count && cum[seg + 1] < d { seg += 1 }
-            let a = poly[seg], b = poly[(seg + 1) % poly.count]
-            let o = a + (b - a) * ((d - cum[seg]) / max(1e-9, cum[seg + 1] - cum[seg]))
-            O.append(o)
-            let v = o - holeC
-            let an = atan2(v.y / holeA.y, v.x / holeA.x)
-            let h = holeC + holeA * SIMD2<Float>(cos(an), sin(an))
-            Hp.append(h)
-            Rd.append(simd_normalize(h - holeC))
-            let hb = holeC + (holeA + SIMD2<Float>(repeating: 0.02)) * SIMD2<Float>(cos(an), sin(an))     // 둥근 비탈 끝
-            sr.append(min(0.6, simd_distance(hb, h) / max(1e-6, simd_distance(o, h))))
-        }
-        var sF: [Float] = []
-        let n = 16
-        for k in 0...n { let u = 1 - Float(k) / Float(n); sF.append(1 - (1 - u) * (1 - u)) }
-        sF[n] = 0
-        var rows: [[SIMD3<Float>]] = [], kind: [Int] = [], dims: [Float] = []       // kind 0 앞·뒷면, 1 구멍 속
-        func sheet(_ s: Float, _ sign: Float) -> [SIMD3<Float>] {
-            (0..<nC).map { j in
-                let p = Hp[j] + (O[j] - Hp[j]) * s
-                let dip = 0.62 + 0.38 * ss(s / max(1e-4, sr[j]))
-                return SIMD3<Float>(p.x, p.y, sign * zf(p.x, p.y) * dip)
-            }
-        }
-        for s in sF { rows.append(sheet(s, 1)); kind.append(s > 0.001 ? 0 : 2); dims.append(s > 0.02 ? 1 : 0.8) }
-        for c: Float in [0.45, 0.15, -0.15, -0.45] {
-            rows.append((0..<nC).map { j in SIMD3<Float>(Hp[j].x, Hp[j].y, c * 0.62 * zf(Hp[j].x, Hp[j].y)) })
-            kind.append(1); dims.append(0.42)                                                   // 구멍 속은 어둡게 (깊이)
-        }
-        for s in sF.reversed().dropLast() { rows.append(sheet(s, -1)); kind.append(s > 0.001 ? 0 : 2); dims.append(s > 0.02 ? 1 : 0.8) }
-        let off = SIMD3<Float>(0, -hipY, 0)                                                     // 등뼈(엉덩이 마디) 기준으로
-        var body = Geo()
-        var nn: [SIMD3<Float>] = []
-        emit(&body, rows.map { $0.map { $0 + off } }, wrapRows: true,
-             inside: { i, j in
-                 let p = rows[i][j]
-                 if kind[i] == 0 { return SIMD3<Float>(p.x, p.y, 0) + off }
-                 return SIMD3<Float>(Hp[j].x + Rd[j].x * 0.03, Hp[j].y + Rd[j].y * 0.03, kind[i] == 1 ? p.z * 0.3 : 0) + off
-             },
-             dim: { i, _ in dims[i] }, nOut: &nn)
-        // 얼굴: 머리 쪽 앞면에 점 눈 둘 + 두 눈 사이 작은 일자 (그림에서 잰 자리)
-        var face = Geo()
-        for sx: Float in [1, -1] {
-            let x = sx * 0.0268, y: Float = 0.9097
-            ellipsoid(&face, c: SIMD3<Float>(x, y, zf(x, y) - 0.002) + off, r: SIMD3<Float>(0.0055, 0.0055, 0.0035), lat: 6, lon: 10, nOut: &nn)
-        }
-        ellipsoid(&face, c: SIMD3<Float>(0, 0.9097, zf(0, 0.9097) - 0.0006) + off, r: SIMD3<Float>(0.0065, 0.0011, 0.0022), lat: 4, lon: 10, nOut: &nn)
-        guard let b = body.mesh("bkBody"), let fc = face.mesh("bkFace") else { return nil }
-        return Parts(body: b, face: fc)
     }
 
     /// 매트한 딥 다크 차콜 그라데이션 (그늘 → 빛 받는 쪽). 무채색이라 흑백에서도 그대로
@@ -300,145 +319,98 @@ enum BlankyMesh {
     }
 }
 
-// MARK: - 휘는 팔다리
-/// 팔·다리 하나: 마디(꺾이는 점) 없이 뿌리에서 끝까지 휘는 굵기 있는 관 + 끝(손·발). 매 화면 곡선을 따라 점을 다시 놓음 (LowLevelMesh).
-/// 굽힘(팔꿈치·무릎)은 한 점이 아니라 긴 구간(팔 0.12~0.33, 다리 0.14~0.28)에 고르게 나눠 둥글게 휨 — 캐릭터의 '관절이 도드라지지 않는 유연한 몸'
+// MARK: - 휘는 껍데기
 private struct BKVert {
     var p: SIMD3<Float>
     var uv: SIMD2<Float>
 }
 
+/// 한 명의 휘는 껍데기 (팔다리와 그 둘레 — 골반 기준). 매 화면 팔다리 곡선을 따라 점을 다시 놓음 (LowLevelMesh).
+/// 몸 쪽 점은 등뼈 돌림을, 팔다리 쪽 점은 그 곡선을, 그 사이는 무게만큼 섞어 → 어깨·엉덩이가 끊김 없이 늘어남
 @MainActor
-final class BlankyLimb {
+final class BlankySkin {
     let entity: ModelEntity
-    let arm: Bool
-    let side: Float                 // 1 왼쪽(+x), -1 오른쪽
+    private let hull: (LowLevelMesh, ModelEntity)?             // 선 그림 외곽선 껍데기
     private let mesh: LowLevelMesh
-    private let grow: Float         // 선 그림 외곽선 껍데기: 바깥으로 부풀릴 두께 (0이면 몸)
-    private static let M = 24, sides = 12
-    private let endPos: [SIMD3<Float>], endNrm: [SIMD3<Float>]      // 손·발 (끝 자리 기준)
-    private let tubeCount: Int
-    private(set) var endP = SIMD3<Float>(0, 0, 0)                  // 끝(손바닥 가운데·발목) — 뿌리 기준
-    private let cosT: [Float], sinT: [Float]
+    private let S: BlankyMesh.Skin
+    private let grow: Float
+    private(set) var hand = SIMD3<Float>(0, 0, 0)              // 오른손 쥐는 자리 (등뼈 기준)
 
-    init?(arm: Bool, side: Float, material: RealityKit.Material, grow: Float = 0) {
-        self.arm = arm
-        self.side = side
+    init?(_ S: BlankyMesh.Skin, material: RealityKit.Material, grow: Float) {
+        self.S = S
         self.grow = grow
-        var g = Geo()
-        var nn: [SIMD3<Float>] = []
-        if arm {
-            // 손: 손목에서 넓어졌다 손가락 끝으로 좁아지는 납작한 손바닥 + 안쪽 엄지 (그림에서 잰 폭)
-            BlankyMesh.tube(&g, [(0, 0.0143, 0), (-0.035, 0.019, 0), (-0.05, 0.0205, 0), (-0.063, 0.017, 0), (-0.08, 0.014, 0), (-0.1, 0.011, 0), (-0.112, 0.007, 0)],
-                            sides: 14, fz: 0.62, nOut: &nn)
-            BlankyMesh.tube(&g, [(-0.028, 0.009, -side * 0.013), (-0.05, 0.0078, -side * 0.021), (-0.07, 0.006, -side * 0.025)], sides: 10, fz: 0.8, nOut: &nn)
-        } else {
-            // 발: 발목에서 둥글게 넓어지는 뒤꿈치 + 앞으로 길고 납작한 발, 발끝은 바깥·아래로 (그림처럼 물방울 모양)
-            BlankyMesh.ellipsoid(&g, c: SIMD3<Float>(0, -0.012, 0.004), r: SIMD3<Float>(0.02, 0.022, 0.024), lat: 10, lon: 14, nOut: &nn)
-            BlankyMesh.ellipsoid(&g, c: SIMD3<Float>(side * 0.014, -0.02, 0.03), r: SIMD3<Float>(0.021, 0.017, 0.052), lat: 10, lon: 16,
-                                 rot: simd_quatf(angle: side * 0.5, axis: [0, 1, 0]) * simd_quatf(angle: -side * 0.25, axis: [0, 0, 1]), nOut: &nn)
-        }
-        endPos = g.pos
-        endNrm = nn
-        let sides = Self.sides
-        cosT = (0..<sides).map { cos(2 * Float.pi * Float($0) / Float(sides)) }
-        sinT = (0..<sides).map { sin(2 * Float.pi * Float($0) / Float(sides)) }
-        let rings = 3 + (Self.M + 1) + 3
-        let tc = rings * sides
-        tubeCount = tc
-        var idx: [UInt32] = []
-        for i in 0..<(rings - 1) {
-            for j in 0..<sides {
-                let j2 = (j + 1) % sides
-                let a = UInt32(i * sides + j), b = UInt32(i * sides + j2), c = UInt32((i + 1) * sides + j2), d = UInt32((i + 1) * sides + j)
-                idx += [a, b, c, a, c, d]
+        func make(_ mat: RealityKit.Material) -> (LowLevelMesh, ModelEntity)? {
+            let attrs = [LowLevelMesh.Attribute(semantic: .position, format: .float3, offset: MemoryLayout<BKVert>.offset(of: \BKVert.p) ?? 0),
+                         LowLevelMesh.Attribute(semantic: .uv0, format: .float2, offset: MemoryLayout<BKVert>.offset(of: \BKVert.uv) ?? 16)]
+            let desc = LowLevelMesh.Descriptor(vertexCapacity: S.rel.count, vertexAttributes: attrs,
+                                               vertexLayouts: [LowLevelMesh.Layout(bufferIndex: 0, bufferStride: MemoryLayout<BKVert>.stride)],
+                                               indexCapacity: S.idx.count)
+            guard let m = try? LowLevelMesh(descriptor: desc) else { return nil }
+            let ids = S.idx
+            m.withUnsafeMutableIndices { raw in
+                ids.withUnsafeBytes { src in raw.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[0..<min(src.count, raw.count)])) }
             }
+            m.parts.replaceAll([LowLevelMesh.Part(indexCount: ids.count, topology: .triangle,
+                                                  bounds: BoundingBox(min: SIMD3<Float>(repeating: -0.9), max: SIMD3<Float>(repeating: 0.9)))])
+            guard let res = try? MeshResource(from: m) else { return nil }
+            return (m, ModelEntity(mesh: res, materials: [mat]))
         }
-        idx += g.idx.map { $0 + UInt32(tc) }
-        let vCount = tc + g.pos.count
-        let attrs = [LowLevelMesh.Attribute(semantic: .position, format: .float3, offset: MemoryLayout<BKVert>.offset(of: \BKVert.p) ?? 0),
-                     LowLevelMesh.Attribute(semantic: .uv0, format: .float2, offset: MemoryLayout<BKVert>.offset(of: \BKVert.uv) ?? 16)]
-        let desc = LowLevelMesh.Descriptor(vertexCapacity: vCount, vertexAttributes: attrs,
-                                           vertexLayouts: [LowLevelMesh.Layout(bufferIndex: 0, bufferStride: MemoryLayout<BKVert>.stride)],
-                                           indexCapacity: idx.count)
-        guard let m = try? LowLevelMesh(descriptor: desc) else { return nil }
-        mesh = m
-        let ids = idx
-        m.withUnsafeMutableIndices { raw in
-            ids.withUnsafeBytes { src in raw.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[0..<min(src.count, raw.count)])) }
-        }
-        // 그리기에서 빼지 않게 넉넉한 범위 (키 1 기준 — 팔다리가 어디로 휘어도 들어감)
-        m.parts.replaceAll([LowLevelMesh.Part(indexCount: idx.count, topology: .triangle,
-                                              bounds: BoundingBox(min: SIMD3<Float>(repeating: -0.8), max: SIMD3<Float>(repeating: 0.8)))])
-        guard let res = try? MeshResource(from: m) else { return nil }
-        entity = ModelEntity(mesh: res, materials: [material])
-        update(f: 0, o: 0, bend: 0, twist: 0)
+        guard let main = make(material) else { return nil }
+        mesh = main.0
+        entity = main.1
+        hull = grow > 0 ? make(Ink.hullMat) : nil
+        if let h = hull { entity.addChild(h.1) }
     }
 
-    /// f: 뿌리에서 앞으로, o: 몸 바깥으로, bend: 팔꿈치(앞으로)·무릎(뒤로) 굽힘, twist: 굽는 면을 돌림 (팔)
-    func update(f: Float, o: Float, bend: Float, twist: Float) {
-        let M = Self.M, sides = Self.sides
-        let L = arm ? BlankyMesh.armLen : BlankyMesh.legLen
-        let qo = simd_quatf(angle: side * o, axis: [0, 0, 1]), qf = simd_quatf(angle: -f, axis: [1, 0, 0])
-        let base = qo * qf * simd_quatf(angle: side * twist, axis: [0, 1, 0])
-        var frames: [(SIMD3<Float>, simd_float3x3, Float)] = []
-        frames.reserveCapacity(M + 1)
-        var p = SIMD3<Float>(0, 0, 0)
-        var prevDir = SIMD3<Float>(0, -1, 0)
-        for i in 0...M {
-            let s = L * Float(i) / Float(M)
-            let q: simd_quatf
-            let r: Float
-            if arm {
-                let th = BlankyMesh.lerp(BlankyMesh.armS, BlankyMesh.armTh, s)
-                let b = -bend * BlankyMesh.ss((s - 0.12) / 0.21)
-                q = base * simd_quatf(angle: side * th, axis: [0, 0, 1]) * simd_quatf(angle: b, axis: [1, 0, 0])
-                r = BlankyMesh.lerp(BlankyMesh.armS, BlankyMesh.armR, s)
-            } else {
-                let b = bend * BlankyMesh.ss((s - 0.14) / 0.14)
-                q = base * simd_quatf(angle: b, axis: [1, 0, 0])
-                r = BlankyMesh.lerp(BlankyMesh.legS, BlankyMesh.legR, s)
+    /// spine: 등뼈 돌림 (골반 기준), limbs: 왼팔·오른팔·왼다리·오른다리 (앞으로, 바깥으로, 굽힘, 굽는 면 돌림)
+    func update(spine: simd_quatf, limbs: [SIMD4<Float>]) {
+        let Rs = simd_matrix3x3(spine), RsT = Rs.transpose
+        var P: [[SIMD3<Float>]] = [], R: [[simd_float3x3]] = []
+        for k in 0..<4 {
+            let a = limbs[k]
+            let (p, r) = BlankyMesh.frames(arm: BlankyMesh.limbArm[k], side: BlankyMesh.limbSide[k], f: a.x, o: a.y, bend: a.z, twist: a.w)
+            P.append(p); R.append(r)
+        }
+        let roots = (0..<4).map { BlankyMesh.limbRoot($0) }
+        // 오른손 쥐는 자리: 팔 끝에서 손바닥 가운데 (손은 손목에서 0.1 안으로 기움)
+        let Re = R[1][BlankyMesh.M] * simd_matrix3x3(simd_quatf(angle: 0.1, axis: [0, 0, 1]))
+        hand = roots[1] + P[1][BlankyMesh.M] + Re * SIMD3<Float>(0, -0.05, 0)
+        let n = S.rel.count
+        var main = [BKVert](repeating: BKVert(p: .zero, uv: .zero), count: n)
+        var out = [BKVert](repeating: BKVert(p: .zero, uv: .zero), count: hull == nil ? 0 : n)
+        let lt = BlankyMesh.light, gw = grow
+        for v in 0..<n {
+            var pos = Rs * S.rel[v]
+            var ns = S.nrm[v]                                   // 등뼈 기준 법선 (그늘은 이것으로 — 움직이지 않는 몸과 같게)
+            let w = S.w[v]
+            if w > 0 {
+                let k = Int(S.limb[v])
+                let (pk, rk) = BlankyMesh.at(P[k], R[k], Int(S.seg[v]), S.segT[v])
+                var lp = pk + rk * S.loc[v]
+                var ln = rk * S.locN[v]
+                if k < 2 {
+                    lp = Rs * (roots[k] + lp)                   // 팔: 등뼈 기준 → 골반 기준
+                } else {
+                    lp = roots[k] + lp                          // 다리: 골반 기준
+                    ln = RsT * ln                               // 그늘용 등뼈 기준 법선
+                }
+                pos = pos * (1 - w) + lp * w
+                let nb = ns * (1 - w) + ln * w
+                let l = simd_length(nb)
+                if l > 1e-6 { ns = nb / l }
             }
-            let R = simd_matrix3x3(q)
-            let dir = R * SIMD3<Float>(0, -1, 0)
-            if i > 0 { p += (prevDir + dir) * (0.5 * L / Float(M)) } else { prevDir = dir }
-            prevDir = dir
-            frames.append((p, R, r + grow))
+            let sh = BlankyMesh.shadeOf(ns, lt)
+            main[v] = BKVert(p: pos, uv: SIMD2<Float>(sh, 0.5))
+            if gw > 0 { out[v] = BKVert(p: pos + Rs * ns * gw, uv: SIMD2<Float>(sh, 0.5)) }
         }
-        let (pe, Re, _) = frames[M]
-        let Rh = arm ? Re * simd_matrix3x3(simd_quatf(angle: -side * 0.1, axis: [0, 0, 1])) : Re
-        endP = pe + Rh * SIMD3<Float>(0, arm ? -0.05 : 0, 0)
-        // 점은 여기(메인 액터)에서 다 계산해 두고, 그물 버퍼에는 복사만 — 버퍼를 여는 클로저는 액터 밖이라 그 안에서 앱 함수·속성을 쓰면 빌드 오류(0.5.48)
-        let gw = grow
-        var verts: [BKVert] = []
-        verts.reserveCapacity(tubeCount + endPos.count)
-        func ring(_ c: SIMD3<Float>, _ R: simd_float3x3, _ rr: Float, _ ny: Float) {
-            // ny: 끝 반구에서 법선이 위·아래로 기우는 정도
-            let axisV = R * SIMD3<Float>(0, 1, 0)
-            for j in 0..<sides {
-                let radial = R * SIMD3<Float>(cosT[j], 0, sinT[j])
-                let n = simd_normalize(radial * sqrt(max(0, 1 - ny * ny)) + axisV * ny)
-                verts.append(BKVert(p: c + radial * rr, uv: SIMD2<Float>(min(0.98, max(0.02, BlankyMesh.shade(n))), 0.5)))
-            }
-        }
-        let (p0, R0, r0) = frames[0]
-        for c in 0..<3 {
-            let a = Float.pi / 2 * (1 - Float(c) / 3)
-            ring(p0 + R0 * SIMD3<Float>(0, r0 * sin(a), 0), R0, r0 * cos(a), sin(a))
-        }
-        for (fp, fR, fr) in frames { ring(fp, fR, fr, 0) }
-        let (pz, Rz, rz) = frames[M]
-        for c in 1...3 {
-            let a = Float.pi / 2 * Float(c) / 3
-            ring(pz + Rz * SIMD3<Float>(0, -rz * sin(a) * 0.6, 0), Rz, rz * cos(a), -sin(a))
-        }
-        for (q, n) in zip(endPos, endNrm) {
-            verts.append(BKVert(p: pe + Rh * (q + n * gw), uv: SIMD2<Float>(min(0.98, max(0.02, BlankyMesh.shade(Rh * n))), 0.5)))
-        }
-        let vs = verts
+        let a = main
         mesh.withUnsafeMutableBytes(bufferIndex: 0) { raw in
-            vs.withUnsafeBytes { src in
-                raw.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[0..<min(src.count, raw.count)]))
+            a.withUnsafeBytes { src in raw.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[0..<min(src.count, raw.count)])) }
+        }
+        if let h = hull {
+            let b = out
+            h.0.withUnsafeMutableBytes(bufferIndex: 0) { raw in
+                b.withUnsafeBytes { src in raw.copyMemory(from: UnsafeRawBufferPointer(rebasing: src[0..<min(src.count, raw.count)])) }
             }
         }
     }
@@ -450,12 +422,10 @@ final class BlankyFigure {
     let root = Entity()                 // 발바닥 자리, 바라보는 쪽(+z)
     let H: Float                        // 키 (m)
     private let pelvis = Entity(), spine = Entity()
-    private var arms: [[BlankyLimb]] = [[], []]            // 0 왼쪽(+x), 1 오른쪽 — [몸, (선 그림) 외곽선]
-    private var legs: [[BlankyLimb]] = [[], []]
-    private let armMount = [Entity(), Entity()], legMount = [Entity(), Entity()]
+    private var skin: BlankySkin?                       // 팔다리·어깨·엉덩이 둘레 (휘는 껍데기)
     let hand = Entity()                 // 오른손 쥐는 자리 (자리만 따라감 — 잔·담배는 몸과 같은 방향으로 바로 섬)
     let chest = Entity()                // 가슴 앞 (펼친 책)
-    private var orbs: [(e: Entity, base: SIMD3<Float>, amp: Float, period: Float)] = []
+    private var orbs: [(e: Entity, base: SIMD3<Float>, amp: Float, period: Float, core: Entity, glow: Entity?, r: Float)] = []
     private var orbsGo = false
     private let look: LookMode
     private let tint: SIMD3<Float>
@@ -492,7 +462,7 @@ final class BlankyFigure {
 
     /// height: 키(m), orbs: 배 구멍 빛 구슬 수, pen: 선 그림 외곽선 굵기(m), order: 그리는 순서 (세계 6, 방 안 26)
     init?(height: Float, look: LookMode, tint: SIMD3<Float>, orbs n: Int, seed: UInt64, pen: Float, order: Int32) {
-        guard let P = BlankyMesh.parts else { return nil }
+        guard let S = BlankyMesh.skin else { return nil }
         H = height
         self.look = look
         self.tint = tint
@@ -504,46 +474,40 @@ final class BlankyFigure {
         pelvis.position = SIMD3<Float>(0, BlankyMesh.hipY, 0)
         root.addChild(pelvis)
         pelvis.addChild(spine)
-        part(P.body, body, spine)                       // 머리~몸통 한 덩어리
-        part(P.face, eye, spine, ink: false)
         let w = pen / height
-        for k in 0..<2 {
-            let s: Float = k == 0 ? 1 : -1
-            armMount[k].position = SIMD3<Float>(s * BlankyMesh.armRoot.x, BlankyMesh.armRoot.y - BlankyMesh.hipY, 0)
-            spine.addChild(armMount[k])
-            legMount[k].position = SIMD3<Float>(s * BlankyMesh.legX, 0, 0)
-            pelvis.addChild(legMount[k])
-            for (isArm, mount) in [(true, armMount[k]), (false, legMount[k])] {
-                var list: [BlankyLimb] = []
-                if let l = BlankyLimb(arm: isArm, side: s, material: body) { list.append(l) }
-                if look == .line, let l = BlankyLimb(arm: isArm, side: s, material: Ink.hullMat, grow: w) { list.append(l) }
-                for l in list {
-                    mount.addChild(l.entity)
-                    Sorting.apply(l.entity, Int(order))
-                }
-                if isArm { arms[k] = list } else { legs[k] = list }
-            }
+        // 움직이지 않는 몸 (등뼈를 따라 기울기만) + 얼굴
+        let still = ModelEntity(mesh: S.still, materials: [body])
+        spine.addChild(still)
+        Sorting.apply(still, Int(order))
+        if look == .line {
+            // 외곽선: 법선 쪽으로 펜 굵기만큼 부풀린 껍데기의 뒷면 (몸과 휘는 껍데기가 같은 방식이라 이음매에서 선이 끊기지 않게)
+            var g = Geo()
+            g.pos = zip(S.stillPos, S.stillNrm).map { $0 + $1 * w }
+            g.uv = S.stillPos.map { _ in SIMD2<Float>(0.5, 0.5) }
+            g.idx = S.stillIdx
+            if let e = g.entity("bkStillHull", Ink.hullMat) { spine.addChild(e); Sorting.apply(e, Int(order)) }
+        }
+        let face = ModelEntity(mesh: S.face, materials: [eye])
+        spine.addChild(face)
+        Sorting.apply(face, Int(order))
+        if let sk = BlankySkin(S, material: body, grow: look == .line ? w : 0) {
+            pelvis.addChild(sk.entity)
+            Sorting.apply(sk.entity, Int(order))
+            skin = sk
         }
         spine.addChild(hand)
-        chest.position = SIMD3<Float>(0, 0.225, 0.115)                  // 책: 읽는 자세(몸 0.33 숙임)에서 두 손(armBook)이 양쪽 가장자리를 쥐는 자리
+        chest.position = SIMD3<Float>(0, 0.225, 0.235)                  // 책: 읽는 자세에서 두 손(armBook, 몸 앞 23cm·몸 높이 0.217)이 양쪽 아래를 받치는 자리
         chest.orientation = BK.rx(0.9)
         spine.addChild(chest)
-        // 배 구멍 속 빛 구슬: 저마다 다른 빛깔, 천천히 떠오르내림. 둘레 은은한 빛무리(반투명, 깊이 안 씀 — 몸에 가려 구멍 안만 보임)
+        // 배 구멍 속 빛 하나: 빛깔은 저마다(무작위), 천천히 떠오르내리며 은은하게 숨 쉬듯 커졌다 작아짐 (빛무리는 반투명, 깊이 안 씀)
         var g = SeededRNG(seed: seed)
-        let cols: [SIMD3<Float>] = [[0.2, 0.78, 0.86], [0.84, 0.58, 0.16], [1.0, 0.36, 0.72], [0.62, 1.0, 0.38], [1.0, 0.88, 0.35], [0.45, 0.6, 1.0]]
-        let ys: [Float] = [0.035, -0.035, 0.0, -0.065]
-        let xs: [Float] = [-0.012, 0.014, 0.0, 0.006]
+        let cols: [SIMD3<Float>] = [[0.2, 0.78, 0.86], [0.84, 0.58, 0.16], [1.0, 0.36, 0.72], [0.62, 1.0, 0.38], [1.0, 0.88, 0.35], [0.45, 0.6, 1.0], [0.75, 0.5, 1.0]]
         let core = MeshResource.generateSphere(radius: 1)
-        var used: [Int] = []
-        for i in 0..<n {
-            var ci = i < 2 && Float.random(in: 0...1, using: &g) < 0.6 ? i : Int(g.next() % UInt64(cols.count))      // 그림처럼 청록·주황이 먼저
-            if used.contains(ci) { ci = (ci + 1 + i) % cols.count }
-            used.append(ci)
-            let c = cols[ci]
-            let r = Float.random(in: 0.019...0.025, using: &g)
+        for _ in 0..<min(1, n) {
+            let c = cols[Int(g.next() % UInt64(cols.count))]
+            let r = Float.random(in: 0.021...0.026, using: &g)
             let holder = Entity()
-            let base = SIMD3<Float>(xs[i % xs.count] + Float.random(in: -0.004...0.004, using: &g), BlankyMesh.hollowY + ys[i % ys.count],
-                                    Float.random(in: -0.008...0.008, using: &g))
+            let base = SIMD3<Float>(Float.random(in: -0.006...0.006, using: &g), BlankyMesh.hollowY + Float.random(in: -0.02...0.02, using: &g), 0)
             holder.position = base
             spine.addChild(holder)
             let mat: RealityKit.Material = look == .line ? Ink.paper(0) : Tex.with(look) { UnlitMaterial(color: Tex.color(c)) }
@@ -552,16 +516,18 @@ final class BlankyFigure {
             holder.addChild(e)
             if look == .line { Ink.hull(e, width: pen / height) }
             Sorting.apply(e, Int(order))
+            var glow: Entity? = nil
             if look != .line {
                 var hm = Tex.with(look) { UnlitMaterial(color: Tex.color(c)) }
-                hm.blending = .transparent(opacity: .init(scale: 0.32))
+                hm.blending = .transparent(opacity: .init(scale: 0.3))
                 hm.writesDepth = false
                 let h = ModelEntity(mesh: core, materials: [hm])
-                h.scale = SIMD3<Float>(repeating: r * 1.45)
+                h.scale = SIMD3<Float>(repeating: r * 1.5)
                 Sorting.apply(h, 30)
                 holder.addChild(h)
+                glow = h
             }
-            orbs.append((holder, base, Float.random(in: 0.006...0.012, using: &g), Float.random(in: 2.2...3.6, using: &g)))
+            orbs.append((holder, base, Float.random(in: 0.006...0.01, using: &g), Float.random(in: 2.6...3.8, using: &g), e, glow, r))
         }
         apply(Pose())
     }
@@ -636,24 +602,33 @@ final class BlankyFigure {
     func apply(_ p: Pose) {
         pelvis.position = SIMD3<Float>(p.sway.x, BlankyMesh.hipY + p.lift, p.sway.y)
         pelvis.orientation = BK.ry(p.pelvisYaw) * BK.rz(p.pelvisRoll)
-        spine.orientation = BK.ry(p.twist + 0.4 * p.headYaw) * BK.rx(p.lean + 0.5 * p.headPitch) * BK.rz(p.side + 0.5 * p.headRoll)
-        for k in 0..<2 {
-            for l in arms[k] { l.update(f: p.arm[k].x, o: p.arm[k].y, bend: p.arm[k].z, twist: p.armTwist[k]) }
-            for l in legs[k] { l.update(f: p.leg[k].x, o: p.leg[k].y, bend: p.leg[k].z, twist: 0) }
-        }
-        if let r = arms[1].first { hand.position = armMount[1].position + r.endP }
+        let sq = BK.ry(p.twist + 0.4 * p.headYaw) * BK.rx(p.lean + 0.5 * p.headPitch) * BK.rz(p.side + 0.5 * p.headRoll)
+        spine.orientation = sq
+        guard let sk = skin else { return }
+        sk.update(spine: sq, limbs: [SIMD4<Float>(p.arm[0], p.armTwist[0]), SIMD4<Float>(p.arm[1], p.armTwist[1]),
+                                     SIMD4<Float>(p.leg[0], 0), SIMD4<Float>(p.leg[1], 0)])
+        hand.position = sk.hand
     }
 
     /// 빛 구슬 떠오르내림은 장면에 들어간 뒤 한 번 RealityKit 되풀이 움직임으로 맡김 (앱이 매 화면 옮기지 않게 — 기준서 5-0)
     func tick() {
         guard !orbsGo, root.scene != nil else { return }
         orbsGo = true
+        let id = simd_quatf(angle: 0, axis: [0, 1, 0])
+        func loop(_ e: Entity, _ a: Transform, _ b: Transform, _ d: Float) {
+            let anim = FromToByAnimation<Transform>(from: a, to: b, duration: TimeInterval(d), timing: .easeInOut, bindTarget: .transform, repeatMode: .autoReverse)
+            if let r = try? AnimationResource.generate(with: anim) { e.playAnimation(r) }
+        }
         for o in orbs {
-            let a = Transform(scale: .one, rotation: simd_quatf(angle: 0, axis: [0, 1, 0]), translation: o.base - SIMD3<Float>(0, o.amp, 0))
-            let b = Transform(scale: .one, rotation: simd_quatf(angle: 0, axis: [0, 1, 0]), translation: o.base + SIMD3<Float>(0, o.amp, 0))
-            let anim = FromToByAnimation<Transform>(from: a, to: b, duration: TimeInterval(o.period), timing: .easeInOut,
-                                                    bindTarget: .transform, repeatMode: .autoReverse)
-            if let r = try? AnimationResource.generate(with: anim) { o.e.playAnimation(r) }
+            loop(o.e, Transform(scale: .one, rotation: id, translation: o.base - SIMD3<Float>(0, o.amp, 0)),
+                 Transform(scale: .one, rotation: id, translation: o.base + SIMD3<Float>(0, o.amp, 0)), o.period)
+            // 숨 쉬는 빛: 빛 알은 조금, 빛무리는 크게 (들숨 2.2초·날숨 2.2초)
+            loop(o.core, Transform(scale: SIMD3<Float>(repeating: o.r * 0.9), rotation: id, translation: .zero),
+                 Transform(scale: SIMD3<Float>(repeating: o.r * 1.06), rotation: id, translation: .zero), 2.2)
+            if let gl = o.glow {
+                loop(gl, Transform(scale: SIMD3<Float>(repeating: o.r * 1.15), rotation: id, translation: .zero),
+                     Transform(scale: SIMD3<Float>(repeating: o.r * 2.0), rotation: id, translation: .zero), 2.2)
+            }
         }
     }
 
@@ -669,13 +644,18 @@ final class BlankyFigure {
     }
 
     // 팔 자세 (손이 닿는 자리를 팔 길이로 풀어 둔 값 — 앞으로, 바깥으로, 굽힘, 굽는 면 돌림)
-    static let armSip = SIMD4<Float>(1.1, -0.3, 2.6, -0.75)          // 손(잔)을 입 앞으로 — 몸을 0.25 숙인 채
-    static let armLap = SIMD4<Float>(-0.111, -0.209, 1.379, 0)        // 앉아서 잔을 무릎 위에
-    static let armKnee = SIMD4<Float>(0.222, -0.209, 0.776, 0)        // 앉아서 손을 무릎에
-    static let armBook = SIMD4<Float>(-0.361, -0.282, 2.959, 0)       // 가슴 앞 책 (몸 0.33 숙임)
-    static let armWarm = SIMD4<Float>(0.333, -0.5, 1.966, 0)          // 모닥불에 손 쬠 (몸 0.33 숙임)
-    static let armWaist = SIMD4<Float>(-0.5, -0.082, 1.897, 0)        // 담배 든 손을 허리 앞에
-    static let armGround = SIMD4<Float>(-1.2, 0.055, 1.241, 0)        // 뒤로 바닥 짚음 (몸 0.55 젖힘)
+    // 서 있는 기본 자세(어깨 비탈을 따라 옆으로 늘어진 팔)에서 그대로 앞으로 내밀어 닿게: 어깨를 몸 쪽으로 당기지 않고(바깥으로 0 이상),
+    // 팔 가운데 줄이 몸 속을 지나지 않게(몸 겉 + 팔 굵기 밖) 팔 길이로 풀어 둔 값. 굽힘은 팔이 몸에서 떨어져 나오는 곳 아래에서 둥글게.
+    // (0.5.49 까지는 손 자리만 맞춰 어깨를 몸 쪽으로 당기고 굽는 면을 돌려, 팔이 몸 안으로 파고들거나 뒤에서 나오는 것처럼 보였음)
+    static let armSip = SIMD4<Float>(0.55, 0.3, 2.6, 0)               // 손(잔)을 입 앞으로 (몸을 조금 숙여 마심)
+    // 손이 닿는 자세는 모두 '서 있는 기본 자세(옆으로 늘어뜨림)'에서 위팔을 앞으로만 내밀고(f ≥ 0) 팔꿈치를 굽혀 풂.
+    // 0.5.49는 위팔을 뒤로 젖힌(f < 0) 값이라 팔이 등 뒤에서 돌아 나오는 것처럼 보였음
+    static let armLap = SIMD4<Float>(0, 0, 1.0, 0)                    // 앉아서 잔을 무릎 위에
+    static let armKnee = SIMD4<Float>(0, 0, 1.1, 0)                   // 앉아서 손을 무릎에
+    static let armBook = SIMD4<Float>(0, 0, 1.9, 0)                   // 가슴 앞 책 (위팔은 몸 옆에 내리고 아래팔만 앞으로)
+    static let armWarm = SIMD4<Float>(0.45, 0, 0.9, 0)                // 모닥불에 손 쬠
+    static let armWaist = SIMD4<Float>(0, 0.1, 1.1, 0)                // 담배 든 손을 허리 앞에
+    static let armGround = SIMD4<Float>(-1.15, 0.05, 0.9, 0)          // 뒤로 바닥 짚음 (몸 0.55 젖힘)
     static func setArm(_ p: inout Pose, _ k: Int, _ a: SIMD4<Float>) {
         p.arm[k] = SIMD3<Float>(a.x, a.y, a.z)
         p.armTwist[k] = a.w
@@ -696,8 +676,8 @@ final class BlankyFigure {
         p.lean = 0.05
         p.side = -0.06 * s + 0.035 * sin(t * 0.37)
         let la = sin(ph - 0.6)
-        p.arm[0] = SIMD3<Float>(-0.28 * la, 0.02 * s, 0.06 + 0.2 * (0.5 + 0.5 * sin(ph - 1.6)))
-        p.arm[1] = SIMD3<Float>(0.28 * la, -0.02 * s, 0.06 + 0.2 * (0.5 - 0.5 * sin(ph - 1.6)))
+        p.arm[0] = SIMD3<Float>(-0.28 * la, 0.03 + 0.02 * s, 0.06 + 0.2 * (0.5 + 0.5 * sin(ph - 1.6)))
+        p.arm[1] = SIMD3<Float>(0.28 * la, 0.03 - 0.02 * s, 0.06 + 0.2 * (0.5 - 0.5 * sin(ph - 1.6)))
         p.headPitch = 0.04 * sin(2 * ph - 0.9)
         p.headRoll = 0.1 * sin(t * 0.31) + 0.03 * s
         p.headYaw = 0.12 * sin(t * 0.23)
@@ -716,8 +696,8 @@ final class BlankyFigure {
         p.side = -0.05 * w + 0.03 * sin(t * 0.19)
         p.lean = 0.03 + 0.02 * sin(t * 0.21)
         // 팔은 편하게 펴서 늘어뜨림 (굽힘은 아주 조금 흔들릴 만큼만 — 서 있는데 팔꿈치를 굽히고 있으면 어색함)
-        p.arm[0] = SIMD3<Float>(0.04 * sin(t * 0.6 + 1), 0.02 * sin(t * 0.4), 0.03 + 0.025 * sin(t * 0.5))
-        p.arm[1] = SIMD3<Float>(0.04 * sin(t * 0.6 + 2.2), 0.02 * sin(t * 0.4 + 1), 0.03 + 0.025 * sin(t * 0.5 + 1))
+        p.arm[0] = SIMD3<Float>(0.04 * sin(t * 0.6 + 1), 0.02 + 0.02 * sin(t * 0.4), 0.03 + 0.025 * sin(t * 0.5))
+        p.arm[1] = SIMD3<Float>(0.04 * sin(t * 0.6 + 2.2), 0.02 + 0.02 * sin(t * 0.4 + 1), 0.03 + 0.025 * sin(t * 0.5 + 1))
         p.headYaw = 0.45 * sin(t * 0.13)
         p.headPitch = 0.05 * sin(t * 0.17)
         p.headRoll = 0.13 * sin(t * 0.11)
@@ -1200,8 +1180,8 @@ final class BlankyCrowd {
         let rub = BK.bump(a.t.truncatingRemainder(dividingBy: 14), 2, 3, 6, 7)                       // 가끔 손을 비빔
         let w = 0.04 * sin(a.t * 0.7)
         p.lean = 0.25 + 0.04 * sin(a.t * 0.21)
-        BlankyFigure.setArm(&p, 0, BlankyFigure.armWarm + SIMD4<Float>(w, 0.06 * rub * sin(a.t * 7), 0.12 * rub, 0))
-        BlankyFigure.setArm(&p, 1, BlankyFigure.armWarm + SIMD4<Float>(-w, -0.06 * rub * sin(a.t * 7), 0.12 * rub, 0))
+        BlankyFigure.setArm(&p, 0, BlankyFigure.armWarm + SIMD4<Float>(w, 0.05 * rub * (0.5 + 0.5 * sin(a.t * 7)), 0.12 * rub, 0))
+        BlankyFigure.setArm(&p, 1, BlankyFigure.armWarm + SIMD4<Float>(-w, 0.05 * rub * (0.5 - 0.5 * sin(a.t * 7)), 0.12 * rub, 0))
         p.headPitch = 0.16 + 0.05 * sin(a.t * 0.17)
         p.headYaw = 0.2 * sin(a.t * 0.09)
         return p
@@ -1335,7 +1315,9 @@ final class BlankyIndoor {
             p = seatedPose(s, dt)
         } else {
             var walking = false
-            if dMe < 0.7 && target != nil {                                 // 내가 가로막음 → 멈춰서 나를 봄
+            // 내 곁 1.2m 안으로는 다가오지 않음 (고개를 돌리다 바로 옆에 서 있으면 놀람) → 멈춰서 나를 보고, 다음엔 나와 먼 곳으로
+            //   (이미 나에게서 멀어지는 중이면 그대로 감)
+            if dMe < 1.2 && target != nil, let w = path.first, simd_dot(w - pos, toMe) > 0 {
                 target = nil
                 path = []
                 stopT = 2
@@ -1369,6 +1351,7 @@ final class BlankyIndoor {
                         if c.pass(np) || !c.pass(pos) {
                             pos = np
                             phase += 2 * .pi * stepLen / (0.62 * H)
+                            footstep(dMe)
                         } else if replans < 2, let pth = HomeCat.plan(from: pos, to: tg, reach: 0.12, c), !pth.isEmpty {
                             replans += 1                                    // 그새 가구가 보여 길이 막힘 → 한 번 다시 찾음
                             path = pth
@@ -1464,7 +1447,7 @@ final class BlankyIndoor {
                 let (ac, n) = arts[k]
                 for d: Float in [1.2, 1.5, 0.95] {
                     let q = SIMD2<Float>(ac.x + n.x * d, ac.z + n.z * d)
-                    if c.free(q) && simd_distance(q, me) > 0.9 && go(q, c) { art = k; return }
+                    if c.free(q) && simd_distance(q, me) > 1.5 && go(q, c, me) { art = k; return }
                 }
             }
         }
@@ -1473,14 +1456,34 @@ final class BlankyIndoor {
         for _ in 0..<10 {
             guard let q = sample() else { continue }
             let d = simd_distance(q, pos)
-            if d > 1.2 && d < 3.2 && c.free(q) && simd_distance(q, me) > 0.9 && go(q, c) { return }
+            if d > 1.2 && d < 3.2 && c.free(q) && simd_distance(q, me) > 1.6 && go(q, c, me) { return }
         }
         wait = 2
     }
 
-    /// q 까지 길이 있으면 떠남 (없으면 다른 곳을 고르게 false)
-    private func go(_ q: SIMD2<Float>, _ c: HomeCat.Ctx) -> Bool {
+    /// 걷는 동안 발이 바닥에 닿을 때마다(걸음 위상 반 바퀴) 가까이(3.5m 안) 있으면 살짝 발소리
+    private var stepN = 0
+    private func footstep(_ dMe: Float) {
+        let n = Int(phase / .pi)
+        guard n != stepN else { return }
+        stepN = n
+        guard dMe < 3.5 else { return }
+        _ = Sfx.play("blanky_step\(Int.random(in: 1...4, using: &g))", in: root, at: SIMD3<Float>(pos.x, floorY + 0.02, pos.y),
+                     gain: Double(-4 - 2 * dMe), life: 1)
+    }
+
+    /// q 까지 길이 있으면 떠남 (없으면 다른 곳을 고르게 false). 길이 내 곁 1m 안을 지나가도 고르지 않음
+    private func go(_ q: SIMD2<Float>, _ c: HomeCat.Ctx, _ me: SIMD2<Float>) -> Bool {
         guard let pth = HomeCat.plan(from: pos, to: q, reach: 0.12, c), !pth.isEmpty else { return false }
+        // 내가 이미 1m 안에 있으면(내가 다가간 경우) 지금보다 더 가까워지지만 않으면 됨
+        let lim = min(1.0, simd_distance(me, pos) - 0.05)
+        var a = pos
+        for b in pth {
+            let ab = b - a
+            let tt = max(0, min(1, simd_dot(me - a, ab) / max(1e-6, simd_length_squared(ab))))
+            if simd_distance(me, a + ab * tt) < lim { return false }
+            a = b
+        }
         target = q
         path = pth
         startTurn = true
